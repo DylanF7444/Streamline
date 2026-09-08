@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-hub"
+version = "0.1.0"
+description = "Local-first Windows attention dashboard"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "certifi>=2024.7.4,<2027",
+  "cryptography>=50,<51",
+  "defusedxml>=0.7,<1",
+  "platformdirs>=4.2,<5",
+  "pydantic>=2.10,<3",
+  "SQLAlchemy>=2.0,<3",
+  "tzdata>=2025.2,<2028",
+]
+
+[project.optional-dependencies]
+desktop = ["PySide6>=6.8,<7"]
+test = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "pytest-cov>=6,<8",
+]
+ui-test = ["PySide6>=6.8,<7", "pytest-qt>=4.4,<5"]
+dev = ["ruff>=0.12,<1", "pre-commit>=4,<5"]
+build = ["packaging>=24,<27", "pyinstaller>=6.11,<7"]
+
+[project.scripts]
+personal-hub = "personal_hub.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "ui: tests that require PySide6 and pytest-qt",
+  "hub: all Personal Hub tests",
+  "hub_core: tests that do not require Qt",
+  "hub_fast: core tests for the normal iteration loop",
+  "hub_ui: tests that require Qt and pytest-qt",
+  "hub_architecture: repository and import-boundary tests",
+  "hub_integration: provider and source integration tests",
+  "hub_release: packaging and release-evidence tests",
+  "hub_slow: tests intentionally excluded from the fast lane",
+  "hub_phase1: Phase 1 tests",
+  "hub_phase2: Phase 2 tests",
+  "hub_phase3: Phase 3 tests",
+  "hub_phase4: Phase 4 tests",
+  "hub_phase5: Phase 5 tests",
+  "hub_phase6: Phase 6 tests",
+  "hub_phase7: Phase 7 tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+line-ending = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["personal_hub"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]

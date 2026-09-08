@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "product": "personal-hub",
+  "channel": "personal-hub-stable",
+  "version": "0.1.0",
+  "published_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "minimum_schema_version": 6,
+  "artifact": {
+    "filename": "PersonalHub.exe",
+    "url": "REPLACE_WITH_HTTPS_RELEASE_URL",
+    "size_bytes": 0,
+    "sha256": "REPLACE_WITH_SHA256"
+  },
+  "key_id": "REPLACE_WITH_TRUSTED_KEY_ID",
+  "signature": "REPLACE_WITH_ED25519_SIGNATURE"
+}

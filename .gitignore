@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.json
+.benchmark-data/
+.venv/
+build/
+dist/
+*.log
+*.db
+*.db-shm
+*.db-wal
+diagnostics*.zip
