@@ -70,6 +70,9 @@ _MAX_PROPERTY_VALUE_LENGTH: Final = 16_384
 _MAX_RECURRENCE_OCCURRENCES: Final = 10_000
 _MAX_RRULE_LENGTH: Final = 2_048
 _MAX_TEXT_LENGTH: Final = 4_096
+_MAX_TASK_ITEMS: Final = 5_000
+_CANVAS_PAST_DAYS: Final = 30
+_CANVAS_FUTURE_DAYS: Final = 366
 _ICAL_DATE_RE: Final = re.compile(r"^\d{8}$")
 _ICAL_DATETIME_RE: Final = re.compile(r"^\d{8}T\d{4,6}Z?$", re.IGNORECASE)
 _DURATION_RE: Final = re.compile(
@@ -467,14 +470,25 @@ def _definition_from_properties(
     if all_day:
         if not isinstance(ends_at, date) or isinstance(ends_at, datetime):
             return None
-        if ends_at <= starts_at:
+        if ends_at < starts_at:
             return None
+        # Canvas serializes some deadline-style VEVENTs with DTSTART and
+        # DTEND on the same date. Treat them as a one-day event instead of
+        # silently dropping the item.
+        if ends_at == starts_at:
+            ends_at = starts_at + timedelta(days=1)
     elif (
         not isinstance(ends_at, datetime)
         or not isinstance(starts_at, datetime)
-        or ends_at <= starts_at
+        or ends_at < starts_at
     ):
         return None
+    elif ends_at == starts_at:
+        # Canvas can publish a point-in-time calendar event with a zero-length
+        # interval. The due date is still meaningful; use the same one-hour
+        # fallback used when DTEND is omitted so calendar projections remain
+        # valid provider-neutral events.
+        ends_at = starts_at + timedelta(hours=1)
 
     uid_property = _first_property(properties, "UID")
     uid = _safe_text(uid_property[1], limit=256) if uid_property is not None else None
@@ -959,50 +973,100 @@ def parse_ical_calendar_items(
     body: bytes | str,
     *,
     fallback_timezone: str = "UTC",
+    expand_recurrence: bool = False,
+    reference_at: datetime | None = None,
 ) -> tuple[IcalCalendarItem, ...]:
     """Return every bounded VEVENT once without applying a calendar view window.
 
     This is intentionally a task-import boundary rather than another calendar
-    snapshot API. Recurrence rules are not expanded: a recurring VEVENT remains
-    one source item, while feeds that publish concrete occurrences continue to
-    produce one item per VEVENT.
+    snapshot API. By default recurrence rules are not expanded: a recurring
+    VEVENT remains one source item, while feeds that publish concrete
+    occurrences continue to produce one item per VEVENT. Sources such as
+    Canvas may opt into bounded recurrence expansion using ``expand_recurrence``.
     """
 
     timezone = _zone(fallback_timezone, "UTC").key
     definitions = _parse_definitions(body, fallback_timezone=timezone)
+    recurrence_queries: tuple[CalendarQuery, ...] = ()
+    if expand_recurrence:
+        reference = reference_at or datetime.now(UTC)
+        if reference.tzinfo is None or reference.utcoffset() is None:
+            raise ValueError("reference_at must be timezone-aware")
+        reference = reference.astimezone(UTC)
+        recurrence_queries = (
+            CalendarQuery(
+                starts_at=reference - timedelta(days=_CANVAS_PAST_DAYS),
+                ends_at=reference,
+                timezone=timezone,
+                limit=5_000,
+            ),
+            CalendarQuery(
+                starts_at=reference,
+                ends_at=reference + timedelta(days=_CANVAS_FUTURE_DAYS),
+                timezone=timezone,
+                limit=5_000,
+            ),
+        )
     items: list[IcalCalendarItem] = []
     seen: set[str] = set()
     for definition in definitions:
-        item_id = hashlib.sha256(definition.uid.encode("utf-8", "replace")).hexdigest()[:40]
-        if item_id in seen:
-            continue
-        seen.add(item_id)
-        starts_at = definition.starts_at
-        if definition.all_day:
-            assert isinstance(starts_at, date) and not isinstance(starts_at, datetime)
-            due_at = datetime.combine(
-                starts_at,
-                datetime.min.time(),
-                tzinfo=ZoneInfo(definition.timezone),
-            )
+        if len(items) >= _MAX_TASK_ITEMS:
+            break
+        occurrences: tuple[datetime | date, ...]
+        if expand_recurrence and definition.rrule is not None:
+            occurrence_values: list[datetime | date] = []
+            occurrence_limit = _MAX_TASK_ITEMS - len(items)
+            for query in recurrence_queries:
+                for occurrence in _occurrence_starts(definition, query):
+                    if occurrence in definition.exdates or occurrence in occurrence_values:
+                        continue
+                    occurrence_values.append(occurrence)
+                    if len(occurrence_values) >= occurrence_limit:
+                        break
+                if len(occurrence_values) >= occurrence_limit:
+                    break
+            occurrences = tuple(occurrence_values)
         else:
-            assert isinstance(starts_at, datetime)
-            due_at = starts_at
-        try:
-            items.append(
-                IcalCalendarItem(
-                    item_id=item_id,
-                    title=definition.title,
-                    due_at=due_at,
-                    due_is_all_day=definition.all_day,
-                    timezone=definition.timezone,
-                    description=definition.description,
-                    location=definition.location,
-                    deep_link=definition.url,
-                )
+            occurrences = (definition.starts_at,)
+
+        for occurrence in occurrences:
+            if len(items) >= _MAX_TASK_ITEMS:
+                break
+            occurrence_identity = occurrence.isoformat()
+            item_seed = (
+                definition.uid
+                if occurrence == definition.starts_at
+                else f"{definition.uid}|{occurrence_identity}"
             )
-        except ValidationError:
-            continue
+            item_id = hashlib.sha256(item_seed.encode("utf-8", "replace")).hexdigest()[:40]
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            if definition.all_day:
+                assert isinstance(occurrence, date) and not isinstance(occurrence, datetime)
+                due_at = datetime.combine(
+                    occurrence,
+                    datetime.min.time(),
+                    tzinfo=ZoneInfo(definition.timezone),
+                )
+            else:
+                assert isinstance(occurrence, datetime)
+                due_at = occurrence
+            try:
+                items.append(
+                    IcalCalendarItem(
+                        item_id=item_id,
+                        title=definition.title,
+                        due_at=due_at,
+                        due_is_all_day=definition.all_day,
+                        timezone=definition.timezone,
+                        description=definition.description,
+                        location=definition.location,
+                        deep_link=definition.url,
+                    )
+                )
+            except ValidationError:
+                continue
     items.sort(key=lambda item: (item.due_at, item.title.casefold(), item.item_id))
     return tuple(items)
 

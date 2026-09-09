@@ -308,20 +308,20 @@ QToolTip {{
     border-right: 1px solid {border};
 }}
 
-#brandTitle, #pageTitle, #placeholderTitle, #sourceFailureTitle,
+#brandTitle, #pageTitle, #sourceFailureTitle,
 #diagnosticsTitle, #calendarPeriodLabel, #privacyOverlayTitle,
 #newsEditorTitle, #newsEntryTitle, #taskRowTitle, #todaySectionTitle,
 #taskEditorTitle, #calendarEventDetailsTitle {{
     color: {page_text};
 }}
 
-#brandSubtitle, #pageSubtitle, #statusLabel, #settingsValue,
+#pageSubtitle, #statusLabel, #settingsValue,
 #navigationLabel, #pageEyebrow, #todayDateLabel, #todayTimezoneLabel,
 #todayRefreshStatus, #todaySectionBody, #todaySectionMetadata,
 #calendarFreshnessLabel, #calendarStatusLabel, #calendarTimezoneLabel,
 #calendarSourcesTitle, #calendarSourcesEmpty, #calendarWeekdayLabel,
 #calendarMoreLabel, #calendarEmptyLabel, #taskRowDetails, #taskStatusLabel,
-#taskEditorStatus, #taskFieldLabel, #placeholderBody, #sourceFailureBody,
+#taskEditorStatus, #taskFieldLabel, #sourceFailureBody,
 #diagnosticsBody, #privacyOverlayBody, #newsFilterLabel, #newsFilterStatusLabel,
 #newsFreshnessLabel, #newsStatusLabel, #newsSubscriptionsTitle,
 #newsSubscriptionsEmpty, #newsEntriesStatusLabel, #newsEntryMetadata,
@@ -332,7 +332,7 @@ QToolTip {{
     color: {muted_text};
 }}
 
-#todayPage, #calendarPage, #tasksPage, #watchlistsPage, #placeholderPage,
+#todayPage, #calendarPage, #tasksPage, #watchlistsPage,
 #inboxPage, #sourcesPage, #settingsPage, #dashboardPage, #dashboardBoard {{
     background: {background};
     color: {page_text};
@@ -603,7 +603,7 @@ QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {{
 }}
 
 #personalHubNavigation, #todayPage, #calendarPage, #tasksPage,
-#watchlistsPage, #placeholderPage, #inboxPage, #sourcesPage, #settingsPage,
+#watchlistsPage, #inboxPage, #sourcesPage, #settingsPage,
 #dashboardPage, #dashboardBoard, #todayCard, #todaySection, #taskQuickAdd,
 #taskEditorPanel, #taskRow, #calendarMonthCell, #calendarWeekColumn,
 #calendarSourcesPanel, #calendarEventDetailsPanel, #sourceFailurePanel,
@@ -761,7 +761,7 @@ class AppearancePanel(QWidget):
         title.setObjectName("appearanceTitle")
         title.setAccessibleName("Appearance heading")
         subtitle = QLabel(
-            "Choose a calm preset, tune the Hub colors, and decide whether subtle transitions run.",
+            "Choose a theme preset, custom colors, and animation settings.",
             header,
         )
         subtitle.setObjectName("appearanceSubtitle")

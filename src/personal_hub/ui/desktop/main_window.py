@@ -81,9 +81,6 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Sources": "sourcesButton",
     "Settings": "settingsButton",
 }
-_PLACEHOLDER_DESCRIPTIONS: Final[dict[str, str]] = {
-    "Watchlists": "News, deal, restock, and webpage watches will be added in a later phase.",
-}
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
 
@@ -1984,7 +1981,7 @@ QMainWindow, QWidget {
     font-weight: 650;
 }
 
-#brandSubtitle, #pageSubtitle, #statusLabel, #settingsValue {
+#pageSubtitle, #statusLabel, #settingsValue {
     color: #9aabc0;
 }
 
@@ -2028,7 +2025,7 @@ QPushButton[hubNavigation="true"]:disabled {
     color: #586a80;
 }
 
-#todayPage, #calendarPage, #tasksPage, #watchlistsPage, #placeholderPage, #inboxPage, #sourcesPage, #settingsPage {
+#todayPage, #calendarPage, #tasksPage, #watchlistsPage, #inboxPage, #sourcesPage, #settingsPage {
     background: #0b1421;
 }
 
@@ -2283,13 +2280,13 @@ QPushButton[hubNavigation="true"]:disabled {
     font-weight: 650;
 }
 
-#placeholderTitle, #sourceFailureTitle, #diagnosticsTitle {
+#sourceFailureTitle, #diagnosticsTitle {
     color: #ecf4fc;
     font-size: 13pt;
     font-weight: 600;
 }
 
-#placeholderBody, #sourceFailureBody, #diagnosticsBody {
+#sourceFailureBody, #diagnosticsBody {
     color: #a9b9cc;
     font-size: 10pt;
 }
@@ -2991,11 +2988,6 @@ class PersonalHubMainWindow(QMainWindow):
                 page = self._build_tasks_page()
             elif destination == "Watchlists":
                 page = self._build_watchlists_page()
-            elif destination in _PLACEHOLDER_DESCRIPTIONS:
-                page = self._build_placeholder_page(
-                    destination,
-                    _PLACEHOLDER_DESCRIPTIONS[destination],
-                )
             elif destination == "Inbox":
                 page = self._build_inbox_page()
             elif destination == "Sources":
@@ -3054,14 +3046,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.brand_title = brand
         layout.addWidget(brand)
 
-        subtitle = QLabel("A little clarity for every day.")
-        subtitle.setObjectName("brandSubtitle")
-        subtitle.setAccessibleName("Personal Hub description")
-        subtitle.setTextFormat(Qt.TextFormat.PlainText)
-        subtitle.setWordWrap(True)
-        self.brand_subtitle = subtitle
-        layout.addWidget(subtitle)
-
         layout.addSpacing(20)
         navigation_label = QLabel("NAVIGATION")
         navigation_label.setObjectName("navigationLabel")
@@ -3091,13 +3075,6 @@ class PersonalHubMainWindow(QMainWindow):
             layout.addWidget(button)
 
         layout.addStretch(1)
-        phase_label = QLabel("YOUR PERSONAL SPACE\nStored on this device")
-        phase_label.setObjectName("brandSubtitle")
-        phase_label.setAccessibleName("Personal Hub local storage")
-        phase_label.setTextFormat(Qt.TextFormat.PlainText)
-        phase_label.setWordWrap(True)
-        self.brand_footer = phase_label
-        layout.addWidget(phase_label)
 
         for first, second in zip(
             (self.navigation_buttons[destination] for destination in NAVIGATION_DESTINATIONS),
@@ -3174,7 +3151,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_eyebrow, self.today_title, self.today_subtitle = self._add_page_header(
             layout,
             TODAY_DESTINATION,
-            "A calm overview of what is scheduled, what needs attention, and what changed.",
+            "Schedule, tasks, alerts, news, and source status.",
         )
         layout.addSpacing(10)
 
@@ -3404,7 +3381,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._add_page_header(
             layout,
             "Calendar",
-            "Read-only views across selected calendars. Event details remain with their source.",
+            "View selected calendars and event details.",
         )
 
         toolbar = QFrame()
@@ -4472,7 +4449,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._add_page_header(
             layout,
             "Tasks",
-            "Capture, organize, and finish local tasks without commands or provider access.",
+            "Add and manage local tasks.",
         )
 
         quick_add = QFrame()
@@ -5295,7 +5272,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._add_page_header(
             layout,
             "Watchlists",
-            "Track typed webpage changes and follow selected RSS or Atom feeds.",
+            "Manage webpage watches and RSS or Atom feeds.",
         )
         self._build_web_watch_panel(layout)
 
@@ -6752,41 +6729,12 @@ class PersonalHubMainWindow(QMainWindow):
         panel.hide()
         return panel, title, body
 
-    def _build_placeholder_page(self, destination: str, description: str) -> QWidget:
-        page, layout = self._new_page("placeholderPage", f"{destination} page")
-        self._add_page_header(
-            layout,
-            destination,
-            f"{destination} is available as a Phase 1 shell.",
-        )
-        layout.addSpacing(18)
-        card = QFrame()
-        card.setObjectName("todayCard")
-        card.setAccessibleName(f"{destination} placeholder")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
-        card_layout.setSpacing(8)
-        title = QLabel(f"{destination} is not connected yet")
-        title.setObjectName("placeholderTitle")
-        title.setAccessibleName(f"{destination} placeholder title")
-        title.setTextFormat(Qt.TextFormat.PlainText)
-        card_layout.addWidget(title)
-        body = QLabel(description)
-        body.setObjectName("placeholderBody")
-        body.setAccessibleName(f"{destination} placeholder details")
-        body.setTextFormat(Qt.TextFormat.PlainText)
-        body.setWordWrap(True)
-        card_layout.addWidget(body)
-        layout.addWidget(card)
-        layout.addStretch(1)
-        return page
-
     def _build_inbox_page(self) -> QWidget:
         page, layout = self._new_page("inboxPage", "Inbox page")
         self._add_page_header(
             layout,
             "Inbox",
-            "Durable attention items and explicitly selected message summaries.",
+            "Review alerts, reminders, and selected message summaries.",
         )
         self.inbox_status_label = QLabel("No attention items yet.")
         self.inbox_status_label.setObjectName("pageSubtitle")
@@ -6927,7 +6875,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._add_page_header(
             layout,
             "Sources",
-            "Connected inputs and their health will be shown here.",
+            "Manage connected inputs and view their health.",
         )
         self.sources_status_label = QLabel("No sources connected.")
         self.sources_status_label.setObjectName("pageSubtitle")
@@ -6991,7 +6939,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._add_page_header(
             layout,
             "Settings",
-            "Hub-owned display, privacy, and lifecycle preferences.",
+            "Manage display, privacy, and lifecycle preferences.",
         )
         self.settings_status_label = QLabel("Settings are ready for Hub-owned preferences.")
         self.settings_status_label.setObjectName("pageSubtitle")
@@ -7186,9 +7134,7 @@ class PersonalHubMainWindow(QMainWindow):
         compact = bool(compact)
         self._compact_navigation = compact
         self.brand_title.setText("Hub" if compact else APPLICATION_NAME)
-        self.brand_subtitle.setVisible(not compact)
         self.navigation_caption.setVisible(not compact)
-        self.brand_footer.setVisible(not compact)
         if hasattr(self, "today_controls_layout"):
             controls = (
                 self.today_date_label,

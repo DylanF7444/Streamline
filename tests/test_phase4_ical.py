@@ -82,6 +82,53 @@ def test_ical_parser_bounds_recurrence_and_rejects_unsafe_event_links() -> None:
     assert all(event.deep_link == "https://events.example.test/calendar.ics" for event in events)
 
 
+def test_ical_parser_keeps_zero_length_canvas_events() -> None:
+    body = b"""BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:canvas-point-in-time@example.test
+DTSTART;TZID=America/Chicago:20260905T090000
+DTEND;TZID=America/Chicago:20260905T090000
+SUMMARY:Canvas schedule item
+END:VEVENT
+END:VCALENDAR
+"""
+
+    events = parse_ical_calendar(body, feed=_feed(), query=_query())
+    items = parse_ical_calendar_items(body, fallback_timezone="America/Chicago")
+
+    assert len(events) == 1
+    assert events[0].starts_at == datetime(2026, 9, 5, 14, tzinfo=UTC)
+    assert events[0].ends_at == datetime(2026, 9, 5, 15, tzinfo=UTC)
+    assert [item.title for item in items] == ["Canvas schedule item"]
+    assert items[0].due_at == datetime(2026, 9, 5, 14, tzinfo=UTC)
+
+
+def test_ical_task_items_can_expand_bounded_canvas_recurrence() -> None:
+    body = b"""BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:canvas-recurring@example.test
+DTSTART:20260901T120000Z
+DTEND:20260901T120000Z
+RRULE:FREQ=DAILY;COUNT=3
+SUMMARY:Recurring Canvas item
+END:VEVENT
+END:VCALENDAR
+"""
+
+    items = parse_ical_calendar_items(
+        body,
+        expand_recurrence=True,
+        reference_at=datetime(2026, 9, 2, tzinfo=UTC),
+    )
+
+    assert [item.due_at for item in items] == [
+        datetime(2026, 9, 1, 12, tzinfo=UTC),
+        datetime(2026, 9, 2, 12, tzinfo=UTC),
+        datetime(2026, 9, 3, 12, tzinfo=UTC),
+    ]
+    assert len({item.item_id for item in items}) == 3
+
+
 def test_ical_task_items_include_every_concrete_event_without_a_view_window() -> None:
     body = b"""BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:old@example.test\nDTSTART;VALUE=DATE:20200102\nSUMMARY:Old assignment\nDESCRIPTION:<b>Read chapter one</b>\nEND:VEVENT\nBEGIN:VEVENT\nUID:future@example.test\nDTSTART:20350102T180000Z\nSUMMARY:Future assignment\nEND:VEVENT\nEND:VCALENDAR\n"""
 

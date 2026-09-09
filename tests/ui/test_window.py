@@ -139,6 +139,12 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
     assert window.windowTitle() == "Personal Hub"
     texts = _visible_texts(window)
     assert set(EXPECTED_NAVIGATION).issubset(texts)
+    assert window.navigation_caption.text() == "NAVIGATION"
+    assert window.today_subtitle.text() == "Schedule, tasks, alerts, news, and source status."
+    assert not window.findChildren(QLabel, "brandSubtitle")
+    assert "A little clarity for every day." not in texts
+    assert "YOUR PERSONAL SPACE" not in texts
+    assert "Stored on this device" not in texts
     assert any(
         isinstance(widget, (QAbstractButton, QLabel)) and widget.text().strip() == "Today"
         for widget in [window, *window.findChildren(QWidget)]

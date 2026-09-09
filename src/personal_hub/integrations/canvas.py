@@ -98,7 +98,11 @@ class CanvasIcalTaskImporter:
                 raise SourceUnavailableError("Canvas calendar is temporarily unavailable")
             else:
                 raise ValueError("Canvas calendar returned an invalid response")
-            items = parse_ical_calendar_items(body, fallback_timezone=fallback_timezone)
+            items = parse_ical_calendar_items(
+                body,
+                fallback_timezone=fallback_timezone,
+                expand_recurrence=True,
+            )
         except (SourceDisconnectedError, SourcePermissionRequiredError, SourceUnavailableError):
             raise
         except (FeedOfflineError, FeedUnavailableError) as error:
