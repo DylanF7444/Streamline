@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
 
 from personal_hub.calendar.contracts import CalendarQuery, CalendarResult
 from personal_hub.feeds.contracts import FeedResult, FeedSyncState
+from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.lifecycle import LifecycleEvent
 from personal_hub.messages import (
     MESSAGE_CATEGORY_VALUES,
@@ -650,6 +651,7 @@ class HubDesktopCoordinator(QObject):
         window.task_completed.connect(self._task_completed)
         window.task_archived.connect(self._task_archived)
         window.task_undo_requested.connect(self._task_undo)
+        window.task_native_open_requested.connect(self._open_task_native)
         window.today_section_order_changed.connect(self._save_today_order)
         window.today_section_visibility_changed.connect(self._save_today_visibility)
         window.dashboard_layout_changed.connect(self._save_dashboard_layout)
@@ -1463,6 +1465,20 @@ class HubDesktopCoordinator(QObject):
         self.render_calendar()
 
     @Slot(object)
+    def _open_task_native(self, value: object) -> None:
+        if not isinstance(value, TaskView) or not value.external_url:
+            return
+        target = QUrl(value.external_url)
+        if (
+            target.isValid()
+            and target.scheme().casefold() in {"http", "https"}
+            and target.host()
+            and not target.userName()
+            and not target.password()
+        ):
+            QDesktopServices.openUrl(target)
+
+    @Slot(object)
     def _save_dashboard_layout(self, layout: object) -> None:
         if isinstance(layout, Mapping):
             self.container.settings_repository.set(
@@ -1720,6 +1736,7 @@ class HubDesktopCoordinator(QObject):
         values: dict[str, object] = {
             "title": view.title,
             "notes": view.notes,
+            "external_url": view.external_url or None,
             "priority": view.priority,
             "due_at": view.due_at,
             "due_is_all_day": view.due_is_all_day,
@@ -3243,10 +3260,14 @@ def _source_view(result: SourceResult, *, enabled: bool = True) -> SourceView:
 
 def _task_view(task: Any, *, lists: Mapping[str, str]) -> TaskView:
     recurrence = task.recurrence.frequency.capitalize() if task.recurrence is not None else None
+    native_platform = "canvas" if "canvas" in task.tags else ""
+    external_url = _task_native_url(task)
     return TaskView(
         task_id=str(task.task_id),
         title=task.title,
         notes=task.notes,
+        external_url=external_url or "",
+        native_platform=native_platform,
         state=task.state,
         priority=task.priority,
         due_at=task.due_at,
@@ -3267,6 +3288,8 @@ def _calendar_task_view(task: Any) -> CalendarEventView:
 
     due_at = task.due_at
     ends_at = due_at + timedelta(days=1) if task.due_is_all_day else None
+    is_canvas = "canvas" in task.tags
+    external_url = _task_native_url(task)
     return CalendarEventView(
         event_id=f"task:{task.task_id}",
         title=task.title,
@@ -3274,10 +3297,12 @@ def _calendar_task_view(task: Any) -> CalendarEventView:
         ends_at=ends_at,
         all_day=task.due_is_all_day,
         timezone=task.timezone,
-        calendar_name="To-do list",
+        calendar_name="Canvas assignments" if is_canvas else "To-do list",
         source_id="personal-hub-tasks",
-        source_name="Personal Hub",
+        source_name="Canvas" if is_canvas else "Personal Hub",
         description=task.notes,
+        navigation_target=external_url or "",
+        native_platform="canvas" if is_canvas else "",
         sensitive=True,
         item_kind="task",
         task_id=str(task.task_id),
@@ -3285,6 +3310,13 @@ def _calendar_task_view(task: Any) -> CalendarEventView:
         completed_at=task.completed_at,
         completion_state=task.state,
     )
+
+
+def _task_native_url(task: Any) -> str | None:
+    external_url = task.external_url or None
+    if "canvas" in task.tags:
+        return canvas_assignment_url(external_url)
+    return external_url
 
 
 def _today_item_view(item: Any) -> TodayItemView:

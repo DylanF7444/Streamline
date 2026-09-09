@@ -528,6 +528,7 @@ class TaskRepository:
             task_id=UUID(row.task_id),
             title=row.title,
             notes=row.notes,
+            external_url=row.external_url,
             state=cast(Any, row.state),
             priority=cast(Any, row.priority),
             due_at=_contract_time(row.due_at),
@@ -564,6 +565,7 @@ class TaskRepository:
             session.add(row)
         row.title = task.title
         row.notes = task.notes
+        row.external_url = task.external_url
         row.state = task.state
         row.priority = task.priority
         row.due_at = _db_time(task.due_at)

@@ -261,7 +261,13 @@ class OAuthConnectionService:
             raise OAuthConnectionError("OAuth provider did not provide a durable connection")
         if not isinstance(expires_in, (int, float)) or not 1 <= float(expires_in) <= 86_400:
             raise OAuthConnectionError("OAuth provider returned an invalid token lifetime")
-        granted = _parse_scopes(response.get("scope"), fallback=self.config.scopes)
+        granted = set(_parse_scopes(response.get("scope"), fallback=self.config.scopes))
+        # Microsoft Entra uses offline_access to request a refresh token, but does not
+        # return it as an access-token scope.  A durable refresh token is the evidence
+        # that this requested capability was granted; keep it in the stored scope set
+        # so the connection health check remains ready after restart.
+        if "offline_access" in self.config.scopes and refresh_token:
+            granted.add("offline_access")
         if not set(self.config.scopes).issubset(granted):
             raise OAuthConnectionError("OAuth provider did not grant the required read scope")
         expiry = self._now() + timedelta(seconds=float(expires_in))

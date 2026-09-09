@@ -170,6 +170,7 @@ class HubTaskRow(HubBase):
     task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    external_url: Mapped[str | None] = mapped_column(String(1_024))
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     priority: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -494,9 +495,11 @@ class HubDatabase:
     # external-deletion tombstones. Version 8 adds the local Gmail-style
     # message category. Declarative table
     # Version 9 retires calendar-event completion and deletes those legacy rows.
+    # Version 10 adds a safe provider URL to local tasks so imported tasks can
+    # open their source platform without storing a private feed URL.
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 9
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 10
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -582,6 +585,7 @@ class HubDatabase:
         7: REQUIRED_TABLES,
         8: REQUIRED_TABLES,
         9: REQUIRED_TABLES,
+        10: REQUIRED_TABLES,
     }
 
     def __init__(self, path: Path | str) -> None:
@@ -644,6 +648,7 @@ class HubDatabase:
         # idempotent and existing feed content remains intact.
         self._ensure_feed_subscription_columns()
         self._ensure_message_summary_columns()
+        self._ensure_task_columns()
 
         with self.session() as session:
             row = session.get(HubSchemaVersionRow, 1)
@@ -691,6 +696,21 @@ class HubDatabase:
             connection.exec_driver_sql(
                 "ALTER TABLE hub_message_summaries "
                 "ADD COLUMN category VARCHAR(16) NOT NULL DEFAULT 'primary'"
+            )
+
+    def _ensure_task_columns(self) -> None:
+        inspector = sqlalchemy_inspect(self.engine)
+        table_names = set(inspector.get_table_names())
+        if "hub_tasks" not in table_names:
+            return
+        existing = {column["name"] for column in inspector.get_columns("hub_tasks")}
+        if "external_url" in existing:
+            return
+        with self.engine.begin() as connection:
+            # This is a fixed schema identifier; provider URLs are values, not
+            # interpolated SQL.
+            connection.exec_driver_sql(
+                "ALTER TABLE hub_tasks ADD COLUMN external_url VARCHAR(1024)"
             )
 
     def _run_migrations(self, session: Session, from_version: int) -> None:

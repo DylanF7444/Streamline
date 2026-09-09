@@ -92,6 +92,43 @@ async def test_google_pkce_connection_stores_only_hub_vault_tokens_and_refreshes
 
 
 @pytest.mark.asyncio
+async def test_microsoft_offline_access_is_satisfied_by_refresh_token(tmp_path: Path):
+    transport = _Transport(
+        {
+            "access_token": "microsoft-access",
+            "refresh_token": "microsoft-refresh",
+            "expires_in": 1,
+            "scope": "Calendars.Read",
+        },
+        {
+            "access_token": "microsoft-access-renewed",
+            "expires_in": 3_600,
+            "scope": "Calendars.Read",
+        },
+    )
+    service = OAuthConnectionService(
+        OAuthProviderConfig(
+            provider_id="microsoft",
+            authorization_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            client_id="hub-client",
+            redirect_uri="http://127.0.0.1:8765/oauth/callback",
+            scopes=("offline_access", "Calendars.Read"),
+            allowed_scopes=("offline_access", "Calendars.Read"),
+        ),
+        _vault(tmp_path),
+        transport,
+    )
+
+    request = service.begin_authorization()
+    status = await service.complete_authorization(code="provider-code", state=request.state)
+
+    assert status.connected
+    assert status.scopes == ("Calendars.Read", "offline_access")
+    assert await service.access_token() == "microsoft-access-renewed"
+
+
+@pytest.mark.asyncio
 async def test_oauth_rejects_state_scope_and_provider_content_safely(tmp_path: Path):
     config = google_calendar_oauth_config(
         client_id="hub-client",

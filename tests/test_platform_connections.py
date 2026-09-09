@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -10,6 +10,7 @@ from personal_hub.bootstrap import build_hub_container
 from personal_hub.calendar.ical import IcalFeedFetcher
 from personal_hub.config import HubSettings
 from personal_hub.feeds.contracts import FeedResponse
+from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.integrations.http import BoundedProviderTransport
 from personal_hub.integrations.oauth import OAuthConnectionService
 from personal_hub.sources import SourceState
@@ -147,18 +148,51 @@ DTSTART:20260912T235900Z\r
 DTEND:20260913T005900Z\r
 SUMMARY:Submit research outline\r
 DESCRIPTION:<p>Upload the outline.</p><script>ignored()</script>\r
-URL:https://canvas.example.edu/courses/10/assignments/101\r
+URL:https://canvas.example.edu/calendar?include_contexts=course_10&month=09&year=2026#assignment_101\r
 END:VEVENT\r
 BEGIN:VEVENT\r
 UID:course-event-202@example.test\r
 DTSTART;VALUE=DATE:20260915\r
 DTEND;VALUE=DATE:20260916\r
 SUMMARY:Read module 4\r
+URL:https://canvas.example.edu/calendar?include_contexts=course_10&month=09&year=2026#calendar_event_202\r
 END:VEVENT\r
 END:VCALENDAR\r
 """,
             url=url,
         )
+
+
+def test_canvas_assignment_url_replaces_calendar_links_and_rejects_non_assignments() -> None:
+    canvas_origin = "https://canvas.example.edu"
+    calendar_url = (
+        "https://canvas.example.edu/calendar?include_contexts=course_10&month=09&year=2026"
+        "#assignment_101"
+    )
+
+    assert canvas_assignment_url(calendar_url, canvas_origin=canvas_origin) == (
+        "https://canvas.example.edu/courses/10/assignments/101"
+    )
+    assert (
+        canvas_assignment_url(
+            "https://canvas.example.edu/calendar?include_contexts=course_10#calendar_event_202",
+            canvas_origin=canvas_origin,
+        )
+        is None
+    )
+    assert (
+        canvas_assignment_url(
+            calendar_url.replace("canvas.example.edu", "other.example.edu"),
+            canvas_origin=canvas_origin,
+        )
+        is None
+    )
+    assert (
+        canvas_assignment_url(
+            "https://canvas.example.edu/courses/10/assignments/101?module_item_id=7"
+        )
+        == "https://canvas.example.edu/courses/10/assignments/101"
+    )
 
 
 @pytest.mark.asyncio
@@ -193,14 +227,19 @@ async def test_canvas_ical_connection_imports_stable_due_tasks_without_storing_f
         ]
         assert tasks[0].due_at == datetime(2026, 9, 12, 23, 59, tzinfo=UTC)
         assert tasks[0].due_is_all_day is False
+        assert tasks[0].external_url == ("https://canvas.example.edu/courses/10/assignments/101")
         assert tasks[0].notes == (
             "Imported from Canvas.\n\nUpload the outline.\n\n"
             "Open in Canvas: https://canvas.example.edu/courses/10/assignments/101"
         )
         assert tasks[1].due_is_all_day is True
+        assert tasks[1].external_url is None
 
         first_id = tasks[0].task_id
-        container.task_repository.complete(first_id, completed_at=datetime(2026, 9, 9, tzinfo=UTC))
+        container.task_repository.complete(
+            first_id,
+            completed_at=tasks[0].created_at + timedelta(minutes=1),
+        )
         refreshed = await manager.refresh_canvas()
         assert refreshed.metadata["imported_task_count"] == 2
         assert container.task_repository.count(tags=("canvas",)) == 2

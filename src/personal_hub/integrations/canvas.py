@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 from uuid import UUID, uuid5
 
 from personal_hub.calendar.ical import (
@@ -31,6 +32,12 @@ from personal_hub.tasks import HubTask, TaskRepository
 
 CANVAS_TASK_NAMESPACE: Final = UUID("d966d9c9-95b1-4a7e-962a-93b00f9293f9")
 _CANVAS_FEED_ID: Final = UUID("841a758a-cd91-438d-b5ed-966af3f5a2d6")
+_CANVAS_ASSIGNMENT_FRAGMENT = re.compile(r"^assignment_(?P<assignment_id>[1-9][0-9]*)$", re.ASCII)
+_CANVAS_ASSIGNMENT_PATH = re.compile(
+    r"^/courses/(?P<course_id>[1-9][0-9]*)/assignments/(?P<assignment_id>[1-9][0-9]*)$",
+    re.ASCII,
+)
+_CANVAS_COURSE_CONTEXT = re.compile(r"^course_(?P<course_id>[1-9][0-9]*)$", re.ASCII)
 
 
 class CanvasIcalTaskImporter:
@@ -127,10 +134,11 @@ class CanvasIcalTaskImporter:
         for item in items:
             task_id = uuid5(CANVAS_TASK_NAMESPACE, f"{origin}|{item.item_id}")
             current = self.task_repository.get(task_id)
+            native_url = canvas_assignment_url(item.deep_link, canvas_origin=origin)
             notes = _task_notes(
                 description=item.description,
                 location=item.location,
-                deep_link=item.deep_link,
+                deep_link=native_url,
             )
             if current is None:
                 imported.append(
@@ -138,6 +146,7 @@ class CanvasIcalTaskImporter:
                         task_id=task_id,
                         title=item.title,
                         notes=notes,
+                        external_url=native_url,
                         due_at=item.due_at,
                         due_is_all_day=item.due_is_all_day,
                         timezone=item.timezone,
@@ -152,6 +161,7 @@ class CanvasIcalTaskImporter:
                 task_id,
                 title=item.title,
                 notes=notes,
+                external_url=native_url,
                 due_at=item.due_at,
                 due_is_all_day=item.due_is_all_day,
                 timezone=item.timezone,
@@ -207,6 +217,76 @@ def _task_notes(
     return "\n\n".join(parts)[:20_000]
 
 
+def canvas_assignment_url(
+    calendar_url: str | None,
+    *,
+    canvas_origin: str | None = None,
+) -> str | None:
+    """Return the native Canvas assignment URL represented by a VEVENT URL.
+
+    Canvas emits a calendar URL for every iCalendar event. Assignment events
+    identify the assignment in the URL fragment and the course in the
+    ``include_contexts`` query parameter; ordinary calendar events do not.
+    Already-native assignment URLs are returned in canonical form so tasks
+    imported by an earlier version are repaired when they are displayed.
+    """
+
+    if not calendar_url:
+        return None
+    try:
+        parts = urlsplit(calendar_url)
+        event_origin = origin_for_url(calendar_url)
+        if (
+            parts.scheme.casefold() not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or (canvas_origin is not None and event_origin != canvas_origin)
+        ):
+            return None
+        native_match = _CANVAS_ASSIGNMENT_PATH.fullmatch(parts.path.rstrip("/"))
+        if native_match is not None:
+            return urlunsplit(
+                (
+                    parts.scheme,
+                    parts.netloc,
+                    f"/courses/{native_match.group('course_id')}/assignments/"
+                    f"{native_match.group('assignment_id')}",
+                    "",
+                    "",
+                )
+            )
+        if parts.path.rstrip("/").casefold() != "/calendar":
+            return None
+        assignment_match = _CANVAS_ASSIGNMENT_FRAGMENT.fullmatch(unquote(parts.fragment).strip())
+        if assignment_match is None:
+            return None
+        query = parse_qs(parts.query, keep_blank_values=False)
+        course_id: str | None = None
+        for raw_contexts in query.get("include_contexts", ()):
+            for raw_context in unquote(raw_contexts).split(","):
+                course_match = _CANVAS_COURSE_CONTEXT.fullmatch(raw_context.strip())
+                if course_match is not None:
+                    course_id = course_match.group("course_id")
+                    break
+            if course_id is not None:
+                break
+        if course_id is None:
+            return None
+        native_url = urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                f"/courses/{course_id}/assignments/{assignment_match.group('assignment_id')}",
+                "",
+                "",
+            )
+        )
+        return native_url if origin_for_url(native_url) == event_origin else None
+    except (FeedPolicyError, ValueError):
+        return None
+
+
 def _safe_response_header(headers: object, name: str) -> str | None:
     if not hasattr(headers, "items"):
         return None
@@ -223,4 +303,4 @@ def _safe_response_header(headers: object, name: str) -> str | None:
     return None
 
 
-__all__ = ["CANVAS_TASK_NAMESPACE", "CanvasIcalTaskImporter"]
+__all__ = ["CANVAS_TASK_NAMESPACE", "CanvasIcalTaskImporter", "canvas_assignment_url"]

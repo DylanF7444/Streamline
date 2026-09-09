@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -118,7 +119,7 @@ def test_calendar_event_completion_commands_are_not_available(tmp_path: Path) ->
         container.close()
 
 
-def test_schema_9_removes_legacy_calendar_completion_rows(tmp_path: Path) -> None:
+def test_schema_migration_removes_legacy_calendar_completion_rows(tmp_path: Path) -> None:
     path = tmp_path / "hub.sqlite"
     database = HubDatabase(path)
     database.migrate()
@@ -155,6 +156,9 @@ def test_schema_9_removes_legacy_calendar_completion_rows(tmp_path: Path) -> Non
             )
             version = session.get(HubSchemaVersionRow, 1)
             assert version is not None
-            assert version.version == 9
+            assert version.version == HubDatabase.CURRENT_SCHEMA_VERSION
+        with sqlite3.connect(migrated.path) as connection:
+            task_columns = {row[1] for row in connection.execute("PRAGMA table_info(hub_tasks)")}
+        assert "external_url" in task_columns
     finally:
         migrated.close()

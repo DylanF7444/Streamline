@@ -389,6 +389,48 @@ def test_calendar_item_click_reveals_details_and_native_open_is_explicit(qtbot):
 
     window.open_calendar_event("event-2")
     assert not window.calendar_event_native_open_button.isEnabled()
+    assert not window.calendar_event_native_open_button.isVisible()
     window.set_privacy_masked(True)
     assert window.calendar_event_details_title.text() == "Hidden by privacy settings"
     assert not window.calendar_event_native_open_button.isEnabled()
+    assert not window.calendar_event_native_open_button.isVisible()
+
+
+@pytest.mark.ui
+def test_canvas_calendar_task_uses_canvas_native_open_action(qtbot):
+    window = _window(qtbot)
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    event = CalendarEventView(
+        event_id="task:canvas-1",
+        title="Submit assignment",
+        starts_at=now,
+        calendar_id="personal-hub-tasks",
+        calendar_name="Canvas assignments",
+        source_id="personal-hub-tasks",
+        source_name="Canvas",
+        navigation_target="https://canvas.example.edu/courses/10/assignments/101",
+        native_platform="canvas",
+        sensitive=False,
+        item_kind="task",
+        task_id="canvas-1",
+    )
+    window.render_calendar(
+        CalendarView(
+            events=(event,),
+            calendars=(CalendarSourceView("personal-hub-tasks", "Canvas assignments"),),
+            selected_calendar_ids=("personal-hub-tasks",),
+            timezone="America/Chicago",
+            cursor_date=now.date(),
+        )
+    )
+    requests: list[CalendarEventView] = []
+    window.calendar_deep_link_requested.connect(requests.append)
+
+    chip = window.calendar_month_view.findChildren(QPushButton, "calendarEventButton")[0]
+    chip.click()
+
+    assert window.calendar_event_native_open_button.text() == "Open in Canvas"
+    assert window.calendar_event_native_open_button.isVisible()
+    assert window.calendar_event_native_open_button.isEnabled()
+    window.calendar_event_native_open_button.click()
+    assert [item.event_id for item in requests] == ["task:canvas-1"]

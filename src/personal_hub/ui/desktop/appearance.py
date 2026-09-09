@@ -446,7 +446,8 @@ QPushButton[hubAccent="true"] {{
 }}
 
 #newsEntryReadButton, #newsEntryOpenButton, #calendarEventButton,
-#calendarEventNativeOpenButton, #calendarEventDetailsCloseButton {{
+#calendarEventNativeOpenButton, #calendarEventDetailsCloseButton,
+#taskNativeOpenButton {{
     background: {selected};
     border-color: {accent};
     color: {page_text};
@@ -456,7 +457,8 @@ QPushButton[hubAccent="true"] {{
 #newsEntryOpenButton:hover:enabled, #newsEntryOpenButton:focus,
 #calendarEventButton:hover:enabled, #calendarEventButton:focus,
 #calendarEventNativeOpenButton:hover:enabled, #calendarEventNativeOpenButton:focus,
-#calendarEventDetailsCloseButton:hover:enabled, #calendarEventDetailsCloseButton:focus {{
+#calendarEventDetailsCloseButton:hover:enabled, #calendarEventDetailsCloseButton:focus,
+#taskNativeOpenButton:hover:enabled, #taskNativeOpenButton:focus {{
     background: {hover};
     border-color: {focus};
     color: {page_text};
@@ -675,7 +677,8 @@ QPushButton[hubAccent="true"] {{
 }}
 
 #newsEntryReadButton, #newsEntryOpenButton, #calendarEventButton,
-#calendarEventNativeOpenButton, #calendarEventDetailsCloseButton {{
+#calendarEventNativeOpenButton, #calendarEventDetailsCloseButton,
+#taskNativeOpenButton {{
     background: #003b5c;
     border-color: #ffffff;
     color: #ffffff;

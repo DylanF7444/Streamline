@@ -86,6 +86,7 @@ def test_task_contract_is_strict_and_recurrence_is_bounded() -> None:
     task = HubTask(
         title="Prepare release",
         notes="Keep the notes local.",
+        external_url="https://canvas.example.test/courses/10/assignments/101",
         due_at=now,
         tags=("Work", "release"),
         reminder_offsets_minutes=(60, 0),
@@ -94,12 +95,17 @@ def test_task_contract_is_strict_and_recurrence_is_bounded() -> None:
     assert task.tags == ("release", "work")
     assert task.reminder_offsets_minutes == (0, 60)
     assert task.recurrence is not None
+    assert task.external_url == "https://canvas.example.test/courses/10/assignments/101"
     with pytest.raises(ValidationError):
         HubTask(title="bad", due_at=datetime(2026, 8, 31, 12))
     with pytest.raises(ValidationError):
         HubTask(title="bad", unexpected="value")
     with pytest.raises(ValidationError):
         HubTask(title="bad", due_at=now, tags=("../outside",))
+    with pytest.raises(ValidationError):
+        HubTask(title="bad", external_url="javascript:alert(1)")
+    with pytest.raises(ValidationError):
+        HubTask(title="bad", external_url="https://user:password@example.test/task")
     with pytest.raises(ValidationError):
         Recurrence(frequency="daily", weekdays=(1,))
     with pytest.raises(ValidationError):
@@ -151,6 +157,7 @@ def test_task_crud_lists_tags_filters_and_restart_persistence(tmp_path: Path) ->
     task = repository.create(
         title="Ship task storage",
         notes="Verify migration and restart.",
+        external_url="https://canvas.example.test/courses/10/assignments/202",
         priority="high",
         due_at=due,
         list_id=task_list.list_id,
@@ -160,6 +167,7 @@ def test_task_crud_lists_tags_filters_and_restart_persistence(tmp_path: Path) ->
         updated_at=due - timedelta(days=1),
     )
     old_updated_at = task.updated_at
+    assert task.external_url == "https://canvas.example.test/courses/10/assignments/202"
     edited = repository.edit(task.task_id, title="Ship task storage safely", priority="normal")
     assert edited is not None
     assert edited.title == "Ship task storage safely"

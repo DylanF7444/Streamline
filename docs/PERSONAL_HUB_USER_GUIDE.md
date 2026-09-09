@@ -58,11 +58,15 @@ Canvas Student can also create tasks from a private iCalendar feed. Open **Sourc
 Every concrete calendar item is imported as a local task using the event start as its due date;
 the existing due-task projection then places it on Calendar. Refreshes update the same tasks
 without duplicating them or reopening completed/archived tasks.
+Canvas's iCalendar feed identifies assignment events in its calendar URL; Personal Hub converts
+those same-origin links to the native assignment page. The task row provides **Open in Canvas**
+for those assignments; items without a safe assignment identity do not show a native-open action.
 
 ### Calendar
 
 Calendar supports Month, Week, and Agenda views, selected calendars/accounts, timed and
-all-day events, freshness state, privacy masking, and provider deep links. Provider calendar
+all-day events, freshness state, privacy masking, and provider deep links. Canvas assignment
+tasks with a safe URL provide **Open in Canvas** from their Calendar details card. Provider calendar
 events are read-only and have no create, edit, response, completion, or delete action. A
 successful Google refresh removes events that were deleted or cancelled at Google; stale,
 offline, and permission/error results keep the last successful in-memory snapshot because they

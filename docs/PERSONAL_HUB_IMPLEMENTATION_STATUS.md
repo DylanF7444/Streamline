@@ -1,6 +1,6 @@
 # Personal Hub implementation status
 
-Updated September 8, 2026. The authoritative product and technical specification is
+Updated September 9, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
@@ -17,7 +17,7 @@ material, assistive-technology users, a clean Windows VM, or elapsed wall-clock 
 | 7. Packaging and release hardening | Implemented; release approval pending external evidence | One-file build, isolated package verifier, separate installer, install/upgrade/uninstall verifier, signed-update boundary, SBOM/provenance tooling, accessibility checks, and reliability harness are implemented. See the release-gate table below. |
 | 8. Optional intelligence | Deferred | Deliberately excluded from non-AI 1.0 until stable daily-use evidence exists. |
 
-## Canvas Student iCalendar source — September 8, 2026
+## Canvas Student iCalendar source — September 9, 2026
 
 Canvas Student is now a configurable external platform source. Its private HTTPS iCalendar
 URL is stored only in the Hub vault; ordinary settings retain the non-secret origin. A bounded
@@ -25,6 +25,11 @@ refresh parses every concrete `VEVENT` once and idempotently creates or updates 
 whose due date is the event start. Imported tasks retain completion/archive state across
 refresh and appear in Calendar through the existing due-task projection. Canvas disconnect
 removes the private URL and leaves the local task records intact.
+Canvas iCalendar events publish a calendar URL, so assignment events are converted to their
+same-origin native `/courses/{course}/assignments/{id}` URL using the assignment fragment and
+course context that Canvas includes. The safe link is retained on the local task and exposed as
+**Open in Canvas** in Tasks and Calendar; items without an assignment identity have no
+native-open action.
 
 Deterministic evidence for this slice:
 
@@ -116,7 +121,7 @@ repurposed.
 
 - Startup import measurement rejects all Assistant and pre-desktop Qt modules.
 - Hub configuration rejects any data/database overlap with Local Assistant.
-- The database migrates idempotently through Hub schema version 9. The migration retires and
+- The database migrates idempotently through Hub schema version 10. The migration retires and
   clears legacy calendar-event completion rows; task completion remains in the task table.
 - Offline mode is checked before adapter, DNS, or token work in deterministic tests.
 - Source failures become fixed safe states and durable Inbox records without blocking Qt.

@@ -199,6 +199,8 @@ class TaskView:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     completed_at: datetime | None = None
+    external_url: str = ""
+    native_platform: str = ""
 
     @property
     def id(self) -> str:
@@ -231,6 +233,12 @@ class TaskView:
     @property
     def status(self) -> str:
         return self.state
+
+    @property
+    def navigation_target(self) -> str:
+        """Compatibility alias for the source link used by navigation views."""
+
+        return self.external_url
 
 
 # Explicit aliases make the contract discoverable without tying callers to a
@@ -330,6 +338,7 @@ class CalendarEventView:
     completion_state: str = "open"
     external_event_id: str = ""
     external_calendar_id: str = ""
+    native_platform: str = ""
 
     @property
     def id(self) -> str:
@@ -1088,6 +1097,18 @@ def _coerce_task(value: object, index: int) -> TaskView:
         task_id=task_id,
         title=_safe_text(_field(value, "title", "Untitled task"), fallback="Untitled task"),
         notes=_safe_text(_field(value, "notes", _field(value, "description", ""))),
+        external_url=_safe_http_target(
+            _field(
+                value,
+                "external_url",
+                _field(value, "navigation_target", _field(value, "deep_link", "")),
+            ),
+            limit=1_024,
+        ),
+        native_platform=_safe_text(
+            _field(value, "native_platform", _field(value, "platform", "")),
+            limit=64,
+        ).casefold(),
         state=state,
         priority=priority,
         due_at=_coerce_datetime(
@@ -1255,6 +1276,7 @@ def _coerce_calendar_event(value: object, index: int) -> CalendarEventView:
             location=_safe_text(value.location, limit=240),
             description=_safe_text(value.description),
             navigation_target=_safe_text(value.navigation_target, limit=512),
+            native_platform=_safe_text(value.native_platform, limit=64).casefold(),
             sensitive=value.sensitive,
             item_kind=("task" if value.item_kind == "task" else "event"),
             task_id=_safe_text(value.task_id, limit=_MAX_ID_LENGTH),
@@ -1346,6 +1368,10 @@ def _coerce_calendar_event(value: object, index: int) -> CalendarEventView:
             ),
             limit=512,
         ),
+        native_platform=_safe_text(
+            _field(value, "native_platform", _field(value, "platform", "")),
+            limit=64,
+        ).casefold(),
         sensitive=_bool_value(_field(value, "sensitive", True), default=True),
         item_kind=(
             "task"
@@ -2619,6 +2645,7 @@ class TaskRowWidget(QFrame):
     edit_requested = Signal(str)
     archive_requested = Signal(str)
     undo_requested = Signal(str)
+    native_open_requested = Signal(object)
 
     def __init__(self, task: TaskView, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2654,6 +2681,24 @@ class TaskRowWidget(QFrame):
         self.details_label.setTextFormat(Qt.TextFormat.PlainText)
         self.details_label.setWordWrap(True)
         layout.addWidget(self.details_label, 1)
+
+        self.native_open_button: QPushButton | None = None
+        native_target = _safe_http_target(task.external_url, limit=1_024)
+        if native_target:
+            native_label = _task_native_open_label(task)
+            self.native_open_button = QPushButton(native_label)
+            self.native_open_button.setObjectName("taskNativeOpenButton")
+            self.native_open_button.setAccessibleName(f"{native_label}: {task.title}")
+            self.native_open_button.setAccessibleDescription(
+                "Open this task in its source platform."
+            )
+            self.native_open_button.setAutoDefault(False)
+            self.native_open_button.clicked.connect(
+                lambda _checked=False: self.native_open_requested.emit(self.task)
+            )
+            layout.addWidget(self.native_open_button)
+        self.task_native_open_button = self.native_open_button
+        self.open_button = self.native_open_button
 
         self.complete_button = QPushButton(
             "Complete" if task.state == "open" else "Undo completion"
@@ -2706,6 +2751,10 @@ class TaskRowWidget(QFrame):
             self._archive_or_undo()
             event.accept()
             return
+        if key == Qt.Key.Key_O and self.native_open_button is not None:
+            self.native_open_requested.emit(self.task)
+            event.accept()
+            return
         super().keyPressEvent(event)
 
 
@@ -2722,6 +2771,7 @@ class TaskListWidget(QListWidget):
             Qt.Key.Key_E,
             Qt.Key.Key_F2,
             Qt.Key.Key_A,
+            Qt.Key.Key_O,
         }:
             row.keyPressEvent(event)
             return
@@ -2740,6 +2790,12 @@ def _task_due_label(task: TaskView) -> str:
     if task.timezone and task.timezone != "local":
         label += f" ({task.timezone})"
     return label
+
+
+def _task_native_open_label(task: TaskView) -> str:
+    if task.native_platform == "canvas" or "canvas" in task.tags:
+        return "Open in Canvas"
+    return "Open source"
 
 
 class _UiSignalBridge(QObject):
@@ -2771,6 +2827,7 @@ class PersonalHubMainWindow(QMainWindow):
     task_completed = Signal(object)
     task_archived = Signal(object)
     task_undo_requested = Signal(object)
+    task_native_open_requested = Signal(object)
     task_edit_requested = Signal(object)
     task_filters_changed = Signal(object)
     today_changed = Signal(object)
@@ -2843,6 +2900,7 @@ class PersonalHubMainWindow(QMainWindow):
     task_completion_requested = task_completed
     task_archive_requested = task_archived
     task_added = task_created
+    task_deep_link_requested = task_native_open_requested
     task_changed = task_updated
     task_completed_requested = task_completed
     task_archived_requested = task_archived
@@ -3832,7 +3890,11 @@ class PersonalHubMainWindow(QMainWindow):
             status = "Status: Read-only calendar event"
         self.calendar_event_details_status.setText(status)
         target = self._calendar_event_native_target(event)
+        native_label = self._calendar_event_native_open_label(event)
+        self.calendar_event_native_open_button.setText(native_label)
+        self.calendar_event_native_open_button.setAccessibleName(f"{native_label}: {title}")
         self.calendar_event_native_open_button.setEnabled(bool(target))
+        self.calendar_event_native_open_button.setVisible(bool(target))
         self.calendar_event_native_open_button.setProperty("navigationAvailable", bool(target))
         self.calendar_event_native_open_button.setToolTip(
             "Open this event in the source calendar."
@@ -3840,6 +3902,12 @@ class PersonalHubMainWindow(QMainWindow):
             else "This event does not have a safe HTTP(S) link available."
         )
         self.calendar_event_details_panel.setVisible(True)
+
+    @staticmethod
+    def _calendar_event_native_open_label(event: CalendarEventView) -> str:
+        if event.native_platform == "canvas":
+            return "Open in Canvas"
+        return "Open in native calendar"
 
     def _sync_calendar_event_details(self) -> None:
         """Refresh or dismiss the detail card after calendar data changes."""
@@ -5016,6 +5084,7 @@ class PersonalHubMainWindow(QMainWindow):
             row.edit_requested.connect(self.open_task_editor)
             row.archive_requested.connect(self.archive_task)
             row.undo_requested.connect(self.undo_task)
+            row.native_open_requested.connect(self.task_native_open_requested.emit)
             self.tasks_list.addItem(item)
             self.tasks_list.setItemWidget(item, row)
             item.setSizeHint(row.sizeHint())

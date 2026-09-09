@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime
 from typing import Final, Literal
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,6 +20,7 @@ TaskSortField = Literal["due_at", "created_at", "updated_at", "priority", "title
 
 _TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z", re.ASCII)
 _MAX_NOTES_LENGTH: Final[int] = 20_000
+_MAX_EXTERNAL_URL_LENGTH: Final[int] = 1_024
 _MAX_REMINDER_OFFSET_MINUTES: Final[int] = 43_200
 _MAX_RECURRENCE_OCCURRENCES: Final[int] = 10_000
 
@@ -40,6 +42,32 @@ def _timezone(value: str) -> str:
     except ZoneInfoNotFoundError as error:
         raise ValueError(f"Unknown task time zone: {normalized}") from error
     return normalized
+
+
+def _external_url(value: str | None) -> str | None:
+    """Keep provider navigation links ordinary, bounded HTTP(S) URLs."""
+
+    if value is None:
+        return None
+    candidate = value.strip()
+    if (
+        not candidate
+        or len(candidate) > _MAX_EXTERNAL_URL_LENGTH
+        or any(character in candidate for character in "\r\n\x00\\")
+    ):
+        raise ValueError("task external URL is invalid")
+    try:
+        parts = urlsplit(candidate)
+    except ValueError as error:
+        raise ValueError("task external URL is invalid") from error
+    if (
+        parts.scheme.casefold() not in {"http", "https"}
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        raise ValueError("task external URL must use HTTP or HTTPS without credentials")
+    return candidate
 
 
 class Recurrence(HubContract):
@@ -100,6 +128,7 @@ class HubTask(HubContract):
     task_id: UUID = Field(default_factory=uuid4)
     title: str = Field(min_length=1, max_length=240)
     notes: str = Field(default="", max_length=_MAX_NOTES_LENGTH)
+    external_url: str | None = Field(default=None, max_length=_MAX_EXTERNAL_URL_LENGTH)
     state: TaskState = "open"
     priority: TaskPriority = "normal"
     due_at: datetime | None = None
@@ -127,6 +156,11 @@ class HubTask(HubContract):
         if len(value) > _MAX_NOTES_LENGTH:
             raise ValueError("task notes exceed the size limit")
         return value
+
+    @field_validator("external_url")
+    @classmethod
+    def _external_url_is_safe(cls, value: str | None) -> str | None:
+        return _external_url(value)
 
     @field_validator("due_at", "created_at", "updated_at", "completed_at")
     @classmethod

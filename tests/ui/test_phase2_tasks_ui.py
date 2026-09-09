@@ -142,6 +142,44 @@ def test_task_filters_sort_keyboard_completion_archive_and_undo(qtbot):
 
 
 @pytest.mark.ui
+def test_canvas_task_shows_native_open_action_only_with_safe_link(qtbot):
+    window = _window(qtbot)
+    window.show_destination("Tasks")
+    requests: list[TaskView] = []
+    window.task_native_open_requested.connect(requests.append)
+
+    window.render_tasks(
+        [
+            {
+                "task_id": "canvas-1",
+                "title": "Submit assignment",
+                "tags": ("canvas",),
+                "external_url": "https://canvas.example.edu/courses/10/assignments/101",
+            }
+        ]
+    )
+    row = window.tasks_list.itemWidget(window.tasks_list.item(0))
+    assert row is not None
+    assert row.native_open_button is not None
+    assert row.native_open_button.text() == "Open in Canvas"
+    row.native_open_button.click()
+    assert [task.task_id for task in requests] == ["canvas-1"]
+
+    window.render_tasks(
+        [
+            {
+                "task_id": "canvas-2",
+                "title": "Course reading",
+                "tags": ("canvas",),
+            }
+        ]
+    )
+    row_without_link = window.tasks_list.itemWidget(window.tasks_list.item(0))
+    assert row_without_link is not None
+    assert row_without_link.native_open_button is None
+
+
+@pytest.mark.ui
 def test_today_sections_render_in_order_and_support_visibility_hooks(qtbot):
     window = _window(qtbot)
     sections = (
