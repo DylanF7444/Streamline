@@ -131,7 +131,7 @@ Build Personal Hub as a separately packaged Windows desktop application in its s
 repository. It must provide the Today, Tasks, Calendar, Watchlists, Inbox, Sources,
 and Settings experiences specified by the plan. It must support the required local
 task management, calendar connections, RSS/news feeds, deal/restock/page watches,
-bounded message summaries, notifications, digests, source health, privacy controls,
+bounded message summaries, in-app attention notices, notifications, digests, source health, privacy controls,
 offline behavior, backups, diagnostics, packaging, and release documentation.
 
 Non-negotiable boundaries:

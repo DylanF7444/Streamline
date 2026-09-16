@@ -53,6 +53,18 @@ status, IANA timezone, priority, list, tags, recurrence, and reminder offsets. T
 filtered and sorted, completed, archived, edited, and undone. Completing a recurring task
 creates exactly one next occurrence.
 
+The Tasks toolbar keeps the common path compact: choose a quick view such as **Due today**,
+**Upcoming**, **Overdue**, or **No date**, search by title or metadata, and open **Filters**
+only when state or sort controls are needed. Select **Edit** from a task's actions menu to
+open the editor beside the list; the list remains visible while editing.
+
+Use **Import** beside Quick add to add many local tasks at once. Choose **CSV file** to browse
+for a UTF-8 CSV or paste CSV text, or choose **Text list** to enter one task title per line.
+The dialog can save the [task CSV template](PERSONAL_HUB_TASK_IMPORT_TEMPLATE.csv); `title`
+is required, while due dates, times, lists, tags, priorities, and reminders are optional.
+Rows with an `id` can be safely imported again to update the same task. Invalid rows are
+reported without stopping valid rows, and imported tasks remain local to Personal Hub.
+
 Canvas Student can also create tasks from a private iCalendar feed. Open **Sources**, select
 **Canvas Student**, and choose **Connect / Configure**. Paste the calendar feed URL from Canvas.
 Every concrete calendar item is imported as a local task using the event start as its due date;
@@ -61,11 +73,20 @@ without duplicating them or reopening completed/archived tasks.
 Canvas's iCalendar feed identifies assignment events in its calendar URL; Personal Hub converts
 those same-origin links to the native assignment page. The task row provides **Open in Canvas**
 for those assignments; items without a safe assignment identity do not show a native-open action.
+To remove completed assignment copies after they are no longer due, enable **Remove completed
+Canvas assignments after due date** in Settings. On a successful Canvas refresh, this removes
+only completed, past-due assignment copies from the local task list and records a durable
+Personal Hub deletion marker. Later refreshes and restarts honor that marker instead of
+recreating the assignment as an open task. Open, future, and generic Canvas calendar items
+remain, and Canvas itself is never modified.
 
 ### Calendar
 
-Calendar supports Month, Week, and Agenda views, selected calendars/accounts, timed and
-all-day events, freshness state, privacy masking, and provider deep links. Canvas assignment
+Calendar supports Month, Day, Week, and Agenda views, selected calendars/accounts, timed and
+all-day events, freshness state, privacy masking, and provider deep links. Day and Week show
+an hour-by-hour schedule. Select an hourly slot to start a new local scheduled task with its
+due date, time, and default timezone prefilled; save it from the task editor and it appears
+in that slot. Canvas assignment
 tasks with a safe URL provide **Open in Canvas** from their Calendar details card. Provider calendar
 events are read-only and have no create, edit, response, completion, or delete action. A
 successful Google refresh removes events that were deleted or cancelled at Google; stale,
@@ -74,6 +95,19 @@ cannot prove a deletion. Local to-do items with due dates also appear on Calenda
 checkbox that completes or reopens the underlying task. Use Import iCal feed to add a direct
 HTTPS iCalendar URL for read-only display; feed definitions and validators are stored locally,
 while event snapshots remain in memory.
+
+To add local calendar items from a file or list, open **Calendars** and choose **Import CSV or
+list** under **Local calendar imports**. The [calendar CSV template](PERSONAL_HUB_CALENDAR_IMPORT_TEMPLATE.csv)
+includes the date, time, timezone, location, description, and safe-link columns. A text list
+can use `YYYY-MM-DD HH:MM | title` or `YYYY-MM-DD | title`; unprefixed rows use the defaults
+shown in the dialog. Each named import appears as a selectable calendar and can be removed
+from the same panel. These items are read-only local records and never change a connected
+calendar.
+
+Use **Calendars** in the toolbar when you need to change selected calendars or manage imported
+iCalendar feeds; those controls stay collapsed during normal browsing. Selecting an event opens
+its details in the inspector beside the calendar grid, so the current period remains visible
+while reviewing the event.
 
 ### Watchlists and news
 
@@ -89,19 +123,26 @@ make purchases.
 
 ### Inbox and messages
 
-Inbox contains safe, durable task reminders, digests, watch alerts, and source failures.
-Select an Inbox row to mark it read or unread, dismiss it, or archive it. These actions
+Inbox contains safe, durable task reminders, news digests, watch alerts, and source failures.
+The page separates that workflow from **Messages** with top-level **Alerts** and **Messages**
+tabs. Select an Alerts row to mark it read or unread, dismiss it, or archive it. These actions
 change only the Hub attention record; they never mutate the originating provider item.
-Message summaries are a separate bounded section. Select a summary and choose **View body**
-to fetch that one body; listing summaries never fetches all bodies. The displayed body is
-sanitized plain text with inert, separately listed HTTP(S) links. **Clear summaries** deletes
-the Hub's local summaries and memory-only bodies, not provider mail or Slack content. The
-message section starts in **Primary** and provides local **Promotions**, **Social**,
-**Updates**, and **Spam** tabs. Gmail labels and Outlook categories are used when present;
-otherwise conservative local sender/subject rules classify the summary. Selecting a tab only
-changes the Hub view—nothing is moved, deleted, labeled, or marked in the provider mailbox.
-Spam is hidden from the default Primary view, Today, and scheduled message digests, but remains
-available in its own tab for review.
+
+When unread selected messages are available, Hub shows a count-only attention notice at the top
+of the window when it opens or completes a message refresh. **Review messages** opens the
+Messages tab; **Dismiss** hides the notice for the current Hub session. The notice is transient
+and never creates an Inbox row.
+
+Messages use a master-detail layout: summaries remain on the left while the explicitly opened
+memory-only body and its safe links appear on the right. Listing summaries never fetches all
+bodies. The displayed body is sanitized plain text with inert, separately listed HTTP(S) links.
+**Clear summaries** deletes the Hub's local summaries and memory-only bodies, not provider mail
+or Slack content. The message section starts in **Primary** and provides local **Promotions**,
+**Social**, **Updates**, and **Spam** filters with item counts. Gmail labels and Outlook
+categories are used when present; otherwise conservative local sender/subject rules classify the
+summary. Selecting a filter only changes the Hub view—nothing is moved, deleted, labeled, or
+marked in the provider mailbox. Spam is hidden from the default Primary view, Today, and the
+count-only attention notice, but remains available in its own filter for review.
 
 ### Sources and Settings
 
@@ -119,8 +160,9 @@ refresh across restart; disconnect clears provider tokens and connector-owned lo
 without changing provider data.
 
 Settings provides editable Hub-owned offline, privacy, tray/startup, notification, quiet-hour,
-digest, refresh, retention, and accessibility controls plus redacted diagnostics. Offline mode
-can also be toggled from the tray menu and is persisted before later refreshes. Database backup,
+digest, refresh, retention, Canvas cleanup, and accessibility controls plus redacted diagnostics.
+Offline mode can also be toggled from the tray menu and is persisted before later refreshes.
+Database backup,
 integrity-checked restore, and credential-free JSON export are user-facing actions. Restore is
 refused while refresh or maintenance work is active.
 
@@ -166,7 +208,8 @@ configuration.
 Defaults are 90 days for archived Inbox data, 30 days for audit metadata, 30 days or 500
 items per feed subscription, 90 days or 500 observations per watch, and 7 days or 500 message
 summaries per source. Message summary retention can be set to 0 for session-only behavior and
-is bounded at 30 days. Full message bodies and calendar snapshots are memory-only. Calendar
+is bounded at 30 days. Full message bodies and connected-calendar snapshots are memory-only;
+explicitly imported local calendar items remain until the named import is removed. Calendar
 event completion state is not stored; task completion remains part of each local task record.
 Credentials remain until disconnect and are not included in ordinary database backup/export.
 
@@ -191,8 +234,8 @@ developer verification commands and rollback procedure.
 **Export local data** writes an atomic JSON document containing bounded settings, tasks,
 Inbox records, source metadata, feeds, watches, and retained
 message summaries. It excludes the Hub data path, credentials, message bodies, and memory-only
-calendar snapshots. Treat the export as sensitive because it intentionally contains your visible
-local content.
+calendar snapshots. It includes local tasks and explicitly imported calendar items. Treat the
+export as sensitive because it intentionally contains your visible local content.
 
 ## Troubleshooting
 

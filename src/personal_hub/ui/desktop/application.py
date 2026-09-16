@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -23,11 +23,13 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
 
 from personal_hub.calendar.contracts import CalendarQuery, CalendarResult
+from personal_hub.calendar.local import LOCAL_IMPORT_PROVIDER_ID
 from personal_hub.feeds.contracts import FeedResult, FeedSyncState
 from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.lifecycle import LifecycleEvent
 from personal_hub.messages import (
     MESSAGE_CATEGORY_VALUES,
+    MessageAttentionNotice,
     MessageBody,
     MessageCategory,
     MessageQuery,
@@ -46,8 +48,11 @@ from personal_hub.startup import WindowsStartupRegistration
 from personal_hub.tasks import Recurrence
 from personal_hub.ui.desktop.connection_dialog import ExternalPlatformDialog
 from personal_hub.ui.desktop.ical_dialog import IcalFeedDialog
+from personal_hub.ui.desktop.import_dialog import ImportDialog
 from personal_hub.ui.desktop.main_window import (
+    AttentionNotificationView,
     CalendarEventView,
+    CalendarImportView,
     CalendarSourceView,
     CalendarView,
     DiagnosticsView,
@@ -652,6 +657,7 @@ class HubDesktopCoordinator(QObject):
         window.task_archived.connect(self._task_archived)
         window.task_undo_requested.connect(self._task_undo)
         window.task_native_open_requested.connect(self._open_task_native)
+        window.task_import_requested.connect(lambda: self._open_import_dialog("tasks"))
         window.today_section_order_changed.connect(self._save_today_order)
         window.today_section_visibility_changed.connect(self._save_today_visibility)
         window.dashboard_layout_changed.connect(self._save_dashboard_layout)
@@ -663,6 +669,8 @@ class HubDesktopCoordinator(QObject):
         window.ical_feed_update_requested.connect(self._ical_feed_updated)
         window.ical_feed_delete_requested.connect(self._ical_feed_deleted)
         window.ical_feed_enabled_changed.connect(self._ical_feed_enabled)
+        window.calendar_import_requested.connect(lambda: self._open_import_dialog("calendar"))
+        window.calendar_import_delete_requested.connect(self._calendar_import_deleted)
         window.news_entry_read_changed.connect(self._feed_entry_read_changed)
         window.news_filter_changed.connect(self._save_news_filters)
         window.news_subscription_selection_changed.connect(self._news_selection_changed)
@@ -697,6 +705,7 @@ class HubDesktopCoordinator(QObject):
         # details card emits the separate deep-link request for native opening.
         window.calendar_deep_link_requested.connect(self._open_calendar_event)
         window.calendar_task_completion_changed.connect(self._calendar_task_completion_changed)
+        window.calendar_slot_requested.connect(self._calendar_slot_requested)
         self._scheduler_timer = QTimer(self)
         self._scheduler_timer.setInterval(60_000)
         self._scheduler_timer.setSingleShot(False)
@@ -710,6 +719,7 @@ class HubDesktopCoordinator(QObject):
     def render_all(self) -> None:
         """Render the durable Phase 1 projections without performing provider I/O."""
 
+        self.container.controller.remove_legacy_message_digests()
         settings = self.container.controller.settings
         self.window.render_settings(
             SettingsView(
@@ -733,6 +743,7 @@ class HubDesktopCoordinator(QObject):
                 watch_refresh_minutes=settings.watch_refresh_minutes,
                 message_retention_days=settings.message_summary_retention_days,
                 message_refresh_minutes=settings.message_refresh_minutes,
+                canvas_remove_completed_assignments=settings.canvas_remove_completed_assignments,
                 text_scale=settings.ui_text_scale,
                 high_contrast=settings.ui_high_contrast,
                 reduced_motion=settings.ui_reduced_motion,
@@ -749,10 +760,11 @@ class HubDesktopCoordinator(QObject):
         self.render_news()
         self.render_web_watches()
         self.render_messages()
+        self._reconcile_message_attention_notice()
         self.render_task_surfaces()
         self.render_calendar()
         saved_calendar_mode = self.container.settings_repository.get("calendar_view_mode", "month")
-        if saved_calendar_mode in {"month", "week", "agenda"}:
+        if saved_calendar_mode in {"month", "day", "week", "agenda"}:
             self.window.set_calendar_mode(saved_calendar_mode)
         self.render_sources()
         self.render_diagnostics()
@@ -1001,6 +1013,74 @@ class HubDesktopCoordinator(QObject):
                     )
                 )
         query = self._calendar_query()
+        local_import_records = self.container.controller.list_calendar_imports()
+        local_import_names = {str(item.import_id): item.name for item in local_import_records}
+        local_import_views = tuple(
+            CalendarImportView(
+                import_id=str(item.import_id),
+                name=item.name,
+                source_format=item.source_format,
+                event_count=self.container.controller.count_imported_calendar_events(
+                    item.import_id
+                ),
+            )
+            for item in local_import_records
+        )
+        local_events = self.container.controller.list_imported_calendar_events(
+            starts_at=query.starts_at,
+            ends_at=query.ends_at,
+            limit=5_000,
+        )
+        for imported in local_import_records:
+            import_id = str(imported.import_id)
+            calendar_key = _calendar_selection_key(LOCAL_IMPORT_PROVIDER_ID, import_id)
+            if calendar_key not in seen_calendars:
+                seen_calendars.add(calendar_key)
+                calendars.append(
+                    CalendarSourceView(
+                        calendar_id=calendar_key,
+                        display_name=imported.name,
+                        source_id=LOCAL_IMPORT_PROVIDER_ID,
+                        source_name="Local import",
+                        selected=_calendar_selection_applies(
+                            LOCAL_IMPORT_PROVIDER_ID,
+                            import_id,
+                            explicit_selection,
+                        ),
+                        status="ready",
+                        sensitive=True,
+                    )
+                )
+        for imported in local_events:
+            import_id = str(imported.import_id)
+            identity = (LOCAL_IMPORT_PROVIDER_ID, import_id, str(imported.event_id))
+            if identity in seen_events:
+                continue
+            seen_events.add(identity)
+            calendar_key = _calendar_selection_key(LOCAL_IMPORT_PROVIDER_ID, import_id)
+            events.append(
+                CalendarEventView(
+                    event_id=_calendar_event_view_id(
+                        LOCAL_IMPORT_PROVIDER_ID,
+                        str(imported.event_id),
+                    ),
+                    title=imported.title,
+                    starts_at=imported.starts_at,
+                    ends_at=imported.ends_at,
+                    all_day=imported.all_day,
+                    timezone=imported.timezone,
+                    calendar_id=calendar_key,
+                    calendar_name=local_import_names.get(import_id, "Local calendar import"),
+                    source_id=LOCAL_IMPORT_PROVIDER_ID,
+                    source_name="Local import",
+                    location=imported.location,
+                    description=imported.description,
+                    navigation_target=imported.deep_link,
+                    sensitive=True,
+                    external_event_id=str(imported.event_id),
+                    external_calendar_id=import_id,
+                )
+            )
         due_tasks = self.container.controller.list_tasks(
             states=("open", "completed"),
             due_after=query.starts_at,
@@ -1011,8 +1091,15 @@ class HubDesktopCoordinator(QObject):
         events.extend(_calendar_task_view(task) for task in due_tasks if task.due_at is not None)
         state, detail, generated_at = _calendar_summary(
             tuple(selected_results.values()),
-            has_sources=bool(self.container.calendar_service.source_ids),
+            has_sources=bool(self.container.calendar_service.source_ids or local_import_records),
         )
+        if local_import_records and not selected_results:
+            state = "ready" if local_events else "empty"
+            detail = (
+                "Showing local imported calendar items."
+                if local_events
+                else "Local calendar imports have no items in this period."
+            )
         if due_tasks and state == "empty":
             state = "ready"
             detail = "Showing Personal Hub to-do due dates."
@@ -1070,6 +1157,7 @@ class HubDesktopCoordinator(QObject):
                 generated_at=generated_at,
                 cursor_date=self.window.current_calendar_date,
                 ical_feeds=ical_feeds,
+                local_imports=local_import_views,
             )
         )
 
@@ -1675,6 +1763,80 @@ class HubDesktopCoordinator(QObject):
         if updated.enabled:
             self.refresh_calendars()
 
+    @Slot(str)
+    def _open_import_dialog(self, default_target: str) -> None:
+        dialog = ImportDialog(default_target=default_target, parent=self.window)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        payload = dialog.payload()
+        if payload is None:
+            return
+        import_payload = dict(payload)
+        content = import_payload.pop("content", None)
+        if not isinstance(content, str):
+            if default_target == "calendar":
+                self.window.calendar_status_label.setText(
+                    "The import did not contain readable text."
+                )
+            else:
+                self.window.task_status_label.setText("The import did not contain readable text.")
+            return
+        import_payload["content_or_path"] = content
+        try:
+            result = self.container.controller.import_items(**import_payload)
+        except (TypeError, ValueError, RuntimeError):
+            message = "The import could not be validated or saved safely."
+            if default_target == "calendar":
+                self.window.calendar_status_label.setText(message)
+            else:
+                self.window.task_status_label.setText(message)
+            return
+        if result.target == "calendar" and result.import_id:
+            selected = _saved_calendar_selection(self.container)
+            if selected is not None:
+                local_key = _calendar_selection_key(LOCAL_IMPORT_PROVIDER_ID, result.import_id)
+                local_wildcard = _calendar_selection_key(LOCAL_IMPORT_PROVIDER_ID, "*")
+                if (
+                    local_key not in selected
+                    and local_wildcard not in selected
+                    and LOCAL_IMPORT_PROVIDER_ID not in selected
+                ):
+                    self.container.settings_repository.set(
+                        "calendar_selected_ids",
+                        [*selected, local_key],
+                    )
+        summary = _import_result_summary(result)
+        if result.target == "calendar":
+            self.render_calendar()
+            self.render_task_surfaces()
+            self.window.calendar_status_label.setText(summary)
+        else:
+            self.render_task_surfaces()
+            self.render_calendar()
+            self.window.task_status_label.setText(summary)
+
+    @Slot(str)
+    def _calendar_import_deleted(self, import_id: str) -> None:
+        try:
+            deleted = self.container.controller.delete_calendar_import(import_id)
+        except (TypeError, ValueError, RuntimeError):
+            deleted = False
+        if not deleted:
+            return
+        selected = _saved_calendar_selection(self.container)
+        if selected is not None:
+            self.container.settings_repository.set(
+                "calendar_selected_ids",
+                [
+                    item
+                    for item in selected
+                    if _parse_calendar_selection_key(item) is None
+                    or _parse_calendar_selection_key(item) != (LOCAL_IMPORT_PROVIDER_ID, import_id)
+                ],
+            )
+        self.render_calendar()
+        self.render_task_surfaces()
+
     @Slot(object)
     def _feed_entry_read_changed(self, value: object) -> None:
         if not isinstance(value, Mapping):
@@ -2210,7 +2372,9 @@ class HubDesktopCoordinator(QObject):
         created = result.get("created", ()) if isinstance(result, Mapping) else result
         if isinstance(created, (tuple, list)):
             for item in created:
-                if getattr(item, "kind", None) == "task_reminder":
+                if isinstance(item, MessageAttentionNotice):
+                    self.window.render_attention_notification(_message_attention_view(item))
+                elif getattr(item, "kind", None) == "task_reminder":
                     self._deliver_system_notification(
                         deduplication_key=str(
                             getattr(item, "deduplication_key", None)
@@ -2349,6 +2513,9 @@ class HubDesktopCoordinator(QObject):
             month_start = cursor.replace(day=1)
             starts_on = month_start - timedelta(days=month_start.weekday())
             ends_on = starts_on + timedelta(days=42)
+        elif mode == "day":
+            starts_on = cursor
+            ends_on = starts_on + timedelta(days=1)
         elif mode == "week":
             starts_on = cursor - timedelta(days=cursor.weekday())
             ends_on = starts_on + timedelta(days=7)
@@ -2773,6 +2940,7 @@ class HubDesktopCoordinator(QObject):
             return
         if not self.container.lifecycle.network_refresh_allowed:
             self.render_messages()
+            self._reconcile_message_attention_notice()
             self._maybe_finish_system_notification_batch()
             return
         worker = _MessageRefreshThread(self.container, force=force, parent=self)
@@ -2799,7 +2967,7 @@ class HubDesktopCoordinator(QObject):
                     last_success_at=_format_timestamp(result.last_success_at),
                 )
             )
-        self.container.controller.reconcile_message_digest()
+        self._reconcile_message_attention_notice()
         self.render_messages()
         if not self._global_refresh_rendering:
             self.render_task_surfaces()
@@ -2808,10 +2976,23 @@ class HubDesktopCoordinator(QObject):
         )
         self.render_diagnostics()
 
+    def _reconcile_message_attention_notice(self) -> None:
+        notice = self.container.controller.reconcile_message_attention_notice()
+        if notice is not None:
+            self.window.render_attention_notification(_message_attention_view(notice))
+            return
+        if not self.container.controller.list_message_summaries(
+            unread=True,
+            include_spam=False,
+            limit=1,
+        ):
+            self.window.clear_attention_notification()
+
     @Slot()
     def _message_refresh_failed(self) -> None:
         if self._closed:
             return
+        self._reconcile_message_attention_notice()
         self.window.post_source_failure(
             SourceFailureView(
                 source_id="hub-message-refresh",
@@ -2903,12 +3084,13 @@ class HubDesktopCoordinator(QObject):
         self.container.controller.clear_message_bodies()
         self.container.controller.clear_message_summaries()
         self.window.clear_message_body()
+        self.window.clear_attention_notification()
         self.render_messages()
         self.render_task_surfaces()
 
     @Slot(str)
     def _save_calendar_mode(self, mode: str) -> None:
-        if mode in {"month", "week", "agenda"}:
+        if mode in {"month", "day", "week", "agenda"}:
             self.container.settings_repository.set("calendar_view_mode", mode)
             self.refresh_calendars()
 
@@ -2962,6 +3144,33 @@ class HubDesktopCoordinator(QObject):
             return
         self.render_task_surfaces()
         self.render_calendar()
+
+    @Slot(object)
+    def _calendar_slot_requested(self, value: object) -> None:
+        """Start a local task at an empty hourly calendar slot."""
+
+        if self._closed or not isinstance(value, Mapping):
+            return
+        selected_date = value.get("date")
+        minutes = value.get("minutes")
+        if isinstance(selected_date, datetime):
+            selected_date = selected_date.date()
+        if not isinstance(selected_date, date):
+            return
+        if not isinstance(minutes, int) or isinstance(minutes, bool) or not 0 <= minutes < 24 * 60:
+            return
+        timezone = self.container.controller.settings.default_timezone
+        try:
+            zone = ZoneInfo(timezone)
+            due_at = datetime.combine(
+                selected_date,
+                time(hour=minutes // 60, minute=minutes % 60),
+                tzinfo=zone,
+            )
+        except (TypeError, ValueError):
+            return
+        self.window.show_destination("Tasks")
+        self.window.open_new_task_editor(due_at=due_at, timezone=timezone)
 
     @Slot(object)
     def _refresh_completed(self, results: object) -> None:
@@ -3243,6 +3452,16 @@ def _inbox_view(item: Any) -> InboxItemView:
         sensitive=item.kind in {"message", "digest"},
         unread=item.state == "unread",
         state=item.state,
+    )
+
+
+def _message_attention_view(notice: MessageAttentionNotice) -> AttentionNotificationView:
+    return AttentionNotificationView(
+        notice_id=notice.notice_id,
+        title=notice.title,
+        summary=notice.safe_summary,
+        navigation_target=notice.navigation_target,
+        sensitive=True,
     )
 
 
@@ -3705,6 +3924,20 @@ def _calendar_summary(
     detail = " ".join(messages)[:512]
     generated_at = max(result.checked_at for result in results)
     return state, detail, generated_at
+
+
+def _import_result_summary(result: object) -> str:
+    """Format a bounded, non-sensitive import outcome for the desktop status label."""
+
+    imported = int(getattr(result, "imported_count", 0) or 0)
+    updated = int(getattr(result, "updated_count", 0) or 0)
+    issues = tuple(getattr(result, "issues", ()) or ())
+    parts = [f"Imported {imported} item(s)"]
+    if updated:
+        parts.append(f"updated {updated}")
+    if issues:
+        parts.append(f"skipped {len(issues)} invalid row(s)")
+    return "; ".join(parts) + "."
 
 
 def _recurrence(value: str | None) -> Recurrence | None:

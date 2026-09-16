@@ -6,7 +6,9 @@ from typing import Any
 
 __all__ = [
     "APPLICATION_NAME",
+    "AttentionNotificationView",
     "CalendarEventView",
+    "CalendarImportView",
     "CalendarSourceView",
     "CalendarView",
     "IcalFeedView",
@@ -16,6 +18,7 @@ __all__ = [
     "DiagnosticsView",
     "InboxItemView",
     "HubDesktopCoordinator",
+    "HourlyCalendarGrid",
     "MainWindow",
     "MessageBodyView",
     "MessageSourceView",
@@ -45,6 +48,7 @@ __all__ = [
     "HubTodaySectionView",
     "HubTodayView",
     "HubCalendarEventView",
+    "HubCalendarImportView",
     "HubCalendarSourceView",
     "HubCalendarView",
     "HubFeedEntryView",
@@ -80,7 +84,9 @@ def __getattr__(name: str) -> Any:
 
     if name in {
         "APPLICATION_NAME",
+        "AttentionNotificationView",
         "CalendarEventView",
+        "CalendarImportView",
         "CalendarSourceView",
         "CalendarView",
         "IcalFeedView",
@@ -118,8 +124,10 @@ def __getattr__(name: str) -> Any:
         "HubTodaySectionView",
         "HubTodayView",
         "HubCalendarEventView",
+        "HubCalendarImportView",
         "HubCalendarSourceView",
         "HubCalendarView",
+        "HourlyCalendarGrid",
         "HubFeedEntryView",
         "HubFeedSubscriptionView",
         "HubFeedView",

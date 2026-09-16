@@ -1,6 +1,11 @@
 """Personal Hub-owned persistence infrastructure."""
 
-from personal_hub.storage.database import HubDatabase
+from personal_hub.storage.database import (
+    HubCalendarImportRow,
+    HubDatabase,
+    HubImportedCalendarEventRow,
+    HubTaskDeletionMarkerRow,
+)
 from personal_hub.storage.repositories import (
     AuditEventRepository,
     AuditRepository,
@@ -49,8 +54,11 @@ __all__ = [
     "DPAPICipher",
     "DeterministicTestCipher",
     "HubDatabase",
+    "HubCalendarImportRow",
     "HUB_SECRET_ENTROPY",
     "HubSecretVault",
+    "HubImportedCalendarEventRow",
+    "HubTaskDeletionMarkerRow",
     "HubTaskRepository",
     "InboxRepository",
     "NotificationDeliveryRepository",

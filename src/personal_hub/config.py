@@ -147,6 +147,7 @@ class HubSettings(BaseModel):
     feed_max_entries_per_subscription: int = Field(default=500, ge=10, le=10_000)
     feed_refresh_minutes: int = Field(default=30, ge=15, le=1_440)
     calendar_refresh_minutes: int = Field(default=15, ge=5, le=1_440)
+    canvas_remove_completed_assignments: bool = False
     allow_insecure_feed_http: bool = False
     watch_observation_retention_days: int = Field(default=90, ge=1, le=365)
     watch_max_observations_per_watch: int = Field(default=500, ge=10, le=10_000)

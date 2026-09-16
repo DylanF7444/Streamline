@@ -348,6 +348,7 @@ class ExternalPlatformManager:
         message_refresh_minutes: int = 10,
         message_retention_days: int = 7,
         default_timezone: str = "UTC",
+        canvas_remove_completed_assignments: bool = False,
         transport: BoundedProviderTransport | None = None,
         canvas_importer: CanvasIcalTaskImporter | None = None,
         oauth_authorizer: OAuthAuthorizer = authorize_oauth_with_loopback,
@@ -362,6 +363,7 @@ class ExternalPlatformManager:
         self.message_refresh_minutes = message_refresh_minutes
         self.message_retention_days = message_retention_days
         self.default_timezone = default_timezone
+        self.canvas_remove_completed_assignments = bool(canvas_remove_completed_assignments)
         self.transport = transport or BoundedProviderTransport()
         self.oauth_authorizer = oauth_authorizer
         self.canvas_importer = canvas_importer or CanvasIcalTaskImporter(task_repository)
@@ -544,7 +546,7 @@ class ExternalPlatformManager:
             return self._status(config, SourceState.DISCONNECTED)
         return self._status(config, SourceState.READY)
 
-    async def refresh_canvas(self) -> SourceSnapshot:
+    async def refresh_canvas(self, *, now: datetime | None = None) -> SourceSnapshot:
         """Fetch Canvas via its private iCalendar URL and upsert local due tasks."""
 
         config = self._configs.get("canvas")
@@ -557,10 +559,17 @@ class ExternalPlatformManager:
         fallback_timezone = (
             configured_timezone if isinstance(configured_timezone, str) else self.default_timezone
         )
+        remove_completed_assignments = self.settings_repository.get(
+            "canvas_remove_completed_assignments",
+            self.canvas_remove_completed_assignments,
+        )
         tasks = await self.canvas_importer.sync(
             feed_url,
             account_label=config.account_label,
             fallback_timezone=fallback_timezone,
+            remove_completed_assignments=type(remove_completed_assignments) is bool
+            and remove_completed_assignments,
+            now=now,
         )
         return SourceSnapshot(
             source_id=_DEFINITION_BY_PLATFORM["canvas"].source_id,

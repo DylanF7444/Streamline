@@ -512,7 +512,7 @@ async def test_message_sources_fail_independently_and_keep_last_good_summaries(
 
 
 @pytest.mark.asyncio
-async def test_controller_projects_sensitive_today_items_and_count_only_digest(
+async def test_controller_projects_sensitive_today_items_and_ephemeral_attention_notice(
     tmp_path: Path,
 ) -> None:
     settings = HubSettings(data_dir=tmp_path / "hub", default_timezone="UTC")
@@ -529,12 +529,15 @@ async def test_controller_projects_sensitive_today_items_and_count_only_digest(
         await container.controller.refresh_messages(force=True, now=NOW)
         items = container.controller.message_today_items()
         assert len(items) == 1 and items[0].sensitive
-        digest = container.controller.reconcile_message_digest(now=NOW)
-        assert digest is not None
-        assert digest.safe_summary == "1 unread message(s) from 1 selected source(s)."
-        assert "Sensitive Sender" not in digest.model_dump_json()
-        assert "Quarterly plan" not in digest.model_dump_json()
-        assert container.controller.reconcile_message_digest(now=NOW) is None
+        notice = container.controller.reconcile_message_attention_notice(now=NOW)
+        assert notice is not None
+        assert notice.safe_summary == "1 unread message(s) from 1 selected source(s)."
+        assert notice.unread_count == 1
+        assert notice.source_count == 1
+        assert "Sensitive Sender" not in notice.model_dump_json()
+        assert "Quarterly plan" not in notice.model_dump_json()
+        assert container.controller.list_inbox() == []
+        assert container.controller.reconcile_message_attention_notice(now=NOW) is None
         audit = container.audit_repository.list(limit=10)
         assert all("Sensitive Sender" not in event.model_dump_json() for event in audit)
 

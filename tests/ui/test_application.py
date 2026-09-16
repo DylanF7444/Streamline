@@ -356,6 +356,46 @@ def test_coordinator_persists_visual_task_workflow_and_today_preferences(qtbot, 
 
 
 @pytest.mark.ui
+def test_calendar_slot_opens_scheduled_task_editor_and_persists_due_time(qtbot, tmp_path: Path):
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
+    container.lifecycle.start()
+    window = create_main_window(close_to_tray=False)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.isVisible, timeout=2_000)
+    application = QApplication.instance()
+    assert isinstance(application, QApplication)
+    coordinator = HubDesktopCoordinator(container, window, application)
+    try:
+        window.show_destination("Calendar")
+        window.show_calendar_day()
+        window.calendar_day_time_slots[13].click()
+
+        assert window.task_editor_panel.isVisible()
+        assert window.task_has_due_input.isChecked()
+        assert window.task_due_input.dateTime().date().toPython() == window.current_calendar_date
+        assert window.task_due_input.dateTime().time().hour() == 13
+        assert window.task_due_input.dateTime().time().minute() == 0
+
+        window.task_title_input.setText("Schedule from calendar slot")
+        window.task_save_button.click()
+
+        task = next(
+            task
+            for task in container.controller.list_tasks()
+            if task.title == "Schedule from calendar slot"
+        )
+        assert task.due_at is not None
+        assert task.due_at.astimezone(UTC).hour == 13
+        assert task.due_at.astimezone(UTC).minute == 0
+        assert task.due_is_all_day is False
+        assert any(item.task_id == str(task.task_id) for item in window.calendar_events)
+    finally:
+        coordinator.shutdown()
+        container.close()
+
+
+@pytest.mark.ui
 def test_coordinator_refreshes_calendar_off_thread_and_persists_calendar_preferences(
     qtbot,
     tmp_path: Path,
@@ -649,6 +689,7 @@ def test_settings_editor_persists_validated_values_and_startup_choice(qtbot, tmp
         window.settings_checkboxes["start_at_login"].setChecked(True)
         window.settings_checkboxes["privacy_masking"].setChecked(True)
         window.settings_checkboxes["quiet_hours_enabled"].setChecked(True)
+        window.settings_checkboxes["canvas_remove_completed_assignments"].setChecked(True)
         window.settings_inputs["default_timezone"].setText("America/Chicago")
         window.settings_inputs["digest_time"].setText("07:30")
         window.settings_inputs["message_retention_days"].setText("0")
@@ -661,6 +702,7 @@ def test_settings_editor_persists_validated_values_and_startup_choice(qtbot, tmp
         assert persisted.start_at_login
         assert persisted.privacy_masking
         assert persisted.notification_quiet_hours_enabled
+        assert persisted.canvas_remove_completed_assignments
         assert persisted.default_timezone == "America/Chicago"
         assert persisted.digest_time == "07:30"
         assert persisted.message_summary_retention_days == 0
@@ -675,6 +717,7 @@ def test_settings_editor_persists_validated_values_and_startup_choice(qtbot, tmp
     try:
         assert restarted.controller.settings.default_timezone == "America/Chicago"
         assert restarted.controller.settings.message_summary_retention_days == 0
+        assert restarted.controller.settings.canvas_remove_completed_assignments
     finally:
         restarted.close()
 

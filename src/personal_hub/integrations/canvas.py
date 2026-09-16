@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Final
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 from uuid import UUID, uuid5
+from zoneinfo import ZoneInfo
 
 from personal_hub.calendar.ical import (
     IcalCalendarFeed,
@@ -72,10 +73,13 @@ class CanvasIcalTaskImporter:
         *,
         account_label: str,
         fallback_timezone: str = "UTC",
+        remove_completed_assignments: bool = False,
+        now: datetime | None = None,
     ) -> tuple[HubTask, ...]:
-        """Import every concrete VEVENT as one stable local due-dated task."""
+        """Import concrete VEVENTs and optionally clean completed past-due assignments."""
 
         origin = self.validate_feed_url(feed_url)
+        sync_time = _aware_utc(now)
         if self._origin != origin:
             self.reset()
             self._origin = origin
@@ -109,6 +113,7 @@ class CanvasIcalTaskImporter:
                 body,
                 fallback_timezone=fallback_timezone,
                 expand_recurrence=True,
+                reference_at=sync_time,
             )
         except (SourceDisconnectedError, SourcePermissionRequiredError, SourceUnavailableError):
             raise
@@ -129,12 +134,35 @@ class CanvasIcalTaskImporter:
             self._etag = _safe_response_header(response.headers, "etag")
             self._last_modified = _safe_response_header(response.headers, "last-modified")
 
-        now = datetime.now(UTC)
         imported: list[HubTask] = []
         for item in items:
             task_id = uuid5(CANVAS_TASK_NAMESPACE, f"{origin}|{item.item_id}")
             current = self.task_repository.get(task_id)
             native_url = canvas_assignment_url(item.deep_link, canvas_origin=origin)
+            if self.task_repository.has_external_deletion_marker(
+                provider_id="canvas",
+                external_key=native_url,
+                task_id=task_id,
+            ):
+                # A marker is authoritative even if a stale/local copy happens to
+                # remain after an interrupted cleanup.  The marker prevents a
+                # successful refresh from recreating the task as open.
+                if current is not None:
+                    self.task_repository.delete(task_id)
+                continue
+            if remove_completed_assignments and _should_remove_completed_assignment(
+                current,
+                assignment_url=native_url,
+                now=sync_time,
+                canvas_origin=origin,
+            ):
+                self.task_repository.mark_deleted_on_hub(
+                    task_id,
+                    provider_id="canvas",
+                    external_key=native_url,
+                    deleted_at=sync_time,
+                )
+                continue
             notes = _task_notes(
                 description=item.description,
                 location=item.location,
@@ -151,8 +179,8 @@ class CanvasIcalTaskImporter:
                         due_is_all_day=item.due_is_all_day,
                         timezone=item.timezone,
                         tags=("canvas",),
-                        created_at=now,
-                        updated_at=now,
+                        created_at=sync_time,
+                        updated_at=sync_time,
                     )
                 )
                 continue
@@ -166,12 +194,68 @@ class CanvasIcalTaskImporter:
                 due_is_all_day=item.due_is_all_day,
                 timezone=item.timezone,
                 tags=tags,
-                updated_at=now,
+                # A caller-provided clock may be backdated for deterministic
+                # reconciliation tests.  Never move a persisted task's
+                # updated_at backwards when that happens.
+                updated_at=max(sync_time, current.updated_at),
             )
             if updated is not None:
+                if remove_completed_assignments and _should_remove_completed_assignment(
+                    updated,
+                    assignment_url=native_url,
+                    now=sync_time,
+                    canvas_origin=origin,
+                ):
+                    self.task_repository.mark_deleted_on_hub(
+                        updated.task_id,
+                        provider_id="canvas",
+                        external_key=native_url,
+                        deleted_at=sync_time,
+                    )
+                    continue
                 imported.append(updated)
+        if remove_completed_assignments:
+            self._remove_completed_assignments_past_due(origin=origin, now=sync_time)
         self.last_import_count = len(imported)
         return tuple(imported)
+
+    def _remove_completed_assignments_past_due(
+        self,
+        *,
+        origin: str,
+        now: datetime,
+    ) -> None:
+        """Remove eligible local copies after a successful Canvas refresh.
+
+        The feed can stop returning an old event before its local task is cleaned up,
+        so inspect the bounded set of completed Canvas tasks as well as the current
+        feed items.  A native same-origin assignment URL distinguishes assignments
+        from generic Canvas calendar events.
+        """
+
+        candidates = self.task_repository.list(
+            state="completed",
+            tags=("canvas",),
+            include_archived=True,
+            limit=10_000,
+        )
+        for task in candidates:
+            native_url = canvas_assignment_url(
+                task.external_url,
+                canvas_origin=origin,
+            )
+            if native_url is not None and _should_remove_completed_assignment(
+                task,
+                assignment_url=native_url,
+                now=now,
+                canvas_origin=origin,
+            ):
+                self.task_repository.mark_deleted_on_hub(
+                    task.task_id,
+                    provider_id="canvas",
+                    external_key=native_url,
+                    deleted_at=now,
+                )
 
     @staticmethod
     def validate_feed_url(feed_url: str) -> str:
@@ -301,6 +385,34 @@ def _safe_response_header(headers: object, name: str) -> str | None:
         ):
             return normalized
     return None
+
+
+def _aware_utc(value: datetime | None) -> datetime:
+    timestamp = datetime.now(UTC) if value is None else value
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("Canvas sync time must be timezone-aware")
+    return timestamp.astimezone(UTC)
+
+
+def _should_remove_completed_assignment(
+    task: HubTask | None,
+    *,
+    assignment_url: str | None,
+    now: datetime,
+    canvas_origin: str,
+) -> bool:
+    if task is None or task.state != "completed" or task.due_at is None:
+        return False
+    native_url = assignment_url or canvas_assignment_url(
+        task.external_url,
+        canvas_origin=canvas_origin,
+    )
+    if native_url is None:
+        return False
+    if task.due_is_all_day:
+        task_zone = ZoneInfo(task.timezone)
+        return task.due_at.astimezone(task_zone).date() < now.astimezone(task_zone).date()
+    return task.due_at < now
 
 
 __all__ = ["CANVAS_TASK_NAMESPACE", "CanvasIcalTaskImporter", "canvas_assignment_url"]

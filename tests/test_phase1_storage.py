@@ -17,7 +17,7 @@ from personal_hub.contracts import (
     SourceRef,
     SourceSyncState,
 )
-from personal_hub.storage.database import HubDatabase
+from personal_hub.storage.database import HubDatabase, HubSchemaVersionRow
 from personal_hub.storage.repositories import (
     AuditRepository,
     InboxRepository,
@@ -78,6 +78,38 @@ def test_phase1_schema_migration_is_idempotent_and_upgrades_phase0(tmp_path: Pat
         assert database.integrity_check()
     finally:
         database.close()
+
+
+def test_schema_migration_adds_external_task_deletion_markers_to_v11_database(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "hub.db"
+    database = HubDatabase(path)
+    database.migrate()
+    with database.session() as session:
+        version = session.get(HubSchemaVersionRow, 1)
+        assert version is not None
+        version.version = 11
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE hub_task_deletion_markers")
+    assert HubDatabase._validate_database_file(path) == 11
+    database.close()
+
+    migrated = HubDatabase(path)
+    try:
+        migrated.migrate()
+        with sqlite3.connect(path) as connection:
+            version = connection.execute(
+                "SELECT version FROM hub_schema_migrations WHERE id = 1"
+            ).fetchone()
+            tables = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        assert version == (HubDatabase.CURRENT_SCHEMA_VERSION,)
+        assert "hub_task_deletion_markers" in tables
+    finally:
+        migrated.close()
 
 
 def test_settings_sources_and_inbox_survive_database_restart(tmp_path: Path):

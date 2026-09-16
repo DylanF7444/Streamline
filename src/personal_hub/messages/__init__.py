@@ -10,6 +10,7 @@ from personal_hub.messages.categories import (
     message_category_label,
 )
 from personal_hub.messages.contracts import (
+    MessageAttentionNotice,
     MessageBody,
     MessageDisconnectedError,
     MessageError,
@@ -45,6 +46,7 @@ __all__ = [
     "SLACK_CHANNEL_HISTORY_SCOPE",
     "SLACK_SEARCH_SCOPE",
     "GmailMessageSource",
+    "MessageAttentionNotice",
     "MessageBody",
     "MessageDisconnectedError",
     "MessageError",

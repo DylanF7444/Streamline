@@ -264,6 +264,25 @@ def test_only_due_tasks_have_completion_controls_in_calendar_views(qtbot):
 
 
 @pytest.mark.ui
+def test_calendar_source_controls_are_collapsed_and_details_use_an_inspector(qtbot):
+    window = _window(qtbot)
+    assert not window.calendar_settings_panel.isVisible()
+    assert window.calendar_content_splitter.widget(0) is window.calendar_view_stack
+    assert window.calendar_content_splitter.widget(1) is window.calendar_event_details_panel
+
+    window.calendar_settings_button.click()
+    assert window.calendar_settings_panel.isVisible()
+    assert window.calendar_settings_button.text() == "Hide calendars"
+    window.calendar_settings_button.click()
+    assert not window.calendar_settings_panel.isVisible()
+
+    now, events = _events()
+    window.render_calendar(CalendarView(events=events, cursor_date=now.date()))
+    window.open_calendar_event("event-1")
+    assert window.calendar_event_details_panel.isVisible()
+
+
+@pytest.mark.ui
 def test_calendar_event_chips_elide_titles_and_keep_source_colors(qtbot):
     window = _window(qtbot)
     now = datetime.now().astimezone().replace(second=0, microsecond=0)

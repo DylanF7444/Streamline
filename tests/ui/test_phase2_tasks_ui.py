@@ -210,3 +210,31 @@ def test_today_sections_render_in_order_and_support_visibility_hooks(qtbot):
     assert not window.today_section_widgets["schedule"].isVisible()
     assert visibility_changes[-1] == {"schedule": False}
     assert rendered
+
+
+@pytest.mark.ui
+def test_task_views_disclose_advanced_filters_and_use_an_editor_inspector(qtbot):
+    window = _window(qtbot)
+    window.show_destination("Tasks")
+    assert not window.task_filters_panel.isVisible()
+    assert window.task_content_splitter.widget(0) is window.tasks_list
+    assert window.task_content_splitter.widget(1) is window.task_editor_panel
+
+    window.set_task_quick_view("today")
+    assert window.task_filters["due"] == "today"
+    assert window.task_quick_view_button.text() == "View: Due today"
+
+    window.task_filters_button.click()
+    assert window.task_filters_panel.isVisible()
+    assert window.task_filters_button.text() == "Hide filters"
+
+    window.set_task_quick_view("all")
+    task = window.add_task("Review the new task surface")
+    window.open_task_editor(task.task_id)
+    assert window.task_editor_panel.isVisible()
+
+    window._cancel_task_edit()
+    row = window.tasks_list.itemWidget(window.tasks_list.item(0))
+    assert row is not None
+    row.action_menu.actions()[0].trigger()
+    assert window.task_editor_panel.isVisible()

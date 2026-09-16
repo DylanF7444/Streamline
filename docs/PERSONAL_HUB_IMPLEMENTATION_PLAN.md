@@ -184,7 +184,7 @@ animations are Hub-owned preferences. Reduced motion disables all Hub transition
 
 ### Calendar
 
-Calendar provides month, week, and agenda views with:
+Calendar provides month, day, week, and agenda views with:
 
 - multiple selected calendars;
 - source and account indicators;
@@ -192,13 +192,16 @@ Calendar provides month, week, and agenda views with:
 - privacy masking;
 - explicit stale and offline states;
 - deep links to the provider;
+- an hour-by-hour day/week schedule where an empty hour can start a local scheduled task;
 - local refresh without writing remote event data.
 
-Calendar events are read-only in the MVP: no completion, creation, editing, response, or
-deletion action is available. A successful refresh replaces the in-memory provider snapshot,
-so events deleted or cancelled in Google Calendar disappear from Personal Hub. Local to-do
-items with due dates are projected onto Calendar and retain their normal task completion and
-undo controls.
+Connected-provider calendar events are read-only in the MVP: no completion, editing, response,
+or deletion action is available for provider data. A successful refresh replaces the in-memory
+provider snapshot, so events deleted or cancelled in Google Calendar disappear from Personal
+Hub. Users may explicitly create local calendar items by importing a bounded UTF-8 CSV or text
+list; each named import is a selectable local calendar and never writes to a provider. Local
+to-do items with due dates are projected onto Calendar and retain their normal task completion
+and undo controls.
 
 ### Tasks
 
@@ -216,6 +219,7 @@ Tasks is a complete local visual workflow, not a summary card. It supports:
 - keyboard completion and editing;
 - undo for completion and archive;
 - overdue, today, upcoming, and unscheduled views.
+- bounded CSV and one-title-per-line text-list import with a downloadable template.
 
 Provider-backed tasks are deferred. The first task system is fully local so its behavior and
 data model can stabilize before synchronization semantics are introduced.
@@ -258,8 +262,11 @@ Inbox is the durable attention queue for:
 - scheduled digests;
 - source failures requiring user action;
 - connection-expiry warnings;
-- optional bounded message summaries;
 - task reminders.
+
+Unread selected message attention is a session-only, count-only notice at the top of the
+Hub window. Message summaries remain in the bounded Messages view and do not become
+durable Inbox items.
 
 Inbox items support unread, read, dismissed, and archived states. Dismissal does not delete
 the originating task, watch, event, or provider message. Each item has a safe summary,
@@ -325,6 +332,7 @@ It contains no model, voice, planner, command, or assistant settings.
 - Slack selected-channel or saved-query summaries.
 - Direct iCalendar feed import for read-only external calendar feeds.
 - Canvas Student task import through a private iCalendar feed URL.
+- Local CSV/text import for tasks and read-only calendar items with downloadable templates.
 - Scheduled morning or evening digest.
 - Full packaging, installer, update, and recovery paths.
 
@@ -713,6 +721,7 @@ keys, WAL mode where appropriate, bounded busy timeouts, and explicit backup/res
 | Open tasks | Until completed or deleted |
 | Completed tasks | 90 days, user configurable |
 | Calendar snapshots | Memory only in MVP |
+| Imported local calendar items | Until the named import is removed |
 | Feed entries | 30 days or bounded item count |
 | Watch observations | Latest value plus 30 days of triggered values |
 | Full webpage content | Not persisted by default |
@@ -727,7 +736,8 @@ Retention cleanup is transactional, scheduled, bounded, and visible in diagnosti
 ### Backup and restore
 
 - Back up the SQLite database with SQLite's online backup API.
-- Include non-secret settings and watch definitions in an optional JSON export.
+- Include non-secret settings, local tasks, explicitly imported calendar items, and watch
+  definitions in an optional JSON export.
 - Exclude credentials from ordinary export.
 - Offer a separate encrypted credential export only after a dedicated threat review.
 - Verify database integrity before replacing active data during restore.
@@ -837,6 +847,9 @@ raw exceptions, or unbounded response bodies.
   calendar token; persist only its HTTPS origin in ordinary settings.
 - Import every bounded concrete `VEVENT` as one stable local task whose due date is `DTSTART`.
 - Repeated refreshes update the same task and never reopen a completed or archived task.
+- When the opt-in completed-assignment cleanup is enabled, a completed past-due assignment
+  is removed from the local task list and leaves a durable Personal Hub deletion marker, so
+  later refreshes and restarts do not recreate it as an open task.
 - Due-dated imported tasks use the existing task-to-Calendar projection; Canvas is not given a
   calendar write or task write operation.
 - Disconnect removes the private feed URL while retaining the local tasks already created.
@@ -930,7 +943,7 @@ The deterministic digest groups:
 1. Overdue and due-today tasks.
 2. Today's remaining calendar events.
 3. New deal or restock alerts.
-4. Selected unread messages.
+4. A count of selected unread messages for the in-app attention notice.
 5. New feed entries grouped by subscription.
 6. Sources needing attention.
 
@@ -1198,7 +1211,7 @@ private content. Tests remain offline and deterministic.
 - Keyboard-only navigation across every primary surface.
 - Today sections at minimum supported window size.
 - Task add/edit/complete/undo.
-- Calendar month/week/agenda views.
+- Calendar month/day/hourly week/agenda views, including slot-based local task scheduling.
 - Watch authoring validation and test result.
 - Inbox read/dismiss/archive.
 - source connect/reconnect/disconnect states;
@@ -1324,7 +1337,7 @@ Acceptance gate:
 Deliverables:
 
 - Hub calendar protocol and service.
-- month, week, and agenda UI.
+- month, day, hourly week, and agenda UI.
 - Google Calendar read-only connection.
 - selected calendars, freshness, masking, and offline behavior.
 - Today event projection.
@@ -1333,6 +1346,8 @@ Deliverables:
 Acceptance gate:
 
 - bounded multi-calendar view works with timed and all-day events.
+- due-dated local tasks appear in the correct display day and hour, and an hourly slot opens a
+  local scheduled-task editor.
 - disconnected, permission, stale, offline, empty, and error states are distinct.
 - no calendar write scope or operation is available.
 - calendar content is not stored in logs, metrics, or audit details.
@@ -1386,14 +1401,15 @@ Deliverables:
 - deterministic Gmail-style Primary, Promotions, Social, Updates, and Spam categories;
   category filters are local display state and never mutate provider mail.
 - sanitization, remote-content blocking, masking, and deep links.
-- message sections in Today and deterministic digest.
+- message sections in Today and a session-only count notice at the top of the Hub window.
 
 Acceptance gate:
 
 - only configured folders, channels, or queries are read.
 - body content is fetched only after explicit open.
 - no send, reply, mailbox mutation, reaction, or upload is available.
-- bodies and sensitive metadata do not appear in logs or Windows notifications when masked.
+- bodies and sensitive metadata do not appear in logs or Windows notifications when masked;
+  the in-app attention notice contains only bounded counts and is not persisted in Inbox.
 
 ### Phase 7: Packaging and release hardening
 

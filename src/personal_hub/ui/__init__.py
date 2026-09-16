@@ -11,7 +11,9 @@ from typing import Any
 
 __all__ = [
     "APPLICATION_NAME",
+    "AttentionNotificationView",
     "CalendarEventView",
+    "CalendarImportView",
     "CalendarSourceView",
     "CalendarView",
     "FeedEntryView",
@@ -49,6 +51,7 @@ __all__ = [
     "HubTodaySectionView",
     "HubTodayView",
     "HubCalendarEventView",
+    "HubCalendarImportView",
     "HubCalendarSourceView",
     "HubCalendarView",
     "HubFeedEntryView",
@@ -84,7 +87,9 @@ def __getattr__(name: str) -> Any:
 
     if name in {
         "APPLICATION_NAME",
+        "AttentionNotificationView",
         "CalendarEventView",
+        "CalendarImportView",
         "CalendarSourceView",
         "CalendarView",
         "FeedEntryView",
@@ -121,6 +126,7 @@ def __getattr__(name: str) -> Any:
         "HubTodaySectionView",
         "HubTodayView",
         "HubCalendarEventView",
+        "HubCalendarImportView",
         "HubCalendarSourceView",
         "HubCalendarView",
         "HubFeedEntryView",

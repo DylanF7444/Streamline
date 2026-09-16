@@ -158,8 +158,10 @@ Use synthetic accounts with no private production content:
   no post/reaction/upload scope or operation.
 - Canvas Student: paste a rotated non-production private iCalendar URL, verify every concrete
   feed item creates one due-dated task and appears in Calendar, refresh without duplicates,
-  complete a task and confirm refresh does not reopen it, then disconnect and confirm the feed
-  URL is removed while local tasks remain.
+  complete a task and confirm refresh does not reopen it, enable the completed-assignment
+  cleanup, complete a past-due assignment, refresh twice and restart to confirm the durable
+  Personal Hub deletion marker prevents recreation, then disconnect and confirm the feed URL is
+  removed while other local tasks remain.
 - RSS/watch: include hostile redirect/private-address/oversize/malformed cases against a
   controlled server and confirm one source failure does not stale successful sources.
 

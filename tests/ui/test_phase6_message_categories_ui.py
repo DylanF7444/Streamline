@@ -10,6 +10,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from personal_hub.ui.desktop.main_window import (
+    InboxItemView,
     MessageSummaryView,
     MessagesView,
     create_main_window,
@@ -61,7 +62,7 @@ def test_message_category_tabs_filter_locally_and_keep_spam_out_of_primary(qtbot
 
     changed: list[str] = []
     window.message_category_changed.connect(changed.append)
-    window.message_category_buttons["promotions"].click()
+    window.message_category_actions["promotions"].trigger()
     assert window.message_category == "promotions"
     assert window.message_list.count() == 1
     assert "Promotions subject" in window.message_list.item(0).text()
@@ -71,3 +72,32 @@ def test_message_category_tabs_filter_locally_and_keep_spam_out_of_primary(qtbot
     assert window.message_list.count() == 1
     assert "Spam subject" in window.message_list.item(0).text()
     assert window.message_category_status_label.text().startswith("Spam: 1")
+
+
+@pytest.mark.ui
+def test_inbox_separates_alerts_and_messages_into_master_detail_modes(qtbot) -> None:
+    window = create_main_window(close_to_tray=False)
+    qtbot.addWidget(window)
+    window.show_destination("Inbox")
+
+    window.render_inbox(
+        [
+            InboxItemView(
+                item_id="alert-1",
+                title="Calendar needs attention",
+                summary="The last refresh was offline.",
+                source="Google Calendar",
+            )
+        ]
+    )
+    window.render_messages(MessagesView(summaries=(_summary("primary-1", "primary"),)))
+
+    assert window.inbox_mode_tabs.count() == 2
+    assert window.inbox_mode == "alerts"
+    assert "1 unread" in window.inbox_mode_tabs.tabText(0)
+    assert "1 unread" in window.inbox_mode_tabs.tabText(1)
+    assert window.show_inbox_mode("messages")
+    assert window.inbox_mode == "messages"
+    assert window.message_content_splitter.widget(0) is not None
+    assert window.message_content_splitter.widget(1) is not None
+    assert window.message_list.itemWidget(window.message_list.item(0)) is not None

@@ -308,7 +308,7 @@ QToolTip {{
     border-right: 1px solid {border};
 }}
 
-#brandTitle, #pageTitle, #sourceFailureTitle,
+#brandTitle, #pageTitle, #sourceFailureTitle, #attentionNotificationTitle,
 #diagnosticsTitle, #calendarPeriodLabel, #privacyOverlayTitle,
 #newsEditorTitle, #newsEntryTitle, #taskRowTitle, #todaySectionTitle,
 #taskEditorTitle, #calendarEventDetailsTitle {{
@@ -321,7 +321,7 @@ QToolTip {{
 #calendarFreshnessLabel, #calendarStatusLabel, #calendarTimezoneLabel,
 #calendarSourcesTitle, #calendarSourcesEmpty, #calendarWeekdayLabel,
 #calendarMoreLabel, #calendarEmptyLabel, #taskRowDetails, #taskStatusLabel,
-#taskEditorStatus, #taskFieldLabel, #sourceFailureBody,
+#taskEditorStatus, #taskFieldLabel, #sourceFailureBody, #attentionNotificationBody,
 #diagnosticsBody, #privacyOverlayBody, #newsFilterLabel, #newsFilterStatusLabel,
 #newsFreshnessLabel, #newsStatusLabel, #newsSubscriptionsTitle,
 #newsSubscriptionsEmpty, #newsEntriesStatusLabel, #newsEntryMetadata,
@@ -338,9 +338,9 @@ QToolTip {{
     color: {page_text};
 }}
 
-#todayCard, #todaySection, #taskQuickAdd, #taskEditorPanel, #taskRow,
+#todayCard, #todaySection, #taskQuickAdd, #taskEditorPanel,
 #calendarMonthCell, #calendarWeekColumn, #calendarSourcesPanel,
-#calendarEventDetailsPanel, #sourceFailurePanel, #diagnosticsView,
+#calendarEventDetailsPanel, #sourceFailurePanel, #attentionNotificationPanel, #diagnosticsView,
 #newsSubscriptionsPanel, #newsEntryRow, #newsFiltersPanel,
 #newsSubscriptionEditor, #dashboardCard, #dashboardWidget,
 #dashboardWidgetCard, #dashboardWidgetFrame, #dashboardWidgetHost,
@@ -351,11 +351,105 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
     border-color: {border};
 }}
 
+#attentionNotificationPanel {{
+    background: {selected};
+    color: {page_text};
+    border: 1px solid {accent};
+    border-radius: 10px;
+}}
+
+#attentionNotificationTitle {{
+    color: {page_text};
+    font-weight: 650;
+}}
+
+#attentionNotificationBody {{
+    color: {surface_text};
+}}
+
+#attentionNotificationOpenButton, #attentionNotificationDismissButton {{
+    background: {surface};
+    border-color: {border};
+    color: {surface_text};
+}}
+
 #newsFiltersPanel, #newsSubscriptionsPanel, #newsSubscriptionEditor,
 #calendarMonthCell, #calendarWeekColumn, #calendarAgendaView,
-#inboxList, #sourcesList, #diagnosticsList, #messageBodyView,
+#calendarSettingsPanel, #inboxList, #messageSummaryList, #sourcesList,
+#diagnosticsList, #messageBodyView,
 #todaySectionItems, #tasksList, #newsEntriesList, #dashboardBoard {{
     background: {input_background};
+}}
+
+#pageHeader, #calendarToolbar, #taskViewBar, #messageCategoryBar,
+#calendarContentSplitter, #taskContentSplitter, #messageContentSplitter {{
+    background: transparent;
+    border: 0;
+}}
+
+#taskRow, #inboxRow, #messageSummaryRow {{
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid {border};
+    border-radius: 0;
+    color: {surface_text};
+}}
+
+#taskRow:hover, #inboxRow:hover, #messageSummaryRow:hover {{
+    background: {surface};
+}}
+
+#taskQuickViewButton, #taskFiltersButton, #taskUndoButton,
+#calendarSettingsButton, #taskOverflowButton, #messageCategorySelector {{
+    background: {surface};
+    border-color: {border};
+    color: {surface_text};
+}}
+
+#taskQuickViewButton:hover, #taskQuickViewButton:focus,
+#taskFiltersButton:hover, #taskFiltersButton:focus,
+#taskUndoButton:hover, #taskUndoButton:focus,
+#calendarSettingsButton:hover, #calendarSettingsButton:focus,
+#taskOverflowButton:hover, #taskOverflowButton:focus,
+#messageCategorySelector:hover, #messageCategorySelector:focus {{
+    background: {hover};
+    border-color: {focus};
+}}
+
+#taskCompleteButton {{
+    background: {selected};
+    border-color: {accent};
+    color: {page_text};
+}}
+
+#taskCompleteButton:hover, #taskCompleteButton:focus {{
+    background: {hover};
+    border-color: {focus};
+}}
+
+#inboxModeTabs::pane {{
+    border: 0;
+    background: transparent;
+}}
+
+#inboxModeTabs QTabBar::tab {{
+    background: transparent;
+    border-color: transparent;
+    color: {muted_text};
+}}
+
+#inboxModeTabs QTabBar::tab:selected {{
+    background: {selected};
+    border-color: {accent};
+    color: {page_text};
+}}
+
+#inboxUnreadIndicator, #messageUnreadIndicator {{
+    color: {accent};
+}}
+
+#messageSummaryRow[important="true"] #messageUnreadIndicator {{
+    color: {accent};
 }}
 
 #dashboardWidgetCard {{
@@ -609,6 +703,7 @@ QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {{
 #dashboardPage, #dashboardBoard, #todayCard, #todaySection, #taskQuickAdd,
 #taskEditorPanel, #taskRow, #calendarMonthCell, #calendarWeekColumn,
 #calendarSourcesPanel, #calendarEventDetailsPanel, #sourceFailurePanel,
+#attentionNotificationPanel,
 #diagnosticsView, #newsSubscriptionsPanel, #newsEntryRow, #newsFiltersPanel,
 #newsSubscriptionEditor, #dashboardCard, #dashboardWidget,
 #dashboardWidgetCard, #dashboardWidgetFrame, #dashboardWidgetHost,

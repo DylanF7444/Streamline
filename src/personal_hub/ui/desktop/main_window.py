@@ -13,12 +13,12 @@ import sys
 from calendar import monthrange
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 from html import unescape
 from typing import Any, Final
 from urllib.parse import urlsplit
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from PySide6.QtCore import QDateTime, QEvent, QObject, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFontMetrics, QIcon, QPainter, QPixmap
@@ -42,12 +42,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
+    QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from personal_hub.calendar.schedule import build_hourly_schedule_layout, event_local_date
 from personal_hub.messages.categories import (
     MESSAGE_CATEGORY_LABELS,
     MESSAGE_CATEGORY_VALUES,
@@ -56,6 +60,7 @@ from personal_hub.messages.categories import (
 )
 from personal_hub.ui.desktop.appearance import AppearancePanel, theme_stylesheet
 from personal_hub.ui.desktop.dashboard import DashboardBoard
+from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.motion import PageTransition
 
 APPLICATION_NAME: Final = "Personal Hub"
@@ -106,6 +111,18 @@ class InboxItemView:
 
 
 @dataclass(frozen=True, slots=True)
+class AttentionNotificationView:
+    """Ephemeral count-only notice shown above the page content."""
+
+    notice_id: str
+    title: str = "Attention messages"
+    summary: str = ""
+    action_label: str = "Review messages"
+    navigation_target: str = "hub://inbox/messages"
+    sensitive: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class SourceView:
     """Safe display data for one configured source."""
 
@@ -142,6 +159,7 @@ class SettingsView:
     watch_refresh_minutes: int = 60
     message_retention_days: int = 7
     message_refresh_minutes: int = 10
+    canvas_remove_completed_assignments: bool = False
     text_scale: float = 1.0
     high_contrast: bool = False
     reduced_motion: bool = False
@@ -396,6 +414,24 @@ class CalendarSourceView:
 
 
 @dataclass(frozen=True, slots=True)
+class CalendarImportView:
+    """Presentation data for one explicitly local calendar import batch."""
+
+    import_id: str
+    name: str
+    source_format: str = "csv"
+    event_count: int = 0
+
+    @property
+    def id(self) -> str:
+        return self.import_id
+
+    @property
+    def title(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True, slots=True)
 class CalendarView:
     """Bounded presentation data for a read-only calendar projection."""
 
@@ -408,6 +444,7 @@ class CalendarView:
     generated_at: datetime | date | str | None = None
     cursor_date: date | str | None = None
     ical_feeds: tuple[IcalFeedView, ...] = ()
+    local_imports: tuple[CalendarImportView, ...] = ()
 
     @property
     def sources(self) -> tuple[CalendarSourceView, ...]:
@@ -417,6 +454,7 @@ class CalendarView:
 HubCalendarEventView = CalendarEventView
 HubCalendarSourceView = CalendarSourceView
 HubCalendarView = CalendarView
+HubCalendarImportView = CalendarImportView
 
 
 @dataclass(frozen=True, slots=True)
@@ -725,6 +763,96 @@ def _safe_text(value: object, *, fallback: str = "", limit: int = _MAX_TEXT_LENG
     return text[: max(1, limit - 1)].rstrip() + "…"
 
 
+def _timezone_names() -> tuple[str, ...]:
+    """Return the supported IANA time zones in a stable, user-selectable order."""
+
+    try:
+        names = available_timezones()
+    except OSError:
+        # ``tzdata`` is a runtime dependency, but keep the UI usable if a platform
+        # timezone database is temporarily unavailable.
+        names = set()
+    filtered = {
+        name
+        for name in names
+        if name
+        and not name.startswith(("posix/", "right/"))
+        and name not in {"Factory", "localtime"}
+    }
+    filtered.add("UTC")
+    return ("UTC", *sorted((name for name in filtered if name != "UTC"), key=str.casefold))
+
+
+_TIMEZONE_ITEMS: Final[tuple[tuple[str, str], ...]] = tuple(
+    (name, name) for name in _timezone_names()
+)
+
+
+class TimezoneComboBox(QComboBox):
+    """Non-editable timezone selector backed by IANA timezone identifiers."""
+
+    def __init__(
+        self,
+        *,
+        include_local: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._fallback_timezone = "local" if include_local else "UTC"
+        self.setEditable(False)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.setDuplicatesEnabled(False)
+        self.setMaxVisibleItems(20)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(18)
+        if include_local:
+            self.addItem("Local time", "local")
+        self.addItems([label for label, _value in _TIMEZONE_ITEMS])
+        for index, (_label, value) in enumerate(_TIMEZONE_ITEMS):
+            self.setItemData(index + (1 if include_local else 0), value)
+        self.set_timezone(self._fallback_timezone)
+
+    def set_timezone(self, value: object) -> None:
+        """Select a timezone value, safely falling back to the default option."""
+
+        normalized = _safe_text(value, fallback=self._fallback_timezone, limit=128)
+        index = self.findData(normalized)
+        if index < 0:
+            try:
+                ZoneInfo(normalized)
+            except (TypeError, ValueError, ZoneInfoNotFoundError):
+                normalized = self._fallback_timezone
+                index = self.findData(normalized)
+            else:
+                # Preserve a valid timezone from an older or externally supplied
+                # setting without making the control editable.
+                self.addItem(normalized, normalized)
+                index = self.findData(normalized)
+        if index >= 0:
+            self.setCurrentIndex(index)
+
+    def timezone(self) -> str:
+        """Return the stored timezone identifier for the selected option."""
+
+        value = self.currentData()
+        return _safe_text(value, fallback=self.currentText(), limit=128)
+
+    # Keep the old line-edit-shaped methods as a small compatibility bridge for
+    # callers that populate view controls programmatically.
+    def setText(self, value: object) -> None:  # noqa: N802 - Qt compatibility name
+        self.set_timezone(value)
+
+    def text(self) -> str:  # noqa: N802 - Qt compatibility name
+        return self.timezone()
+
+    def setCurrentText(self, text: str) -> None:  # noqa: N802 - Qt API name
+        index = self.findText(text)
+        if index < 0:
+            index = self.findData(text)
+        if index >= 0:
+            self.setCurrentIndex(index)
+
+
 def _field(value: object, name: str, default: object = None) -> object:
     if isinstance(value, Mapping):
         return value.get(name, default)
@@ -807,6 +935,48 @@ def _coerce_inbox_item(value: object, index: int) -> InboxItemView:
         sensitive=_bool_value(_field(value, "sensitive", True), default=True),
         unread=state == "unread",
         state=state,
+    )
+
+
+def _coerce_attention_notification(value: object, index: int = 0) -> AttentionNotificationView:
+    if isinstance(value, AttentionNotificationView):
+        return value
+    notice_id = _safe_text(
+        _field(value, "notice_id", _field(value, "notification_id", f"attention-{index}")),
+        fallback=f"attention-{index}",
+        limit=_MAX_ID_LENGTH,
+    )
+    unread_count = _int_value(_field(value, "unread_count", 0), 0)
+    source_count = _int_value(_field(value, "source_count", 0), 0)
+    summary = _safe_text(
+        _field(value, "safe_summary", _field(value, "summary", _field(value, "message", "")))
+    )
+    if not summary and unread_count > 0:
+        source_label = (
+            f"{source_count} selected source"
+            if source_count == 1
+            else (f"{source_count} selected sources")
+        )
+        summary = f"{unread_count} unread message(s) from {source_label}."
+    return AttentionNotificationView(
+        notice_id=notice_id,
+        title=_safe_text(
+            _field(value, "title", "Attention messages"),
+            fallback="Attention messages",
+            limit=120,
+        ),
+        summary=summary,
+        action_label=_safe_text(
+            _field(value, "action_label", "Review messages"),
+            fallback="Review messages",
+            limit=64,
+        ),
+        navigation_target=_safe_text(
+            _field(value, "navigation_target", "hub://inbox/messages"),
+            fallback="hub://inbox/messages",
+            limit=256,
+        ),
+        sensitive=_bool_value(_field(value, "sensitive", True), default=True),
     )
 
 
@@ -903,6 +1073,9 @@ def _coerce_settings(value: SettingsView | Mapping[str, object] | None) -> Setti
             7,
         ),
         message_refresh_minutes=_int_value(_field(data, "message_refresh_minutes", 10), 10),
+        canvas_remove_completed_assignments=_bool_value(
+            _field(data, "canvas_remove_completed_assignments", False)
+        ),
         text_scale=text_scale,
         high_contrast=_bool_value(
             _field(data, "high_contrast", _field(data, "ui_high_contrast", False))
@@ -1033,6 +1206,27 @@ def _qt_datetime(value: datetime) -> QDateTime:
         value.second,
         value.microsecond // 1_000_000,
     )
+
+
+def _task_editor_timezone(value: object) -> tzinfo:
+    """Resolve the timezone used for wall-clock values entered in the task form."""
+
+    normalized = _safe_text(value, fallback="local", limit=128)
+    if normalized.casefold() == "local":
+        return datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
+    try:
+        return ZoneInfo(normalized)
+    except (TypeError, ValueError, ZoneInfoNotFoundError) as error:
+        raise ValueError("Task timezone is not recognized") from error
+
+
+def _task_editor_due_datetime(value: object, timezone: object) -> datetime | None:
+    """Interpret a task editor's wall-clock value in its selected timezone."""
+
+    due = _coerce_datetime(value)
+    if due is None or (due.tzinfo is not None and due.utcoffset() is not None):
+        return due
+    return due.replace(tzinfo=_task_editor_timezone(timezone))
 
 
 def _coerce_text_tuple(value: object, *, limit: int = 80, max_items: int = 32) -> tuple[str, ...]:
@@ -1495,6 +1689,40 @@ def _coerce_ical_feed(value: object, index: int) -> IcalFeedView:
     )
 
 
+def _coerce_calendar_import(value: object, index: int) -> CalendarImportView:
+    if isinstance(value, CalendarImportView):
+        source_format = _safe_text(value.source_format, limit=12).casefold()
+        return CalendarImportView(
+            import_id=_safe_text(
+                value.import_id,
+                fallback=f"calendar-import-{index}",
+                limit=_MAX_ID_LENGTH,
+            ),
+            name=_safe_text(value.name, fallback="Local calendar import", limit=180),
+            source_format="text" if source_format == "text" else "csv",
+            event_count=max(0, min(_int_value(value.event_count, 0), 5_000)),
+        )
+    try:
+        event_count = int(_field(value, "event_count", _field(value, "count", 0)))
+    except (TypeError, ValueError):
+        event_count = 0
+    source_format = _safe_text(_field(value, "source_format", "csv"), limit=12).casefold()
+    return CalendarImportView(
+        import_id=_safe_text(
+            _field(value, "import_id", _field(value, "id", f"calendar-import-{index}")),
+            fallback=f"calendar-import-{index}",
+            limit=_MAX_ID_LENGTH,
+        ),
+        name=_safe_text(
+            _field(value, "name", _field(value, "title", "Local calendar import")),
+            fallback="Local calendar import",
+            limit=180,
+        ),
+        source_format="text" if source_format == "text" else "csv",
+        event_count=max(0, min(event_count, 5_000)),
+    )
+
+
 def _coerce_calendar_view(value: object) -> CalendarView:
     if isinstance(value, CalendarView):
         events = tuple(
@@ -1509,6 +1737,10 @@ def _coerce_calendar_view(value: object) -> CalendarView:
             _coerce_ical_feed(item, index)
             for index, item in enumerate(_iter_values(value.ical_feeds))
         )
+        local_imports = tuple(
+            _coerce_calendar_import(item, index)
+            for index, item in enumerate(_iter_values(value.local_imports))
+        )
         selected = _coerce_text_tuple(value.selected_calendar_ids, limit=_MAX_ID_LENGTH)
         return _calendar_view_with_derived_sources(
             CalendarView(
@@ -1521,6 +1753,7 @@ def _coerce_calendar_view(value: object) -> CalendarView:
                 generated_at=_coerce_datetime(value.generated_at),
                 cursor_date=_coerce_date_value(value.cursor_date),
                 ical_feeds=ical_feeds,
+                local_imports=local_imports,
             )
         )
     data: object = value or {}
@@ -1554,6 +1787,15 @@ def _coerce_calendar_view(value: object) -> CalendarView:
     ical_feeds = tuple(
         _coerce_ical_feed(item, index) for index, item in enumerate(_iter_values(raw_ical_feeds))
     )
+    raw_local_imports = _field(
+        data,
+        "local_imports",
+        _field(data, "calendar_imports", _field(data, "imported_calendars", ())),
+    )
+    local_imports = tuple(
+        _coerce_calendar_import(item, index)
+        for index, item in enumerate(_iter_values(raw_local_imports))
+    )
     selected_raw = _field(
         data,
         "selected_calendar_ids",
@@ -1577,6 +1819,7 @@ def _coerce_calendar_view(value: object) -> CalendarView:
                 _field(data, "cursor_date", _field(data, "date", _field(data, "range_start", None)))
             ),
             ical_feeds=ical_feeds,
+            local_imports=local_imports,
         )
     )
 
@@ -1927,13 +2170,30 @@ def _calendar_source_wildcard(calendar_key: str) -> str:
     return f"{source_id}/*" if source_id else ""
 
 
-def _calendar_event_date(event: CalendarEventView) -> date | None:
-    starts_at = _coerce_datetime(event.starts_at)
-    if starts_at is None:
-        return None
-    if starts_at.tzinfo and starts_at.utcoffset():
-        return starts_at.astimezone().date()
-    return starts_at.date()
+def _calendar_event_date(
+    event: CalendarEventView,
+    timezone: str = "local",
+) -> date | None:
+    """Return an event's day in the calendar display timezone."""
+
+    try:
+        return event_local_date(event, timezone=timezone)
+    except (TypeError, ValueError):
+        starts_at = _coerce_datetime(event.starts_at)
+        return None if starts_at is None else starts_at.date()
+
+
+def _calendar_display_timezone(value: object) -> str:
+    """Return a bounded, loadable timezone for calendar geometry."""
+
+    normalized = _safe_text(value, fallback="local", limit=128)
+    if normalized.casefold() == "local":
+        return "local"
+    try:
+        ZoneInfo(normalized)
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return "local"
+    return normalized
 
 
 _DEFAULT_TODAY_SECTIONS: Final[tuple[TodaySectionView, ...]] = (
@@ -1980,7 +2240,8 @@ QPushButton[hubNavigation="true"]:focus, QListWidget:focus { border: 3px solid #
 QListWidget, QFrame#todayCard, QFrame#todaySection, QFrame#taskQuickAdd,
 QFrame#taskEditorPanel, QFrame#taskRow, QFrame#calendarMonthCell,
 QFrame#calendarWeekColumn, QFrame#calendarSourcesPanel,
-QFrame#sourceFailurePanel, QFrame#diagnosticsView,
+QFrame#calendarSettingsPanel, QFrame#inboxRow, QFrame#messageSummaryRow,
+QFrame#sourceFailurePanel, QFrame#attentionNotificationPanel, QFrame#diagnosticsView,
 QFrame#newsSubscriptionsPanel, QFrame#newsEntryRow,
 QFrame#newsFiltersPanel, QFrame#newsSubscriptionEditor,
 QFrame#newsSubscriptionRow {
@@ -2055,7 +2316,22 @@ QPushButton[hubNavigation="true"]:disabled {
     background: #0b1421;
 }
 
-#todayCard, #todaySection, #taskQuickAdd, #taskEditorPanel, #taskRow,
+#attentionNotificationPanel {
+    background: #173b5d;
+    border: 1px solid #70b5ff;
+    border-radius: 10px;
+}
+
+#attentionNotificationTitle {
+    color: #ffffff;
+    font-weight: 650;
+}
+
+#attentionNotificationBody {
+    color: #dce7f3;
+}
+
+#todayCard, #todaySection, #taskQuickAdd, #taskEditorPanel,
 #calendarMonthCell, #calendarWeekColumn, #calendarSourcesPanel,
 #calendarEventDetailsPanel, #sourceFailurePanel, #diagnosticsView, #newsSubscriptionsPanel,
 #newsEntryRow, #newsFiltersPanel {
@@ -2068,8 +2344,25 @@ QPushButton[hubNavigation="true"]:disabled {
     border-radius: 9px;
 }
 
-#calendarToolbar, #calendarSourcesPanel {
+#pageHeader, #calendarToolbar, #calendarSourcesPanel, #taskViewBar {
     background: transparent;
+}
+
+#calendarSettingsPanel {
+    background: #0d1a2b;
+    border: 1px solid #263b55;
+    border-radius: 9px;
+}
+
+#calendarContentSplitter, #taskContentSplitter, #messageContentSplitter {
+    background: transparent;
+    border: 0;
+}
+
+QSplitter::handle:horizontal {
+    background: #22334a;
+    width: 1px;
+    margin: 8px 0;
 }
 
 #newsToolbar {
@@ -2166,6 +2459,35 @@ QPushButton[hubNavigation="true"]:disabled {
     background: #0d1a2b;
     border: 1px solid #263b55;
     border-radius: 7px;
+}
+
+#calendarHourlyGrid {
+    background: #0d1a2b;
+    border: 1px solid #263b55;
+    border-radius: 9px;
+}
+
+#calendarTimeSlotButton {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+}
+
+#calendarTimeSlotButton:hover, #calendarTimeSlotButton:focus {
+    background: #142e4a;
+    border: 1px solid #376c98;
+}
+
+#calendarTimeSlotButton:pressed {
+    background: #1c3d66;
+}
+
+#calendarDayScroll, #calendarWeekScroll {
+    background: transparent;
+    border: 0;
 }
 
 #calendarEventRow {
@@ -2272,12 +2594,60 @@ QPushButton[hubNavigation="true"]:disabled {
 
 #taskQuickAddInput, #taskSearchInput, #taskEditorPanel QLineEdit,
 #taskEditorPanel QPlainTextEdit, #taskEditorPanel QDateTimeEdit,
-#taskEditorPanel QComboBox, #taskFilters QComboBox {
+#taskEditorPanel QComboBox, #taskFilters QComboBox, #settingsPage QComboBox {
     background: #0d1a2b;
     border: 1px solid #385371;
     border-radius: 6px;
     color: #e7eef7;
     padding: 6px;
+}
+
+#taskQuickViewButton, #taskFiltersButton, #taskUndoButton,
+#calendarSettingsButton, #taskOverflowButton, #messageCategorySelector {
+    background: #101f32;
+    border: 1px solid #294563;
+    border-radius: 6px;
+    color: #dce7f3;
+    padding: 5px 9px;
+}
+
+#taskQuickViewButton:hover, #taskQuickViewButton:focus,
+#taskFiltersButton:hover, #taskFiltersButton:focus,
+#taskUndoButton:hover, #taskUndoButton:focus,
+#calendarSettingsButton:hover, #calendarSettingsButton:focus,
+#taskOverflowButton:hover, #taskOverflowButton:focus,
+#messageCategorySelector:hover, #messageCategorySelector:focus {
+    background: #1a4164;
+    border-color: #70b5ff;
+}
+
+#taskRow {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid #20334d;
+    border-radius: 0;
+}
+
+#taskRow:hover {
+    background: #101f32;
+}
+
+#taskCompleteButton {
+    background: #1a4164;
+    border: 1px solid #376c98;
+    border-radius: 16px;
+    color: #e7eef7;
+    font-size: 12pt;
+    font-weight: 700;
+}
+
+#taskCompleteButton:hover, #taskCompleteButton:focus {
+    background: #265a84;
+    border: 2px solid #70b5ff;
+}
+
+#taskNativeOpenButton {
+    padding: 4px 8px;
 }
 
 #taskRowTitle, #todaySectionTitle, #taskEditorTitle {
@@ -2302,8 +2672,12 @@ QPushButton[hubNavigation="true"]:disabled {
 
 #pageTitle {
     color: #f7fbff;
-    font-size: 25pt;
+    font-size: 20pt;
     font-weight: 650;
+}
+
+#pageSubtitle {
+    min-height: 24px;
 }
 
 #sourceFailureTitle, #diagnosticsTitle {
@@ -2317,7 +2691,7 @@ QPushButton[hubNavigation="true"]:disabled {
     font-size: 10pt;
 }
 
-#inboxList, #sourcesList, #diagnosticsList {
+#inboxList, #messageSummaryList, #sourcesList, #diagnosticsList {
     background: #0d1a2b;
     border: 1px solid #263b55;
     border-radius: 9px;
@@ -2325,14 +2699,74 @@ QPushButton[hubNavigation="true"]:disabled {
     padding: 8px;
 }
 
-#inboxList::item, #sourcesList::item, #diagnosticsList::item {
+#inboxList::item, #messageSummaryList::item, #sourcesList::item, #diagnosticsList::item {
     padding: 9px;
     border-bottom: 1px solid #20334d;
 }
 
-#inboxList::item:selected, #sourcesList::item:selected, #diagnosticsList::item:selected {
+#inboxList::item:selected, #messageSummaryList::item:selected,
+#sourcesList::item:selected, #diagnosticsList::item:selected {
     background: #1c3d66;
     color: #ffffff;
+}
+
+#inboxModeTabs::pane {
+    border: 0;
+    background: transparent;
+}
+
+#inboxModeTabs QTabBar::tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #9aabc0;
+    padding: 7px 12px;
+    margin-right: 4px;
+}
+
+#inboxModeTabs QTabBar::tab:selected {
+    background: #1c3c61;
+    border-color: #5f9edc;
+    color: #ffffff;
+    font-weight: 650;
+}
+
+#inboxModeTabs QTabBar::tab:hover:!selected {
+    background: #14253a;
+    color: #f7fbff;
+}
+
+#messageCategoryBar {
+    background: transparent;
+}
+
+#inboxRow, #messageSummaryRow {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid #20334d;
+}
+
+#inboxRow:hover, #messageSummaryRow:hover {
+    background: #101f32;
+}
+
+#inboxRowTitle, #messageSummaryTitle {
+    color: #ecf4fc;
+    font-weight: 600;
+}
+
+#inboxRowDetails, #messageSummaryMetadata, #messageCategoryStatus {
+    color: #9aabc0;
+}
+
+#inboxUnreadIndicator, #messageUnreadIndicator {
+    color: #70b5ff;
+    font-size: 9pt;
+}
+
+#messageSummaryRow[important="true"] #messageUnreadIndicator {
+    color: #f7c66c;
+    font-weight: 700;
 }
 
 #privacyOverlay {
@@ -2638,6 +3072,114 @@ class PersonalHubTrayController(QObject):
         actions[action].trigger()
 
 
+class _InboxRowWidget(QFrame):
+    """Quiet two-line presentation row for one durable Hub attention item."""
+
+    def __init__(
+        self,
+        item: InboxItemView,
+        title: str,
+        details: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("inboxRow")
+        self.setProperty("unread", bool(item.unread))
+        self.setAccessibleName(f"Inbox item: {title}")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(9)
+
+        indicator = QLabel("●" if item.unread else "○", self)
+        indicator.setObjectName("inboxUnreadIndicator")
+        indicator.setAccessibleName("Unread" if item.unread else "Read")
+        indicator.setTextFormat(Qt.TextFormat.PlainText)
+        indicator.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        indicator.setFixedWidth(14)
+        layout.addWidget(indicator)
+
+        body = QWidget(self)
+        body.setObjectName("inboxRowBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(2)
+
+        title_label = QLabel(title, body)
+        title_label.setObjectName("inboxRowTitle")
+        title_label.setTextFormat(Qt.TextFormat.PlainText)
+        title_label.setWordWrap(True)
+        body_layout.addWidget(title_label)
+
+        details_label = QLabel(details, body)
+        details_label.setObjectName("inboxRowDetails")
+        details_label.setTextFormat(Qt.TextFormat.PlainText)
+        details_label.setWordWrap(True)
+        details_label.setVisible(bool(details))
+        body_layout.addWidget(details_label)
+        layout.addWidget(body, 1)
+
+
+class _MessageSummaryRowWidget(QFrame):
+    """Structured two-line message row that avoids a long delimiter string."""
+
+    def __init__(
+        self,
+        summary: MessageSummaryView,
+        title: str,
+        metadata: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("messageSummaryRow")
+        self.setProperty("unread", bool(summary.unread))
+        self.setProperty("important", summary.importance == "important")
+        self.setAccessibleName(f"Message: {title}")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(9)
+
+        indicator_text = "!" if summary.importance == "important" else "●"
+        if not summary.unread and summary.importance != "important":
+            indicator_text = "○"
+        indicator = QLabel(indicator_text, self)
+        indicator.setObjectName("messageUnreadIndicator")
+        indicator.setAccessibleName(
+            "Important unread"
+            if summary.importance == "important" and summary.unread
+            else "Unread"
+            if summary.unread
+            else "Read"
+        )
+        indicator.setTextFormat(Qt.TextFormat.PlainText)
+        indicator.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        indicator.setFixedWidth(14)
+        layout.addWidget(indicator)
+
+        body = QWidget(self)
+        body.setObjectName("messageSummaryRowBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(2)
+
+        title_label = QLabel(title, body)
+        title_label.setObjectName("messageSummaryTitle")
+        title_label.setTextFormat(Qt.TextFormat.PlainText)
+        title_label.setWordWrap(True)
+        body_layout.addWidget(title_label)
+
+        metadata_label = QLabel(metadata, body)
+        metadata_label.setObjectName("messageSummaryMetadata")
+        metadata_label.setTextFormat(Qt.TextFormat.PlainText)
+        metadata_label.setWordWrap(True)
+        metadata_label.setVisible(bool(metadata))
+        body_layout.addWidget(metadata_label)
+        layout.addWidget(body, 1)
+
+
 class TaskRowWidget(QFrame):
     """Keyboard-friendly presentation row for one in-memory task view."""
 
@@ -2651,42 +3193,68 @@ class TaskRowWidget(QFrame):
         super().__init__(parent)
         self.task = task
         self.setObjectName("taskRow")
+        self.setProperty("taskPriority", task.priority)
+        self.setProperty("taskState", task.state)
         self.setAccessibleName(f"Task: {task.title}")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.Shape.NoFrame)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 8, 8)
+        layout.setSpacing(9)
 
-        self.title_label = QLabel(task.title)
+        complete_label = "✓" if task.state == "open" else "↶"
+        complete_name = "Complete" if task.state == "open" else "Undo completion"
+        if task.state == "archived":
+            complete_label = "↶"
+            complete_name = "Undo archive"
+        self.complete_button = QToolButton(self)
+        self.complete_button.setText(complete_label)
+        self.complete_button.setObjectName("taskCompleteButton")
+        self.complete_button.setAccessibleName(complete_name)
+        self.complete_button.setToolTip(complete_name)
+        self.complete_button.setAutoRaise(True)
+        self.complete_button.setFixedSize(32, 32)
+        self.complete_button.clicked.connect(self._complete_or_undo)
+        layout.addWidget(self.complete_button, 0, Qt.AlignmentFlag.AlignTop)
+
+        body = QWidget(self)
+        body.setObjectName("taskRowBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(2)
+
+        self.title_label = QLabel(task.title, body)
         self.title_label.setObjectName("taskRowTitle")
         self.title_label.setAccessibleName("Task title")
         self.title_label.setTextFormat(Qt.TextFormat.PlainText)
         self.title_label.setWordWrap(True)
-        layout.addWidget(self.title_label, 1)
+        body_layout.addWidget(self.title_label)
 
         details: list[str] = []
         if task.priority != "normal":
             details.append(task.priority.title())
         if task.due_at is not None:
             details.append(_task_due_label(task))
+        else:
+            details.append("No date")
         if task.list_id:
             details.append(task.list_id)
         if task.tags:
             details.append("#" + " #".join(task.tags))
-        self.details_label = QLabel(" · ".join(details))
+        self.details_label = QLabel(" · ".join(details), body)
         self.details_label.setObjectName("taskRowDetails")
         self.details_label.setAccessibleName("Task details")
         self.details_label.setTextFormat(Qt.TextFormat.PlainText)
         self.details_label.setWordWrap(True)
-        layout.addWidget(self.details_label, 1)
+        body_layout.addWidget(self.details_label)
+        layout.addWidget(body, 1)
 
         self.native_open_button: QPushButton | None = None
         native_target = _safe_http_target(task.external_url, limit=1_024)
         if native_target:
             native_label = _task_native_open_label(task)
-            self.native_open_button = QPushButton(native_label)
+            self.native_open_button = QPushButton(native_label, self)
             self.native_open_button.setObjectName("taskNativeOpenButton")
             self.native_open_button.setAccessibleName(f"{native_label}: {task.title}")
             self.native_open_button.setAccessibleDescription(
@@ -2700,30 +3268,38 @@ class TaskRowWidget(QFrame):
         self.task_native_open_button = self.native_open_button
         self.open_button = self.native_open_button
 
-        self.complete_button = QPushButton(
-            "Complete" if task.state == "open" else "Undo completion"
-        )
-        if task.state == "archived":
-            self.complete_button.setText("Undo archive")
-        self.complete_button.setObjectName("taskCompleteButton")
-        self.complete_button.setAccessibleName(self.complete_button.text())
-        self.complete_button.setAutoDefault(False)
-        self.complete_button.clicked.connect(self._complete_or_undo)
-        layout.addWidget(self.complete_button)
-
-        self.edit_button = QPushButton("Edit")
+        # Keep the button attributes for the presentation contract and existing
+        # callers, while exposing secondary actions through one compact menu.
+        self.edit_button = QPushButton("Edit", self)
         self.edit_button.setObjectName("taskEditButton")
         self.edit_button.setAccessibleName("Edit task")
         self.edit_button.setAutoDefault(False)
+        self.edit_button.hide()
         self.edit_button.clicked.connect(lambda: self.edit_requested.emit(self.task.task_id))
-        layout.addWidget(self.edit_button)
 
-        self.archive_button = QPushButton("Undo archive" if task.state == "archived" else "Archive")
+        archive_label = "Undo archive" if task.state == "archived" else "Archive"
+        self.archive_button = QPushButton(archive_label, self)
         self.archive_button.setObjectName("taskArchiveButton")
-        self.archive_button.setAccessibleName(self.archive_button.text())
+        self.archive_button.setAccessibleName(archive_label)
         self.archive_button.setAutoDefault(False)
+        self.archive_button.hide()
         self.archive_button.clicked.connect(self._archive_or_undo)
-        layout.addWidget(self.archive_button)
+
+        self.action_button = QToolButton(self)
+        self.action_button.setObjectName("taskOverflowButton")
+        self.action_button.setText("…")
+        self.action_button.setAccessibleName("More task actions")
+        self.action_button.setToolTip("More task actions")
+        self.action_button.setAutoRaise(True)
+        self.action_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.action_menu = QMenu(self.action_button)
+        edit_action = self.action_menu.addAction("Edit task")
+        edit_action.triggered.connect(lambda _checked=False: self.edit_button.click())
+        self.action_menu.addSeparator()
+        archive_action = self.action_menu.addAction(archive_label)
+        archive_action.triggered.connect(lambda _checked=False: self.archive_button.click())
+        self.action_button.setMenu(self.action_menu)
+        layout.addWidget(self.action_button, 0, Qt.AlignmentFlag.AlignTop)
 
     def _complete_or_undo(self) -> None:
         if self.task.state == "open":
@@ -2821,6 +3397,8 @@ class PersonalHubMainWindow(QMainWindow):
     offline_mode_changed = Signal(bool)
     quit_requested = Signal()
     source_failure_received = Signal(object)
+    attention_notification_open_requested = Signal(object)
+    attention_notification_dismissed = Signal(object)
     closed_to_tray = Signal()
     task_created = Signal(object)
     task_updated = Signal(object)
@@ -2829,6 +3407,7 @@ class PersonalHubMainWindow(QMainWindow):
     task_undo_requested = Signal(object)
     task_native_open_requested = Signal(object)
     task_edit_requested = Signal(object)
+    task_import_requested = Signal()
     task_filters_changed = Signal(object)
     today_changed = Signal(object)
     today_section_order_changed = Signal(object)
@@ -2840,7 +3419,10 @@ class PersonalHubMainWindow(QMainWindow):
     calendar_selection_changed = Signal(object)
     calendar_event_open_requested = Signal(object)
     calendar_task_completion_changed = Signal(object)
+    calendar_slot_requested = Signal(object)
     calendar_deep_link_requested = Signal(object)
+    calendar_import_requested = Signal()
+    calendar_import_delete_requested = Signal(str)
     ical_feed_create_requested = Signal()
     ical_feed_update_requested = Signal(str)
     ical_feed_delete_requested = Signal(str)
@@ -2871,6 +3453,7 @@ class PersonalHubMainWindow(QMainWindow):
     message_clear_requested = Signal()
     message_category_changed = Signal(str)
     message_filter_changed = message_category_changed
+    inbox_mode_changed = Signal(str)
     inbox_state_changed = Signal(object)
     settings_save_requested = Signal(object)
     backup_requested = Signal()
@@ -2894,9 +3477,12 @@ class PersonalHubMainWindow(QMainWindow):
     event_open_requested = calendar_event_open_requested
     event_deep_link_requested = calendar_deep_link_requested
     calendar_task_done_changed = calendar_task_completion_changed
+    calendar_time_slot_requested = calendar_slot_requested
 
     # Semantic aliases keep the presentation contract easy to discover while
     # preserving a single signal per action.
+    attention_notice_open_requested = attention_notification_open_requested
+    attention_notice_dismissed = attention_notification_dismissed
     task_completion_requested = task_completed
     task_archive_requested = task_archived
     task_added = task_created
@@ -2947,6 +3533,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._settings_view = SettingsView()
         self._diagnostics_view = DiagnosticsView()
         self._source_failures: dict[str, SourceFailureView] = {}
+        self._attention_notification: AttentionNotificationView | None = None
         self._tasks: dict[str, TaskView] = {}
         self._task_undo_stack: list[tuple[str, TaskView]] = []
         self._task_state_filter_value = "all"
@@ -2964,12 +3551,14 @@ class PersonalHubMainWindow(QMainWindow):
         self._calendar_events: tuple[CalendarEventView, ...] = ()
         self._calendar_sources: tuple[CalendarSourceView, ...] = ()
         self._calendar_ical_feeds: tuple[IcalFeedView, ...] = ()
+        self._calendar_local_imports: tuple[CalendarImportView, ...] = ()
         self._calendar_selected_ids: set[str] = set()
         self._calendar_agenda_rendering = False
         self._calendar_mode_value = "month"
         self._calendar_cursor = date.today()
         self._calendar_color_by_key: dict[str, str] = {}
         self._calendar_selected_event_id: str | None = None
+        self._editing_new_task = False
         self._news_view = NewsView()
         self._news_subscriptions: tuple[FeedSubscriptionView, ...] = ()
         self._news_entries: tuple[FeedEntryView, ...] = ()
@@ -2988,6 +3577,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._message_all_summaries: tuple[MessageSummaryView, ...] = ()
         self._message_summaries: tuple[MessageSummaryView, ...] = ()
         self._message_category_value = "primary"
+        self._inbox_mode_value = "alerts"
         self.message_category_buttons: dict[str, QPushButton] = {}
         self._message_body: MessageBodyView | None = None
         self.navigation_buttons: dict[str, QPushButton] = {}
@@ -3060,6 +3650,19 @@ class PersonalHubMainWindow(QMainWindow):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
+        (
+            self.attention_notification_panel,
+            self.attention_notification_title,
+            self.attention_notification_body,
+            self.attention_notification_open_button,
+            self.attention_notification_dismiss_button,
+        ) = self._build_attention_notification_panel()
+        self.attention_notice_panel = self.attention_notification_panel
+        self.attention_notice_title = self.attention_notification_title
+        self.attention_notice_body = self.attention_notification_body
+        self.attention_notice_open_button = self.attention_notification_open_button
+        self.attention_notice_dismiss_button = self.attention_notification_dismiss_button
+        content_layout.addWidget(self.attention_notification_panel)
         (
             self.source_failure_panel,
             self.source_failure_title,
@@ -3162,8 +3765,8 @@ class PersonalHubMainWindow(QMainWindow):
             content.setAccessibleName(f"{accessible_name} scrollable content")
             content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             layout = QVBoxLayout(content)
-            layout.setContentsMargins(28, 24, 28, 28)
-            layout.setSpacing(12)
+            layout.setContentsMargins(24, 18, 24, 24)
+            layout.setSpacing(10)
             layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetMinimumSize)
             page.setWidget(content)
             return page, layout
@@ -3172,8 +3775,8 @@ class PersonalHubMainWindow(QMainWindow):
         page.setObjectName(object_name)
         page.setAccessibleName(accessible_name)
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 24, 28, 28)
-        layout.setSpacing(12)
+        layout.setContentsMargins(24, 18, 24, 24)
+        layout.setSpacing(10)
         return page, layout
 
     @staticmethod
@@ -3182,24 +3785,36 @@ class PersonalHubMainWindow(QMainWindow):
         destination: str,
         description: str,
     ) -> tuple[QLabel, QLabel, QLabel]:
+        header = QWidget()
+        header.setObjectName("pageHeader")
+        header.setAccessibleName(f"{destination} page header")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(12)
+
         eyebrow = QLabel(destination.upper())
         eyebrow.setObjectName("pageEyebrow")
         eyebrow.setAccessibleName(f"{destination} section")
         eyebrow.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(eyebrow)
+        # Keep the semantic section label in the object tree for accessibility
+        # and tests, but avoid spending a full visual line on a duplicate title.
+        eyebrow.setVisible(False)
+        header_layout.addWidget(eyebrow)
 
         title = QLabel(destination)
         title.setObjectName("pageTitle")
         title.setAccessibleName(f"{destination} page title")
         title.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(title)
+        header_layout.addWidget(title)
 
         subtitle = QLabel(description)
         subtitle.setObjectName("pageSubtitle")
         subtitle.setAccessibleName(f"{destination} page description")
         subtitle.setTextFormat(Qt.TextFormat.PlainText)
         subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        header_layout.addWidget(subtitle, 1)
+        layout.addWidget(header)
         return eyebrow, title, subtitle
 
     def _build_today_page(self) -> QWidget:
@@ -3473,7 +4088,12 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_mode_combo = QComboBox()
         self.calendar_mode_combo.setObjectName("calendarModeCombo")
         self.calendar_mode_combo.setAccessibleName("Calendar view mode")
-        for label, value in (("Month", "month"), ("Week", "week"), ("Agenda", "agenda")):
+        for label, value in (
+            ("Month", "month"),
+            ("Day", "day"),
+            ("Week", "week"),
+            ("Agenda", "agenda"),
+        ):
             self.calendar_mode_combo.addItem(label, value)
         self.calendar_mode_combo.currentIndexChanged.connect(self._calendar_mode_from_combo)
         toolbar_layout.addWidget(self.calendar_mode_combo)
@@ -3482,6 +4102,19 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_timezone_label.setAccessibleName("Calendar timezone")
         self.calendar_timezone_label.setTextFormat(Qt.TextFormat.PlainText)
         toolbar_layout.addWidget(self.calendar_timezone_label)
+        self.calendar_settings_button = QToolButton()
+        self.calendar_settings_button.setObjectName("calendarSettingsButton")
+        self.calendar_settings_button.setText("Calendars")
+        self.calendar_settings_button.setAccessibleName(
+            "Show calendar sources, feeds, and local imports"
+        )
+        self.calendar_settings_button.setToolTip(
+            "Show or hide selected calendars, iCalendar feeds, and local imports"
+        )
+        self.calendar_settings_button.setCheckable(True)
+        self.calendar_settings_button.setAutoRaise(True)
+        self.calendar_settings_button.toggled.connect(self._toggle_calendar_settings)
+        toolbar_layout.addWidget(self.calendar_settings_button)
         layout.addWidget(toolbar)
         self.calendar_mode = self.calendar_mode_combo
         self.calendar_previous = self.calendar_previous_button
@@ -3516,7 +4149,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_sources_title.setTextFormat(Qt.TextFormat.PlainText)
         self.calendar_sources_layout.addWidget(self.calendar_sources_title)
         self.calendar_sources_layout.addStretch(1)
-        layout.addWidget(self.calendar_sources_panel)
         self.calendar_source_checkboxes: dict[str, QCheckBox] = {}
         self.calendar_sources = self.calendar_source_checkboxes
 
@@ -3552,7 +4184,49 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_ical_feed_checkboxes: dict[str, QCheckBox] = {}
         self.calendar_ical_feed_edit_buttons: dict[str, QPushButton] = {}
         self.calendar_ical_feed_remove_buttons: dict[str, QPushButton] = {}
-        layout.addWidget(self.calendar_ical_panel)
+
+        self.calendar_local_imports_panel = QFrame()
+        self.calendar_local_imports_panel.setObjectName("calendarLocalImportsPanel")
+        self.calendar_local_imports_panel.setAccessibleName("Local CSV and text calendar imports")
+        local_imports_layout = QVBoxLayout(self.calendar_local_imports_panel)
+        local_imports_layout.setContentsMargins(12, 8, 12, 8)
+        local_imports_layout.setSpacing(6)
+        local_imports_header = QHBoxLayout()
+        self.calendar_local_imports_title = QLabel("Local calendar imports")
+        self.calendar_local_imports_title.setObjectName("calendarLocalImportsTitle")
+        self.calendar_local_imports_title.setAccessibleName("Local calendar imports heading")
+        self.calendar_local_imports_title.setTextFormat(Qt.TextFormat.PlainText)
+        local_imports_header.addWidget(self.calendar_local_imports_title)
+        local_imports_header.addStretch(1)
+        self.calendar_local_import_button = QPushButton("Import CSV or list")
+        self.calendar_local_import_button.setObjectName("calendarLocalImportButton")
+        self.calendar_local_import_button.setAccessibleName("Import local calendar items")
+        self.calendar_local_import_button.setAccessibleDescription(
+            "Add read-only calendar items from a CSV file or one item per line."
+        )
+        self.calendar_local_import_button.setAutoDefault(False)
+        self.calendar_local_import_button.clicked.connect(
+            lambda: self.calendar_import_requested.emit()
+        )
+        local_imports_header.addWidget(self.calendar_local_import_button)
+        local_imports_layout.addLayout(local_imports_header)
+        self.calendar_local_imports_layout = QVBoxLayout()
+        self.calendar_local_imports_layout.setContentsMargins(0, 0, 0, 0)
+        self.calendar_local_imports_layout.setSpacing(4)
+        local_imports_layout.addLayout(self.calendar_local_imports_layout)
+        self.calendar_local_import_remove_buttons: dict[str, QPushButton] = {}
+
+        self.calendar_settings_panel = QFrame()
+        self.calendar_settings_panel.setObjectName("calendarSettingsPanel")
+        self.calendar_settings_panel.setAccessibleName("Calendar source settings")
+        settings_layout = QVBoxLayout(self.calendar_settings_panel)
+        settings_layout.setContentsMargins(10, 8, 10, 8)
+        settings_layout.setSpacing(8)
+        settings_layout.addWidget(self.calendar_sources_panel)
+        settings_layout.addWidget(self.calendar_ical_panel)
+        settings_layout.addWidget(self.calendar_local_imports_panel)
+        layout.addWidget(self.calendar_settings_panel)
+        self.calendar_settings_panel.hide()
 
         self.calendar_view_stack = QStackedWidget()
         self.calendar_view_stack.setObjectName("calendarViewStack")
@@ -3563,12 +4237,45 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_month_layout = QGridLayout(self.calendar_month_view)
         self.calendar_month_layout.setContentsMargins(0, 0, 0, 0)
         self.calendar_month_layout.setSpacing(4)
+        self.calendar_day_view = QWidget()
+        self.calendar_day_view.setObjectName("calendarDayView")
+        self.calendar_day_view.setAccessibleName("Calendar day view")
+        day_layout = QVBoxLayout(self.calendar_day_view)
+        day_layout.setContentsMargins(0, 0, 0, 0)
+        day_layout.setSpacing(0)
+        self.calendar_day_scroll = QScrollArea(self.calendar_day_view)
+        self.calendar_day_scroll.setObjectName("calendarDayScroll")
+        self.calendar_day_scroll.setAccessibleName("Calendar day time grid")
+        self.calendar_day_scroll.setWidgetResizable(True)
+        self.calendar_day_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.calendar_day_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.calendar_day_grid = HourlyCalendarGrid(
+            self.calendar_day_scroll,
+            column_object_name="calendarDayColumn",
+        )
+        self.calendar_day_grid.slot_requested.connect(self.calendar_slot_requested.emit)
+        self.calendar_day_scroll.setWidget(self.calendar_day_grid)
+        day_layout.addWidget(self.calendar_day_scroll)
+
         self.calendar_week_view = QWidget()
         self.calendar_week_view.setObjectName("calendarWeekView")
         self.calendar_week_view.setAccessibleName("Calendar week view")
-        self.calendar_week_layout = QGridLayout(self.calendar_week_view)
+        self.calendar_week_layout = QVBoxLayout(self.calendar_week_view)
         self.calendar_week_layout.setContentsMargins(0, 0, 0, 0)
-        self.calendar_week_layout.setSpacing(6)
+        self.calendar_week_layout.setSpacing(0)
+        self.calendar_week_scroll = QScrollArea(self.calendar_week_view)
+        self.calendar_week_scroll.setObjectName("calendarWeekScroll")
+        self.calendar_week_scroll.setAccessibleName("Calendar week time grid")
+        self.calendar_week_scroll.setWidgetResizable(True)
+        self.calendar_week_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.calendar_week_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.calendar_week_grid_widget = HourlyCalendarGrid(
+            self.calendar_week_scroll,
+            column_object_name="calendarWeekColumn",
+        )
+        self.calendar_week_grid_widget.slot_requested.connect(self.calendar_slot_requested.emit)
+        self.calendar_week_scroll.setWidget(self.calendar_week_grid_widget)
+        self.calendar_week_layout.addWidget(self.calendar_week_scroll)
         self.calendar_agenda_view = QListWidget()
         self.calendar_agenda_view.setObjectName("calendarAgendaView")
         self.calendar_agenda_view.setAccessibleName("Calendar agenda")
@@ -3578,23 +4285,32 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_agenda_view.itemDoubleClicked.connect(self._open_calendar_list_item)
         self.calendar_agenda_view.itemChanged.connect(self._calendar_agenda_item_changed)
         self.calendar_view_stack.addWidget(self.calendar_month_view)
+        self.calendar_view_stack.addWidget(self.calendar_day_view)
         self.calendar_view_stack.addWidget(self.calendar_week_view)
         self.calendar_view_stack.addWidget(self.calendar_agenda_view)
-        layout.addWidget(self.calendar_view_stack, 1)
         self.calendar_views = {
             "month": self.calendar_month_view,
+            "day": self.calendar_day_view,
             "week": self.calendar_week_view,
             "agenda": self.calendar_agenda_view,
         }
         self.calendar_month_grid = self.calendar_month_view
-        self.calendar_week_grid = self.calendar_week_view
+        self.calendar_week_grid = self.calendar_week_grid_widget
         self.calendar_agenda_list = self.calendar_agenda_view
         self.calendar_month_cells: dict[date, QFrame] = {}
         self.calendar_week_columns: dict[date, QFrame] = {}
+        self.calendar_day_columns: dict[date, QFrame] = {}
+        self.calendar_time_slots: tuple[QPushButton, ...] = ()
+        self.calendar_day_time_slots: tuple[QPushButton, ...] = ()
 
         self.calendar_event_details_panel = QFrame()
         self.calendar_event_details_panel.setObjectName("calendarEventDetailsPanel")
         self.calendar_event_details_panel.setAccessibleName("Selected calendar event details")
+        self.calendar_event_details_panel.setMinimumWidth(280)
+        self.calendar_event_details_panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
         details_layout = QVBoxLayout(self.calendar_event_details_panel)
         details_layout.setContentsMargins(12, 10, 12, 10)
         details_layout.setSpacing(5)
@@ -3680,7 +4396,16 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_event_details_panel.hide()
         self.calendar_event_details = self.calendar_event_details_panel
         self.calendar_event_open_button = self.calendar_event_native_open_button
-        layout.addWidget(self.calendar_event_details_panel)
+
+        self.calendar_content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.calendar_content_splitter.setObjectName("calendarContentSplitter")
+        self.calendar_content_splitter.setAccessibleName("Calendar and selected event")
+        self.calendar_content_splitter.setChildrenCollapsible(True)
+        self.calendar_content_splitter.addWidget(self.calendar_view_stack)
+        self.calendar_content_splitter.addWidget(self.calendar_event_details_panel)
+        self.calendar_content_splitter.setStretchFactor(0, 1)
+        self.calendar_content_splitter.setStretchFactor(1, 0)
+        layout.addWidget(self.calendar_content_splitter, 1)
 
         self._render_calendar_sources()
         self._render_ical_feeds()
@@ -3688,6 +4413,17 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_freshness_label.setText(_CALENDAR_FRESHNESS_MESSAGES["ready"])
         self.calendar_status_label.clear()
         return page
+
+    def _toggle_calendar_settings(self, visible: bool) -> None:
+        """Reveal source-management controls only when the user asks for them."""
+
+        if not hasattr(self, "calendar_settings_panel"):
+            return
+        self.calendar_settings_panel.setVisible(bool(visible))
+        self.calendar_settings_button.setText("Hide calendars" if visible else "Calendars")
+        self.calendar_settings_button.setAccessibleName(
+            "Hide calendar sources and feeds" if visible else "Show calendar sources and feeds"
+        )
 
     @staticmethod
     def _clear_layout(layout: QGridLayout) -> None:
@@ -3748,14 +4484,22 @@ class PersonalHubMainWindow(QMainWindow):
         title = self._calendar_event_title(event)
         return f"✓ {title}" if event.is_task and event.is_completed else title
 
-    def _build_calendar_event_button(self, event: CalendarEventView) -> QWidget:
+    def _build_calendar_event_button(
+        self,
+        event: CalendarEventView,
+        *,
+        hourly: bool = False,
+    ) -> QWidget:
         row = QWidget()
         row.setObjectName("calendarEventRow")
         kind = "task" if event.is_task else "event"
         row.setAccessibleName(f"Calendar {kind} row: {self._calendar_event_title(event)}")
-        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding if hourly else QSizePolicy.Policy.Fixed,
+        )
         row.setMinimumWidth(0)
-        row.setMaximumHeight(28)
+        row.setMaximumHeight(16777215 if hourly else 28)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
@@ -3800,7 +4544,9 @@ class PersonalHubMainWindow(QMainWindow):
         button.setToolTip(self._calendar_event_label(event, include_date=True))
         button.setAutoDefault(False)
         button.setMinimumHeight(24)
-        button.setMaximumHeight(28)
+        button.setMaximumHeight(16777215 if hourly else 28)
+        if hourly:
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         button.clicked.connect(
             lambda _checked=False, value=event.event_id: self.open_calendar_event(value)
         )
@@ -3995,10 +4741,11 @@ class PersonalHubMainWindow(QMainWindow):
         )
 
     def _events_for_calendar_date(self, value: date) -> tuple[CalendarEventView, ...]:
+        timezone = _calendar_display_timezone(self._calendar_view.timezone)
         return tuple(
             event
             for event in self._calendar_events_for_selected()
-            if _calendar_event_date(event) == value
+            if event_local_date(event, timezone=timezone) == value
         )
 
     def _render_calendar_month(self) -> None:
@@ -4050,46 +4797,65 @@ class PersonalHubMainWindow(QMainWindow):
                 self.calendar_month_layout.addWidget(cell, week + 1, column)
                 self.calendar_month_cells[current] = cell
 
+    def _render_calendar_hourly(
+        self,
+        grid: HourlyCalendarGrid,
+        *,
+        start_date: date,
+        day_count: int,
+    ) -> None:
+        """Render timed and all-day items into the shared hourly grid."""
+
+        timezone = _calendar_display_timezone(self._calendar_view.timezone)
+        events = self._calendar_events_for_selected()
+        schedule = build_hourly_schedule_layout(
+            events,
+            start_date=start_date,
+            day_count=day_count,
+            timezone=timezone,
+            max_events=1_000,
+        )
+        by_id = {event.event_id: event for event in events}
+        timed_widgets: dict[tuple[str, int], QWidget] = {}
+        for placement in schedule.timed:
+            event = by_id.get(placement.event_id)
+            if event is None:
+                continue
+            widget = self._build_calendar_event_button(event, hourly=True)
+            widget.setProperty("calendarPlacementKey", (placement.event_id, placement.day_index))
+            timed_widgets[(placement.event_id, placement.day_index)] = widget
+        all_day_widgets: dict[tuple[str, int], QWidget] = {}
+        for placement in schedule.all_day:
+            event = by_id.get(placement.event_id)
+            if event is None:
+                continue
+            widget = self._build_calendar_event_button(event, hourly=True)
+            widget.setProperty("calendarPlacementKey", (placement.event_id, placement.day_index))
+            all_day_widgets[(placement.event_id, placement.day_index)] = widget
+        grid.render(
+            schedule,
+            timed_widgets=timed_widgets,
+            all_day_widgets=all_day_widgets,
+        )
+
+    def _render_calendar_day(self) -> None:
+        self._render_calendar_hourly(
+            self.calendar_day_grid,
+            start_date=self._calendar_cursor,
+            day_count=1,
+        )
+        self.calendar_day_columns = self.calendar_day_grid.day_columns
+        self.calendar_day_time_slots = self.calendar_day_grid.slot_buttons
+
     def _render_calendar_week(self) -> None:
-        self._clear_layout(self.calendar_week_layout)
-        self.calendar_week_columns.clear()
         week_start = self._calendar_cursor - timedelta(days=self._calendar_cursor.weekday())
-        for column in range(7):
-            current = week_start + timedelta(days=column)
-            header = QLabel(f"{current.strftime('%a')} {current.day}")
-            header.setObjectName("calendarWeekdayLabel")
-            header.setAccessibleName(f"{current.isoformat()} weekday")
-            header.setTextFormat(Qt.TextFormat.PlainText)
-            header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            header.setMinimumWidth(0)
-            header.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            self.calendar_week_layout.addWidget(header, 0, column)
-            self.calendar_week_layout.setColumnMinimumWidth(column, 0)
-            self.calendar_week_layout.setColumnStretch(column, 1)
-            column_frame = QFrame()
-            column_frame.setObjectName("calendarWeekColumn")
-            column_frame.setProperty("calendarDate", current.isoformat())
-            column_frame.setAccessibleName(f"Calendar day {current.isoformat()}")
-            column_frame.setMinimumWidth(0)
-            column_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            column_layout = QVBoxLayout(column_frame)
-            column_layout.setContentsMargins(6, 6, 6, 6)
-            column_layout.setSpacing(4)
-            events = self._events_for_calendar_date(current)
-            for event in events:
-                column_layout.addWidget(self._build_calendar_event_button(event))
-            if not events:
-                empty = QLabel("No events")
-                empty.setObjectName("calendarEmptyLabel")
-                empty.setAccessibleName(f"No events on {current.isoformat()}")
-                empty.setTextFormat(Qt.TextFormat.PlainText)
-                empty.setMinimumWidth(0)
-                empty.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-                column_layout.addWidget(empty)
-            column_layout.addStretch(1)
-            self.calendar_week_layout.addWidget(column_frame, 1, column)
-            self.calendar_week_layout.setRowStretch(1, 1)
-            self.calendar_week_columns[current] = column_frame
+        self._render_calendar_hourly(
+            self.calendar_week_grid_widget,
+            start_date=week_start,
+            day_count=7,
+        )
+        self.calendar_week_columns = self.calendar_week_grid_widget.day_columns
+        self.calendar_time_slots = self.calendar_week_grid_widget.slot_buttons
 
     def _render_calendar_agenda(self) -> None:
         self._calendar_agenda_rendering = True
@@ -4154,6 +4920,7 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _render_calendar_views(self) -> None:
         self._render_calendar_month()
+        self._render_calendar_day()
         self._render_calendar_week()
         self._render_calendar_agenda()
         self._update_calendar_period_label()
@@ -4163,6 +4930,12 @@ class PersonalHubMainWindow(QMainWindow):
     def _update_calendar_period_label(self) -> None:
         if self._calendar_mode_value == "month":
             label = self._calendar_cursor.strftime("%B %Y")
+        elif self._calendar_mode_value == "day":
+            label = (
+                f"{self._calendar_cursor.strftime('%A')}, "
+                f"{self._calendar_cursor.strftime('%B')} {self._calendar_cursor.day}, "
+                f"{self._calendar_cursor.year}"
+            )
         elif self._calendar_mode_value == "week":
             start = self._calendar_cursor - timedelta(days=self._calendar_cursor.weekday())
             end = start + timedelta(days=6)
@@ -4194,6 +4967,9 @@ class PersonalHubMainWindow(QMainWindow):
 
     def show_calendar_month(self) -> bool:
         return self.set_calendar_mode("month")
+
+    def show_calendar_day(self) -> bool:
+        return self.set_calendar_mode("day")
 
     def show_calendar_week(self) -> bool:
         return self.set_calendar_mode("week")
@@ -4295,7 +5071,7 @@ class PersonalHubMainWindow(QMainWindow):
             checkbox.setObjectName("calendarSourceCheckBox")
             checkbox.setAccessibleName(f"Select calendar {name}")
             checkbox.setAccessibleDescription(
-                "Include this calendar in month, week, and agenda views."
+                "Include this calendar in month, day, week, and agenda views."
             )
             checkbox.setChecked(source.calendar_id in self._calendar_selected_ids)
             checkbox.toggled.connect(
@@ -4392,6 +5168,54 @@ class PersonalHubMainWindow(QMainWindow):
             self.calendar_ical_feed_edit_buttons[feed.feed_id] = edit_button
             self.calendar_ical_feed_remove_buttons[feed.feed_id] = remove_button
 
+    def _render_calendar_imports(self) -> None:
+        while self.calendar_local_imports_layout.count():
+            item = self.calendar_local_imports_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.calendar_local_import_remove_buttons.clear()
+        if not self._calendar_local_imports:
+            empty = QLabel("No local CSV or text calendar imports.")
+            empty.setObjectName("calendarLocalImportsEmpty")
+            empty.setAccessibleName("No local calendar imports")
+            empty.setTextFormat(Qt.TextFormat.PlainText)
+            self.calendar_local_imports_layout.addWidget(empty)
+            return
+        for imported in self._calendar_local_imports:
+            row = QFrame()
+            row.setObjectName("calendarLocalImportRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            title = self._display_text(
+                imported.name,
+                sensitive=True,
+                fallback="Local calendar import",
+            )
+            label = QLabel(
+                f"{title} · {imported.event_count} item(s) · {imported.source_format.upper()}"
+            )
+            label.setObjectName("calendarLocalImportLabel")
+            label.setAccessibleName(f"Local calendar import {title}")
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            row_layout.addWidget(label, 1)
+            remove_button = QPushButton("Remove")
+            remove_button.setObjectName("calendarLocalImportRemoveButton")
+            remove_button.setAccessibleName(f"Remove local calendar import {title}")
+            remove_button.setAccessibleDescription(
+                "Remove this local import and its calendar items from Personal Hub."
+            )
+            remove_button.setAutoDefault(False)
+            remove_button.clicked.connect(
+                lambda _checked=False, import_id=imported.import_id: (
+                    self.calendar_import_delete_requested.emit(import_id)
+                )
+            )
+            row_layout.addWidget(remove_button)
+            self.calendar_local_imports_layout.addWidget(row)
+            self.calendar_local_import_remove_buttons[imported.import_id] = remove_button
+
     def _calendar_source_toggled(self, calendar_id: str, selected: bool) -> None:
         if selected:
             self._calendar_selected_ids.add(calendar_id)
@@ -4468,6 +5292,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._calendar_events = calendar_view.events
         self._calendar_sources = calendar_view.calendars
         self._calendar_ical_feeds = calendar_view.ical_feeds
+        self._calendar_local_imports = calendar_view.local_imports
         self._calendar_selected_ids = set(calendar_view.selected_calendar_ids)
         self._calendar_selection_explicit = bool(self._calendar_sources)
         if calendar_view.cursor_date is not None:
@@ -4479,6 +5304,7 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self._render_calendar_sources()
         self._render_ical_feeds()
+        self._render_calendar_imports()
         self._render_calendar_views()
         freshness_text = _CALENDAR_FRESHNESS_MESSAGES[calendar_view.freshness]
         self.calendar_freshness_label.setText(freshness_text)
@@ -4505,6 +5331,7 @@ class PersonalHubMainWindow(QMainWindow):
         if hasattr(self, "calendar_view_stack"):
             self._render_calendar_sources()
             self._render_ical_feeds()
+            self._render_calendar_imports()
             self._render_calendar_views()
             self.calendar_freshness_label.setText(
                 _CALENDAR_FRESHNESS_MESSAGES[self._calendar_view.freshness]
@@ -4540,6 +5367,15 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_quick_add_button.setAutoDefault(False)
         self.task_quick_add_button.clicked.connect(self._quick_add_task)
         quick_layout.addWidget(self.task_quick_add_button)
+        self.task_import_button = QPushButton("Import")
+        self.task_import_button.setObjectName("taskImportButton")
+        self.task_import_button.setAccessibleName("Import tasks")
+        self.task_import_button.setAccessibleDescription(
+            "Import tasks from a CSV file or one task title per line."
+        )
+        self.task_import_button.setAutoDefault(False)
+        self.task_import_button.clicked.connect(lambda: self.task_import_requested.emit())
+        quick_layout.addWidget(self.task_import_button)
         layout.addWidget(quick_add)
         # Short aliases make the quick-add surface easy to discover in tests
         # and by composition code without adding another abstraction layer.
@@ -4547,11 +5383,35 @@ class PersonalHubMainWindow(QMainWindow):
         self.quick_add_input = self.task_quick_add_input
         self.quick_add_button = self.task_quick_add_button
 
-        filters = QFrame()
-        filters.setObjectName("taskFilters")
-        filters_layout = QHBoxLayout(filters)
-        filters_layout.setContentsMargins(0, 0, 0, 0)
-        filters_layout.setSpacing(8)
+        task_view_bar = QWidget()
+        task_view_bar.setObjectName("taskViewBar")
+        task_view_layout = QHBoxLayout(task_view_bar)
+        task_view_layout.setContentsMargins(0, 0, 0, 0)
+        task_view_layout.setSpacing(8)
+
+        self.task_quick_view_button = QToolButton()
+        self.task_quick_view_button.setObjectName("taskQuickViewButton")
+        self.task_quick_view_button.setAccessibleName("Task quick view")
+        self.task_quick_view_button.setToolTip("Choose a task view")
+        self.task_quick_view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.task_quick_view_menu = QMenu(self.task_quick_view_button)
+        self.task_quick_view_actions: dict[str, QAction] = {}
+        for label, value in (
+            ("All tasks", "all"),
+            ("Due today", "today"),
+            ("Upcoming", "upcoming"),
+            ("Overdue", "overdue"),
+            ("No date", "unscheduled"),
+        ):
+            action = self.task_quick_view_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(value)
+            action.triggered.connect(
+                lambda _checked=False, selected=value: self.set_task_quick_view(selected)
+            )
+            self.task_quick_view_actions[value] = action
+        self.task_quick_view_button.setMenu(self.task_quick_view_menu)
+        task_view_layout.addWidget(self.task_quick_view_button)
 
         self.task_state_filter = QComboBox()
         self.task_state_filter.setObjectName("taskStateFilter")
@@ -4564,7 +5424,6 @@ class PersonalHubMainWindow(QMainWindow):
         ):
             self.task_state_filter.addItem(label, value)
         self.task_state_filter.currentIndexChanged.connect(self._task_filters_changed)
-        filters_layout.addWidget(self.task_state_filter)
         self.task_status_filter = self.task_state_filter
 
         self.task_due_filter = QComboBox()
@@ -4579,7 +5438,6 @@ class PersonalHubMainWindow(QMainWindow):
         ):
             self.task_due_filter.addItem(label, value)
         self.task_due_filter.currentIndexChanged.connect(self._task_filters_changed)
-        filters_layout.addWidget(self.task_due_filter)
         self.task_date_filter = self.task_due_filter
 
         self.task_sort_combo = QComboBox()
@@ -4593,17 +5451,49 @@ class PersonalHubMainWindow(QMainWindow):
         ):
             self.task_sort_combo.addItem(label, value)
         self.task_sort_combo.currentIndexChanged.connect(self._task_filters_changed)
-        filters_layout.addWidget(self.task_sort_combo)
         self.task_sort_filter = self.task_sort_combo
 
         self.task_filter_input = QLineEdit()
         self.task_filter_input.setObjectName("taskSearchInput")
         self.task_filter_input.setAccessibleName("Filter tasks")
-        self.task_filter_input.setPlaceholderText("Filter title, notes, list, or tag")
+        self.task_filter_input.setPlaceholderText("Search tasks")
         self.task_filter_input.textChanged.connect(self._task_filters_changed)
-        filters_layout.addWidget(self.task_filter_input, 1)
+        task_view_layout.addWidget(self.task_filter_input, 1)
         self.task_search_input = self.task_filter_input
         self.task_filter = self.task_filter_input
+
+        self.task_filters_button = QToolButton()
+        self.task_filters_button.setObjectName("taskFiltersButton")
+        self.task_filters_button.setText("Filters")
+        self.task_filters_button.setAccessibleName("Show task filters")
+        self.task_filters_button.setToolTip("Show state, due-date, and sort filters")
+        self.task_filters_button.setCheckable(True)
+        self.task_filters_button.setAutoRaise(True)
+        self.task_filters_button.toggled.connect(self._toggle_task_filters)
+        task_view_layout.addWidget(self.task_filters_button)
+
+        self.task_undo_button = QToolButton()
+        self.task_undo_button.setObjectName("taskUndoButton")
+        self.task_undo_button.setText("Undo")
+        self.task_undo_button.setAccessibleName("Undo last task completion or archive")
+        self.task_undo_button.setToolTip("Undo last completion or archive")
+        self.task_undo_button.setAutoRaise(True)
+        self.task_undo_button.clicked.connect(lambda _checked=False: self.undo_task())
+        self.task_undo_button.setVisible(False)
+        task_view_layout.addWidget(self.task_undo_button)
+        self.task_undo_action = self.task_undo_button
+        layout.addWidget(task_view_bar)
+
+        filters = QFrame()
+        filters.setObjectName("taskFilters")
+        filters_layout = QHBoxLayout(filters)
+        filters_layout.setContentsMargins(10, 8, 10, 8)
+        filters_layout.setSpacing(8)
+        filters_layout.addWidget(self.task_state_filter)
+        filters_layout.addWidget(self.task_due_filter)
+        filters_layout.addWidget(self.task_sort_combo)
+        filters.setVisible(False)
+        self.task_filters_panel = filters
         layout.addWidget(filters)
 
         self.task_status_label = QLabel("No tasks yet.")
@@ -4611,14 +5501,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_status_label.setAccessibleName("Task list status")
         self.task_status_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.task_status_label)
-        self.task_undo_button = QPushButton("Undo last completion/archive")
-        self.task_undo_button.setObjectName("taskUndoButton")
-        self.task_undo_button.setAccessibleName("Undo last task completion or archive")
-        self.task_undo_button.setAutoDefault(False)
-        self.task_undo_button.clicked.connect(lambda _checked=False: self.undo_task())
-        self.task_undo_button.setVisible(False)
-        layout.addWidget(self.task_undo_button)
-        self.task_undo_action = self.task_undo_button
 
         self.tasks_list = TaskListWidget()
         self.tasks_list.setObjectName("tasksList")
@@ -4626,13 +5508,21 @@ class PersonalHubMainWindow(QMainWindow):
         self.tasks_list.setSpacing(6)
         self.tasks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.tasks_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout.addWidget(self.tasks_list, 1)
         self.task_list = self.tasks_list
         self.task_list_widget = self.tasks_list
 
         self.task_editor_panel = self._build_task_editor()
-        layout.addWidget(self.task_editor_panel)
         self.task_editor = self.task_editor_panel
+        self.task_content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.task_content_splitter.setObjectName("taskContentSplitter")
+        self.task_content_splitter.setAccessibleName("Tasks and task editor")
+        self.task_content_splitter.setChildrenCollapsible(True)
+        self.task_content_splitter.addWidget(self.tasks_list)
+        self.task_content_splitter.addWidget(self.task_editor_panel)
+        self.task_content_splitter.setStretchFactor(0, 1)
+        self.task_content_splitter.setStretchFactor(1, 0)
+        layout.addWidget(self.task_content_splitter, 1)
+        self._sync_task_quick_view()
         self._render_task_list()
         return page
 
@@ -4649,6 +5539,7 @@ class PersonalHubMainWindow(QMainWindow):
         heading.setObjectName("taskEditorTitle")
         heading.setAccessibleName("Task editor heading")
         heading.setTextFormat(Qt.TextFormat.PlainText)
+        self.task_editor_title_label = heading
         outer.addWidget(heading)
         self.task_editor_status_label = QLabel("")
         self.task_editor_status_label.setObjectName("taskEditorStatus")
@@ -4705,7 +5596,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_all_day = self.task_all_day_input
 
         add_label("Timezone", 3)
-        self.task_timezone_input = QLineEdit("local")
+        self.task_timezone_input = TimezoneComboBox(include_local=True)
         self.task_timezone_input.setObjectName("taskTimezoneInput")
         self.task_timezone_input.setAccessibleName("Task timezone")
         form.addWidget(self.task_timezone_input, 3, 1)
@@ -4929,6 +5820,40 @@ class PersonalHubMainWindow(QMainWindow):
             "search": self._task_search_value,
         }
 
+    def _toggle_task_filters(self, visible: bool) -> None:
+        """Keep advanced task filters available without dominating the toolbar."""
+
+        self.task_filters_panel.setVisible(bool(visible))
+        self.task_filters_button.setText("Hide filters" if visible else "Filters")
+        self.task_filters_button.setAccessibleName(
+            "Hide task filters" if visible else "Show task filters"
+        )
+
+    def set_task_quick_view(self, value: str) -> dict[str, str]:
+        """Apply one of the compact task views exposed in the toolbar menu."""
+
+        normalized = _safe_text(value, fallback="all", limit=32).casefold()
+        if normalized not in {"all", "today", "upcoming", "overdue", "unscheduled"}:
+            normalized = "all"
+        return self.set_task_filters(due=normalized)
+
+    def _sync_task_quick_view(self) -> None:
+        """Reflect the current due filter in the compact view menu."""
+
+        if not hasattr(self, "task_quick_view_actions"):
+            return
+        value = self._task_due_filter_value
+        labels = {
+            "all": "All tasks",
+            "today": "Due today",
+            "upcoming": "Upcoming",
+            "overdue": "Overdue",
+            "unscheduled": "No date",
+        }
+        self.task_quick_view_button.setText(f"View: {labels.get(value, 'All tasks')}")
+        for action_value, action in self.task_quick_view_actions.items():
+            action.setChecked(action_value == value)
+
     def render_tasks(
         self,
         tasks: Iterable[TaskView | Mapping[str, object]] | None,
@@ -4956,6 +5881,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._task_due_filter_value = str(self.task_due_filter.currentData() or "all")
         self._task_sort_value = str(self.task_sort_combo.currentData() or "due")
         self._task_search_value = self.task_filter_input.text().strip().casefold()
+        self._sync_task_quick_view()
         self._render_task_list()
         self.task_filters_changed.emit(self.task_filters)
 
@@ -5140,6 +6066,8 @@ class PersonalHubMainWindow(QMainWindow):
         if task is None:
             return None
         self._editing_task_id = task.task_id
+        self._editing_new_task = False
+        self.task_editor_title_label.setText("Edit task")
         self._populate_task_editor(task)
         self.task_editor_panel.show()
         self.task_editor_status_label.setText("Edit fields, then save or cancel.")
@@ -5149,6 +6077,36 @@ class PersonalHubMainWindow(QMainWindow):
 
     edit_task_in_editor = open_task_editor
 
+    def open_new_task_editor(
+        self,
+        *,
+        due_at: datetime | None = None,
+        due_is_all_day: bool = False,
+        timezone: str = "local",
+    ) -> None:
+        """Open the task editor with an optional calendar slot prefilled."""
+
+        self._editing_task_id = None
+        self._editing_new_task = True
+        self.task_editor_title_label.setText("Add scheduled task")
+        self.task_title_input.clear()
+        self.task_notes_input.clear()
+        self.task_has_due_input.setChecked(due_at is not None)
+        if due_at is not None:
+            self.task_due_input.setDateTime(_qt_datetime(due_at))
+        self.task_all_day_input.setChecked(bool(due_is_all_day))
+        self.task_timezone_input.set_timezone(_safe_text(timezone, fallback="local", limit=128))
+        self._set_combo_data(self.task_priority_input, "normal", fallback="normal")
+        self.task_list_input.clear()
+        self.task_tags_input.clear()
+        self.task_recurrence_input.setCurrentText("")
+        self.task_reminders_input.clear()
+        self.task_editor_panel.show()
+        self.task_editor_status_label.setText(
+            "Add a local task for this calendar time, then save it to place it on the grid."
+        )
+        self.task_title_input.setFocus()
+
     def _populate_task_editor(self, task: TaskView) -> None:
         self.task_title_input.setText(task.title)
         self.task_notes_input.setPlainText(task.notes)
@@ -5157,7 +6115,7 @@ class PersonalHubMainWindow(QMainWindow):
         if due is not None:
             self.task_due_input.setDateTime(_qt_datetime(due))
         self.task_all_day_input.setChecked(task.due_is_all_day)
-        self.task_timezone_input.setText(task.timezone)
+        self.task_timezone_input.set_timezone(task.timezone)
         self._set_combo_data(self.task_priority_input, task.priority, fallback="normal")
         self.task_list_input.setText(task.list_id or "")
         self.task_tags_input.setText(", ".join(task.tags))
@@ -5168,38 +6126,61 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _save_task_edit(self) -> TaskView | None:
         task_id = getattr(self, "_editing_task_id", None)
-        if not task_id:
+        is_new = bool(getattr(self, "_editing_new_task", False))
+        if not task_id and not is_new:
             return None
         title = _safe_text(self.task_title_input.text(), limit=240)
         if not title:
             self.task_editor_status_label.setText("A task title is required.")
             self.task_title_input.setFocus()
             return None
-        due = (
-            _coerce_datetime(self.task_due_input.dateTime().toString(Qt.DateFormat.ISODate))
-            if self.task_has_due_input.isChecked()
-            else None
-        )
-        updated = self.edit_task(
-            task_id,
-            title=title,
-            notes=self.task_notes_input.toPlainText(),
-            due_at=due,
-            due_is_all_day=self.task_all_day_input.isChecked(),
-            timezone=self.task_timezone_input.text(),
-            priority=self.task_priority_input.currentData() or "normal",
-            list_id=self.task_list_input.text(),
-            tags=self.task_tags_input.text(),
-            recurrence=self.task_recurrence_input.currentText(),
-            reminder_offsets_minutes=self.task_reminders_input.text(),
-        )
+        try:
+            due_value = self.task_due_input.dateTime()
+            due_wall_clock = datetime(
+                due_value.date().year(),
+                due_value.date().month(),
+                due_value.date().day(),
+                due_value.time().hour(),
+                due_value.time().minute(),
+                due_value.time().second(),
+                due_value.time().msec() * 1_000,
+            )
+            due = (
+                _task_editor_due_datetime(
+                    due_wall_clock,
+                    self.task_timezone_input.timezone(),
+                )
+                if self.task_has_due_input.isChecked()
+                else None
+            )
+        except ValueError:
+            self.task_editor_status_label.setText("Enter a recognized task timezone.")
+            self.task_timezone_input.setFocus()
+            return None
+        changes = {
+            "title": title,
+            "notes": self.task_notes_input.toPlainText(),
+            "due_at": due,
+            "due_is_all_day": self.task_all_day_input.isChecked(),
+            "timezone": self.task_timezone_input.timezone(),
+            "priority": self.task_priority_input.currentData() or "normal",
+            "list_id": self.task_list_input.text(),
+            "tags": self.task_tags_input.text(),
+            "recurrence": self.task_recurrence_input.currentText(),
+            "reminder_offsets_minutes": self.task_reminders_input.text(),
+        }
+        updated = self.add_task(**changes) if is_new else self.edit_task(task_id, **changes)
         if updated is not None:
             self.task_editor_panel.hide()
             self._editing_task_id = None
+            self._editing_new_task = False
+            self.task_editor_title_label.setText("Edit task")
         return updated
 
     def _cancel_task_edit(self) -> None:
         self._editing_task_id = None
+        self._editing_new_task = False
+        self.task_editor_title_label.setText("Edit task")
         self.task_editor_panel.hide()
         self.task_editor_status_label.clear()
 
@@ -6776,6 +7757,53 @@ class PersonalHubMainWindow(QMainWindow):
 
     set_today_news = render_today_news
 
+    def _build_attention_notification_panel(
+        self,
+    ) -> tuple[QFrame, QLabel, QLabel, QPushButton, QPushButton]:
+        panel = QFrame()
+        panel.setObjectName("attentionNotificationPanel")
+        panel.setAccessibleName("Attention message notification")
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        panel_layout = QHBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 12, 18, 12)
+        panel_layout.setSpacing(14)
+
+        body = QWidget(panel)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(3)
+        title = QLabel("Attention messages", body)
+        title.setObjectName("attentionNotificationTitle")
+        title.setAccessibleName("Attention message notification heading")
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        body_layout.addWidget(title)
+        summary = QLabel(body)
+        summary.setObjectName("attentionNotificationBody")
+        summary.setAccessibleName("Attention message notification details")
+        summary.setTextFormat(Qt.TextFormat.PlainText)
+        summary.setWordWrap(True)
+        body_layout.addWidget(summary)
+        panel_layout.addWidget(body, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        open_button = QPushButton("Review messages", panel)
+        open_button.setObjectName("attentionNotificationOpenButton")
+        open_button.setAccessibleName("Review attention messages")
+        open_button.setAutoDefault(False)
+        open_button.clicked.connect(self._open_attention_notification)
+        actions.addWidget(open_button)
+        dismiss_button = QPushButton("Dismiss", panel)
+        dismiss_button.setObjectName("attentionNotificationDismissButton")
+        dismiss_button.setAccessibleName("Dismiss attention message notification")
+        dismiss_button.setAutoDefault(False)
+        dismiss_button.clicked.connect(self._dismiss_attention_notification)
+        actions.addWidget(dismiss_button)
+        panel_layout.addLayout(actions)
+        panel.hide()
+        return panel, title, summary, open_button, dismiss_button
+
     @staticmethod
     def _build_source_failure_panel() -> tuple[QFrame, QLabel, QLabel]:
         panel = QFrame()
@@ -6805,19 +7833,33 @@ class PersonalHubMainWindow(QMainWindow):
             "Inbox",
             "Review alerts, reminders, and selected message summaries.",
         )
+
+        self.inbox_mode_tabs = QTabWidget()
+        self.inbox_mode_tabs.setObjectName("inboxModeTabs")
+        self.inbox_mode_tabs.setAccessibleName("Inbox content")
+        self.inbox_mode_tabs.currentChanged.connect(self._inbox_mode_tab_changed)
+        self.inbox_tabs = self.inbox_mode_tabs
+
+        alerts_page = QWidget()
+        alerts_page.setObjectName("inboxAlertsPage")
+        alerts_page.setAccessibleName("Inbox alerts")
+        alerts_layout = QVBoxLayout(alerts_page)
+        alerts_layout.setContentsMargins(4, 8, 4, 4)
+        alerts_layout.setSpacing(8)
+
         self.inbox_status_label = QLabel("No attention items yet.")
         self.inbox_status_label.setObjectName("pageSubtitle")
         self.inbox_status_label.setAccessibleName("Inbox status")
         self.inbox_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.inbox_status_label.setWordWrap(True)
-        layout.addWidget(self.inbox_status_label)
+        alerts_layout.addWidget(self.inbox_status_label)
         self.inbox_list = QListWidget()
         self.inbox_list.setObjectName("inboxList")
         self.inbox_list.setAccessibleName("Inbox items")
         self.inbox_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.inbox_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.inbox_list.currentItemChanged.connect(self._inbox_selection_changed)
-        layout.addWidget(self.inbox_list, 1)
+        alerts_layout.addWidget(self.inbox_list, 1)
         inbox_actions = QHBoxLayout()
         self.inbox_read_button = QPushButton("Mark read")
         self.inbox_read_button.setAccessibleName("Mark selected Inbox item read or unread")
@@ -6839,31 +7881,42 @@ class PersonalHubMainWindow(QMainWindow):
         )
         inbox_actions.addWidget(self.inbox_archive_button)
         inbox_actions.addStretch(1)
-        layout.addLayout(inbox_actions)
+        alerts_layout.addLayout(inbox_actions)
 
-        message_heading = QLabel("Attention messages")
-        message_heading.setObjectName("sectionTitle")
-        message_heading.setAccessibleName("Attention messages heading")
-        message_heading.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(message_heading)
+        messages_page = QWidget()
+        messages_page.setObjectName("inboxMessagesPage")
+        messages_page.setAccessibleName("Inbox attention messages")
+        messages_layout = QVBoxLayout(messages_page)
+        messages_layout.setContentsMargins(4, 8, 4, 4)
+        messages_layout.setSpacing(8)
+
         self.message_status_label = QLabel("No message sources configured.")
         self.message_status_label.setObjectName("pageSubtitle")
         self.message_status_label.setAccessibleName("Attention message status")
         self.message_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.message_status_label.setWordWrap(True)
-        layout.addWidget(self.message_status_label)
+        messages_layout.addWidget(self.message_status_label)
 
-        category_heading = QLabel("Categories")
-        category_heading.setObjectName("sectionTitle")
-        category_heading.setAccessibleName("Message category heading")
-        category_heading.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(category_heading)
+        category_bar = QFrame()
+        category_bar.setObjectName("messageCategoryBar")
+        category_bar_layout = QHBoxLayout(category_bar)
+        category_bar_layout.setContentsMargins(0, 0, 0, 0)
+        category_bar_layout.setSpacing(5)
         self.message_category_group = QButtonGroup(self)
         self.message_category_group.setExclusive(True)
-        category_layout = QHBoxLayout()
-        category_layout.setSpacing(6)
+        self.message_category_selector = QToolButton(category_bar)
+        self.message_category_selector.setObjectName("messageCategorySelector")
+        self.message_category_selector.setText("Category: Primary")
+        self.message_category_selector.setAccessibleName("Message category")
+        self.message_category_selector.setToolTip("Choose a local message category")
+        self.message_category_selector.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.message_category_menu = QMenu(self.message_category_selector)
+        self.message_category_actions: dict[str, QAction] = {}
+        category_bar_layout.addWidget(self.message_category_selector)
         for category in MESSAGE_CATEGORY_VALUES:
-            button = QPushButton(MESSAGE_CATEGORY_LABELS[category])
+            # Keep the button-level contract for callers and tests while the
+            # normal UI uses one compact category menu at narrow widths.
+            button = QPushButton(MESSAGE_CATEGORY_LABELS[category], category_bar)
             button.setObjectName(f"messageCategory{category.title()}Button")
             button.setAccessibleName(f"Show {MESSAGE_CATEGORY_LABELS[category]} messages")
             button.setCheckable(True)
@@ -6873,15 +7926,24 @@ class PersonalHubMainWindow(QMainWindow):
             )
             self.message_category_group.addButton(button)
             self.message_category_buttons[category] = button
-            category_layout.addWidget(button)
-        category_layout.addStretch(1)
-        layout.addLayout(category_layout)
+            button.hide()
+            action = self.message_category_menu.addAction(MESSAGE_CATEGORY_LABELS[category])
+            action.setCheckable(True)
+            action.setData(category)
+            action.triggered.connect(
+                lambda _checked=False, selected=category: self.set_message_category(selected)
+            )
+            self.message_category_actions[category] = action
+        category_bar_layout.addStretch(1)
         self.message_category_buttons["primary"].setChecked(True)
+        self.message_category_actions["primary"].setChecked(True)
+        self.message_category_selector.setMenu(self.message_category_menu)
         self.message_category_status_label = QLabel("Primary: 0 messages")
         self.message_category_status_label.setObjectName("messageCategoryStatus")
         self.message_category_status_label.setAccessibleName("Selected message category status")
         self.message_category_status_label.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.message_category_status_label)
+        category_bar_layout.addWidget(self.message_category_status_label)
+        messages_layout.addWidget(category_bar)
 
         self.message_list = QListWidget()
         self.message_list.setObjectName("messageSummaryList")
@@ -6892,7 +7954,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_list.itemDoubleClicked.connect(
             lambda _item: self._request_selected_message_body()
         )
-        layout.addWidget(self.message_list, 1)
 
         message_actions = QHBoxLayout()
         self.message_open_button = QPushButton("View body")
@@ -6913,13 +7974,19 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_clear_button.clicked.connect(self.message_clear_requested.emit)
         message_actions.addWidget(self.message_clear_button)
         message_actions.addStretch(1)
-        layout.addLayout(message_actions)
+        left_messages = QWidget()
+        left_messages.setObjectName("messageListPane")
+        left_messages.setAccessibleName("Message summary list and actions")
+        left_layout = QVBoxLayout(left_messages)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self.message_list, 1)
+        left_layout.addLayout(message_actions)
 
         body_heading = QLabel("Message body (memory only)")
         body_heading.setObjectName("sectionTitle")
         body_heading.setAccessibleName("Memory-only message body heading")
         body_heading.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(body_heading)
         self.message_body_view = QPlainTextEdit()
         self.message_body_view.setObjectName("messageBodyView")
         self.message_body_view.setAccessibleName("Sanitized memory-only message body")
@@ -6928,7 +7995,6 @@ class PersonalHubMainWindow(QMainWindow):
             "Select a summary and choose View body. Remote content is never loaded."
         )
         self.message_body_view.setMaximumBlockCount(4_000)
-        layout.addWidget(self.message_body_view, 1)
         self.message_link_list = QListWidget()
         self.message_link_list.setObjectName("messageBodyLinks")
         self.message_link_list.setAccessibleName("Safe links in the selected message")
@@ -6936,7 +8002,30 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_link_list.itemDoubleClicked.connect(
             lambda item: self.message_deep_link_requested.emit(item.text())
         )
-        layout.addWidget(self.message_link_list)
+        right_messages = QWidget()
+        right_messages.setObjectName("messageDetailPane")
+        right_messages.setAccessibleName("Selected message details")
+        right_layout = QVBoxLayout(right_messages)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(body_heading)
+        right_layout.addWidget(self.message_body_view, 1)
+        right_layout.addWidget(self.message_link_list)
+
+        self.message_content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.message_content_splitter.setObjectName("messageContentSplitter")
+        self.message_content_splitter.setAccessibleName("Message summaries and selected body")
+        self.message_content_splitter.setChildrenCollapsible(False)
+        self.message_content_splitter.addWidget(left_messages)
+        self.message_content_splitter.addWidget(right_messages)
+        self.message_content_splitter.setStretchFactor(0, 1)
+        self.message_content_splitter.setStretchFactor(1, 1)
+        messages_layout.addWidget(self.message_content_splitter, 1)
+
+        self.inbox_mode_tabs.addTab(alerts_page, "Alerts")
+        self.inbox_mode_tabs.addTab(messages_page, "Messages")
+        layout.addWidget(self.inbox_mode_tabs, 1)
+        self._update_inbox_tab_labels()
         return page
 
     def _build_sources_page(self) -> QWidget:
@@ -7035,6 +8124,7 @@ class PersonalHubMainWindow(QMainWindow):
             ("text_scale", "Text scale"),
             ("high_contrast", "High contrast"),
             ("reduced_motion", "Reduced motion"),
+            ("canvas_remove_completed_assignments", "Completed Canvas assignments"),
             ("network_refresh_paused", "Network refresh"),
         ):
             row = QWidget()
@@ -7076,6 +8166,10 @@ class PersonalHubMainWindow(QMainWindow):
             ("digest_enabled", "Daily digest"),
             ("high_contrast", "High contrast"),
             ("reduced_motion", "Reduced motion"),
+            (
+                "canvas_remove_completed_assignments",
+                "Remove completed Canvas assignments after due date",
+            ),
         )
         for key, label in checkbox_fields:
             checkbox = QCheckBox(label)
@@ -7083,7 +8177,7 @@ class PersonalHubMainWindow(QMainWindow):
             editor_layout.addRow(checkbox)
             self.settings_checkboxes[key] = checkbox
 
-        self.settings_inputs: dict[str, QLineEdit] = {}
+        self.settings_inputs: dict[str, QLineEdit | TimezoneComboBox] = {}
         input_fields = (
             ("default_timezone", "Default timezone", "UTC"),
             ("quiet_hours_start", "Quiet hours start", "22:00"),
@@ -7104,8 +8198,12 @@ class PersonalHubMainWindow(QMainWindow):
             label_widget.setTextFormat(Qt.TextFormat.PlainText)
             label_widget.setAccessibleName(f"{label} label")
             label_widget.setWordWrap(True)
-            input_widget = QLineEdit()
-            input_widget.setPlaceholderText(placeholder)
+            if key == "default_timezone":
+                input_widget = TimezoneComboBox()
+                input_widget.setObjectName("defaultTimezoneInput")
+            else:
+                input_widget = QLineEdit()
+                input_widget.setPlaceholderText(placeholder)
             input_widget.setAccessibleName(label)
             editor_layout.addRow(label_widget, input_widget)
             self.settings_inputs[key] = input_widget
@@ -7394,6 +8492,110 @@ class PersonalHubMainWindow(QMainWindow):
         return _safe_text(value, fallback=fallback)
 
     @property
+    def inbox_mode(self) -> str:
+        return self._inbox_mode_value
+
+    def _inbox_mode_tab_changed(self, index: int) -> None:
+        value = "messages" if index == 1 else "alerts"
+        changed = value != self._inbox_mode_value
+        self._inbox_mode_value = value
+        if changed:
+            self.inbox_mode_changed.emit(value)
+
+    def show_inbox_mode(self, mode: str) -> bool:
+        """Select the alert or message workflow without performing I/O."""
+
+        normalized = _safe_text(mode, fallback="alerts", limit=24).casefold()
+        index = {"alerts": 0, "messages": 1}.get(normalized)
+        if index is None:
+            return False
+        self.inbox_mode_tabs.setCurrentIndex(index)
+        return True
+
+    def _update_inbox_tab_labels(self) -> None:
+        if not hasattr(self, "inbox_mode_tabs"):
+            return
+        alert_count = len(self._inbox_items)
+        alert_unread = sum(item.unread for item in self._inbox_items)
+        message_count = len(self._message_all_summaries)
+        message_unread = sum(summary.unread for summary in self._message_all_summaries)
+        self.inbox_mode_tabs.setTabText(
+            0,
+            f"Alerts · {alert_unread} unread" if alert_count else "Alerts · 0",
+        )
+        self.inbox_mode_tabs.setTabToolTip(
+            0,
+            f"{alert_count} alert{'s' if alert_count != 1 else ''}, {alert_unread} unread",
+        )
+        self.inbox_mode_tabs.setTabText(
+            1,
+            f"Messages · {message_unread} unread" if message_count else "Messages · 0",
+        )
+        self.inbox_mode_tabs.setTabToolTip(
+            1,
+            f"{message_count} message{'s' if message_count != 1 else ''}, {message_unread} unread",
+        )
+
+    @property
+    def attention_notification(self) -> AttentionNotificationView | None:
+        return self._attention_notification
+
+    def render_attention_notification(self, value: object | None) -> None:
+        """Render one ephemeral, bounded notice above the page content."""
+
+        if value is None:
+            self.clear_attention_notification()
+            return
+        notice = _coerce_attention_notification(value)
+        self._attention_notification = notice
+        self.attention_notification_title.setText(
+            self._display_text(notice.title, fallback="Attention messages")
+        )
+        self.attention_notification_body.setText(
+            self._display_text(
+                notice.summary,
+                sensitive=notice.sensitive,
+                fallback="Unread attention messages are ready to review.",
+            )
+        )
+        self.attention_notification_open_button.setText(
+            _safe_text(notice.action_label, fallback="Review messages", limit=64)
+        )
+        enabled = not self._locked
+        self.attention_notification_open_button.setEnabled(enabled)
+        self.attention_notification_dismiss_button.setEnabled(enabled)
+        self.attention_notification_panel.show()
+
+    show_attention_notification = render_attention_notification
+    render_attention_notice = render_attention_notification
+    show_attention_notice = render_attention_notification
+
+    def clear_attention_notification(self) -> None:
+        self._attention_notification = None
+        self.attention_notification_panel.hide()
+        self.attention_notification_body.clear()
+        self.attention_notification_open_button.setEnabled(False)
+        self.attention_notification_dismiss_button.setEnabled(False)
+
+    clear_attention_notice = clear_attention_notification
+
+    def _open_attention_notification(self) -> None:
+        notice = self._attention_notification
+        if notice is None or self._locked:
+            return
+        self.attention_notification_open_requested.emit(notice)
+        self.clear_attention_notification()
+        self.show_destination("Inbox")
+        self.show_inbox_mode("messages")
+
+    def _dismiss_attention_notification(self) -> None:
+        notice = self._attention_notification
+        if notice is None or self._locked:
+            return
+        self.attention_notification_dismissed.emit(notice)
+        self.clear_attention_notification()
+
+    @property
     def inbox_items(self) -> tuple[InboxItemView, ...]:
         return self._inbox_items
 
@@ -7411,6 +8613,7 @@ class PersonalHubMainWindow(QMainWindow):
         if not self._inbox_items:
             self.inbox_status_label.setText("No attention items yet.")
             self._inbox_selection_changed(None, None)
+            self._update_inbox_tab_labels()
             return
         unread_count = sum(item.unread for item in self._inbox_items)
         self.inbox_status_label.setText(
@@ -7440,11 +8643,15 @@ class PersonalHubMainWindow(QMainWindow):
             list_item.setData(Qt.ItemDataRole.UserRole, item.item_id)
             list_item.setToolTip(rendered)
             self.inbox_list.addItem(list_item)
+            row = _InboxRowWidget(item, title, " · ".join(details))
+            self.inbox_list.setItemWidget(list_item, row)
+            list_item.setSizeHint(row.sizeHint())
             if item.item_id == selected_id:
                 selected_row = index
         if selected_row >= 0:
             self.inbox_list.setCurrentRow(selected_row)
         self._inbox_selection_changed(None, None)
+        self._update_inbox_tab_labels()
 
     update_inbox = render_inbox
     set_inbox_items = render_inbox
@@ -7568,6 +8775,9 @@ class PersonalHubMainWindow(QMainWindow):
             )
             item.setToolTip(rendered)
             self.message_list.addItem(item)
+            row = _MessageSummaryRowWidget(summary, title, " · ".join(details))
+            self.message_list.setItemWidget(item, row)
+            item.setSizeHint(row.sizeHint())
             if selected_key == (summary.source_id, summary.message_id):
                 selected_row = index
         if selected_row >= 0:
@@ -7583,14 +8793,25 @@ class PersonalHubMainWindow(QMainWindow):
             == self._message_category_value
         )
         label = message_category_label(self._message_category_value)
+        selected_label = label
         self.message_category_status_label.setText(
             f"{label}: {selected_count} message{'s' if selected_count != 1 else ''} · "
             f"{unread_count} unread"
         )
         for category, button in self.message_category_buttons.items():
             total = counts[category]
+            label = MESSAGE_CATEGORY_LABELS[category]
+            button.setText(label)
             button.setChecked(category == self._message_category_value)
             button.setToolTip(f"Show {MESSAGE_CATEGORY_LABELS[category]} messages ({total})")
+            action = self.message_category_actions.get(category)
+            if action is not None:
+                action.setText(f"{label} · {total}")
+                action.setChecked(category == self._message_category_value)
+        selected_total = counts[self._message_category_value]
+        self.message_category_selector.setText(f"Category: {selected_label} · {selected_total}")
+        self.message_category_selector.setAccessibleName(f"Message category: {selected_label}")
+        self._update_inbox_tab_labels()
 
     def render_messages(self, view: MessagesView) -> None:
         """Render retained summaries without triggering provider or body access."""
@@ -7752,7 +8973,7 @@ class PersonalHubMainWindow(QMainWindow):
         }
         values.update(
             {
-                "default_timezone": self.settings_inputs["default_timezone"].text(),
+                "default_timezone": self.settings_inputs["default_timezone"].timezone(),
                 "notification_quiet_hours_start": self.settings_inputs["quiet_hours_start"].text(),
                 "notification_quiet_hours_end": self.settings_inputs["quiet_hours_end"].text(),
                 "digest_time": self.settings_inputs["digest_time"].text(),
@@ -7802,6 +9023,9 @@ class PersonalHubMainWindow(QMainWindow):
             "text_scale": f"{max(1.0, min(view.text_scale, 1.75)):.2g}×",
             "high_contrast": "On" if view.high_contrast else "Off",
             "reduced_motion": "On" if view.reduced_motion else "Off",
+            "canvas_remove_completed_assignments": (
+                "On" if view.canvas_remove_completed_assignments else "Off"
+            ),
             "network_refresh_paused": "Paused" if view.network_refresh_paused else "Active",
         }
         self.settings_values = values
@@ -7821,6 +9045,7 @@ class PersonalHubMainWindow(QMainWindow):
                 "digest_enabled": view.digest_enabled,
                 "high_contrast": view.high_contrast,
                 "reduced_motion": view.reduced_motion,
+                "canvas_remove_completed_assignments": view.canvas_remove_completed_assignments,
             }
             for key, checked in checkbox_values.items():
                 self.settings_checkboxes[key].setChecked(checked)
@@ -7840,7 +9065,11 @@ class PersonalHubMainWindow(QMainWindow):
                 "message_refresh_minutes": view.message_refresh_minutes,
             }
             for key, value in input_values.items():
-                self.settings_inputs[key].setText(str(value))
+                input_widget = self.settings_inputs[key]
+                if isinstance(input_widget, TimezoneComboBox):
+                    input_widget.set_timezone(value)
+                else:
+                    input_widget.setText(str(value))
             scale_index = self.settings_text_scale_combo.findData(
                 max(1.0, min(view.text_scale, 1.75))
             )
@@ -7991,6 +9220,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._render_news_from_state()
         self._render_web_watches_from_state()
         self._render_messages_from_state()
+        self._render_attention_notification_from_state()
         self._update_status()
 
     set_privacy_masking = set_privacy_masked
@@ -8019,6 +9249,7 @@ class PersonalHubMainWindow(QMainWindow):
         if self._locked:
             self.clear_message_body()
         self._render_messages_from_state()
+        self._render_attention_notification_from_state()
         self._update_status()
 
     set_lock_state = set_locked
@@ -8057,6 +9288,10 @@ class PersonalHubMainWindow(QMainWindow):
             self.render_messages(self._messages_view)
             if self._message_body is not None:
                 self.render_message_body(self._message_body)
+
+    def _render_attention_notification_from_state(self) -> None:
+        if hasattr(self, "attention_notification_panel"):
+            self.render_attention_notification(self._attention_notification)
 
     def apply_accessibility_preferences(
         self,
@@ -8185,14 +9420,17 @@ __all__ = [
     "APPLICATION_NAME",
     "CalendarEventView",
     "CalendarEventButton",
+    "CalendarImportView",
     "CalendarSourceView",
     "CalendarView",
+    "AttentionNotificationView",
     "IcalFeedView",
     "FeedEntryView",
     "FeedSubscriptionView",
     "FeedView",
     "DiagnosticsView",
     "HubCalendarEventView",
+    "HubCalendarImportView",
     "HubCalendarSourceView",
     "HubCalendarView",
     "HubFeedEntryView",
@@ -8203,6 +9441,7 @@ __all__ = [
     "HubTodayItemView",
     "HubTodaySectionView",
     "HubTodayView",
+    "HourlyCalendarGrid",
     "InboxItemView",
     "MainWindow",
     "MessageBodyView",
@@ -8224,6 +9463,7 @@ __all__ = [
     "TaskListWidget",
     "TaskRowWidget",
     "TaskView",
+    "TimezoneComboBox",
     "TODAY_DESTINATION",
     "TodayItemView",
     "TodaySectionView",

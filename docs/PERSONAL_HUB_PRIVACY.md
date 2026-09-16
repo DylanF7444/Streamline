@@ -8,9 +8,9 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 | Category | Examples | Location and lifetime |
 | --- | --- | --- |
-| Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
+| Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state, explicitly imported calendar items, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
 | Retained remote summaries | feed entries, watch observations/alerts, selected message headers/previews | Hub SQLite database; bounded by age and count |
-| Memory-only provider content | calendar snapshots and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
+| Memory-only provider content | connected-calendar snapshots and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
 | Provider-canonical data | Canvas calendar items, calendar events, email, Slack messages, and public pages | Remains at the provider; Hub read adapters do not mutate it |
 | Credentials | OAuth access/refresh tokens, the private Canvas iCalendar URL, or optional integration token | Hub-only encrypted vault/DPAPI namespace until disconnect |
 | Operational metadata | source state, last success, safe failure class, notification claims, audit event type | Hub database/log boundary; no titles, bodies, tokens, or raw provider errors |
@@ -32,7 +32,8 @@ overlap with the default Local Assistant database/data root.
 - Message summaries: 7 days and 500 summaries per source by default. Retention 0 is
   session-only; the maximum is 30 days.
 - Message bodies: never stored in the database, cache, backup, audit, log, or notification.
-- Calendar snapshots: memory only in the first release.
+- Connected-calendar snapshots: memory only. Explicitly imported local calendar items are
+  stored in the Hub database until the user removes that import.
 - Calendar event completion state: not stored. Provider snapshots remain memory-only, while
   completion for due-dated to-do items is stored on the underlying local task record.
 - Credentials: until disconnect, encrypted for the current Windows user.
@@ -71,7 +72,10 @@ Canvas iCalendar paths contain bearer-like calendar tokens. The full URL is encr
 Hub vault and excluded from ordinary settings, logs, diagnostics, and exports. Canvas event
 titles, descriptions, locations, and safe event links become local task fields. Refresh updates
 those local tasks but never submits, edits, or completes work in Canvas. Disconnect deletes the
-saved feed URL and retains the already-created local tasks.
+saved feed URL and retains the already-created local tasks. When completed past-due Canvas
+assignments are removed by the opt-in cleanup setting, Personal Hub retains only a safe,
+provider-scoped deletion marker so a later refresh cannot recreate the local task; the marker
+does not change Canvas data.
 
 ## Credentials and OAuth
 
@@ -82,9 +86,11 @@ DPAPI. Raw tokens, authorization codes, provider payloads, client secrets, and c
 shaped strings are excluded from diagnostics and error messages. Ordinary database backup
 does not include the secret vault.
 
-The explicit JSON export includes user-visible local content and retained remote summaries, so
+The explicit JSON export includes user-visible local content, including imported calendar items,
+and retained remote summaries, so
 users should protect it like any personal-data export. It
-never reads the secret vault or the memory-only message-body and calendar-snapshot caches.
+never reads the secret vault or the memory-only message-body and connected-calendar snapshot
+caches.
 
 ## Display and notifications
 
@@ -93,14 +99,17 @@ the content area, clears memory-only message bodies, and can pause network work.
 bodies become bounded plain text; remote images, scripts, forms, embeds, and active links do
 not render. Valid HTTP(S) links are shown inertly and open only after an explicit action.
 Message categories are computed locally from bounded provider labels/categories and the already
-retained sender, subject, and preview; choosing a category never changes provider mail.
+retained sender, subject, and preview; choosing a category never changes provider mail. The
+count-only attention notice at the top of the Hub window contains no provider subject, sender,
+preview, or body, is held only for the current process session, and is never written to Inbox.
 
 Windows notifications use durable, content-free delivery claims. Immediate watch alerts and
 task reminders are handed to the Hub tray only after the enabled setting and local quiet hours
 are evaluated. When masking or session lock applies, fixed generic text replaces the sensitive
 title and summary. Delivered, unavailable, and policy-suppressed outcomes are recorded without
 notification content; quiet-hours suppression never erases the durable Inbox item. Claims are
-deduplicated across restart.
+deduplicated across restart. The in-app message attention notice follows the separate
+session-only behavior described above and does not use durable notification claims.
 
 ## Offline mode
 

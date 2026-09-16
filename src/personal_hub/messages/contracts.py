@@ -197,6 +197,42 @@ class MessageSummary(HubContract):
     _deep_link = field_validator("deep_link")(_link)
 
 
+class MessageAttentionNotice(HubContract):
+    """Ephemeral, count-only attention notice for unread selected messages.
+
+    Message summaries remain in the bounded Messages view.  This contract deliberately
+    has no provider content so the desktop layer can show a startup notice without
+    turning that notice into a durable Inbox item.
+    """
+
+    notice_id: str = Field(min_length=1, max_length=128)
+    title: str = Field(default="Attention messages", min_length=1, max_length=120)
+    safe_summary: str = Field(min_length=1, max_length=512)
+    unread_count: int = Field(ge=1, le=1_000)
+    source_count: int = Field(ge=1, le=1_000)
+    created_at: datetime
+    navigation_target: str = "hub://inbox/messages"
+    deduplication_key: str = Field(min_length=1, max_length=256)
+
+    @field_validator("notice_id", "deduplication_key")
+    @classmethod
+    def _notice_identifiers_are_safe(cls, value: str) -> str:
+        return _identifier(value, "message attention notice identifier")
+
+    @field_validator("title", "safe_summary")
+    @classmethod
+    def _notice_text_is_single_line(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("message attention notice text cannot be blank")
+        return normalized
+
+    @field_validator("created_at")
+    @classmethod
+    def _notice_timestamp_is_utc(cls, value: datetime) -> datetime:
+        return _aware(value)
+
+
 class MessageBody(HubContract):
     source_id: str = Field(min_length=1, max_length=128)
     message_id: str = Field(min_length=1, max_length=256)
@@ -282,6 +318,7 @@ class MessageSource(Protocol):
 
 __all__ = [
     "MessageBody",
+    "MessageAttentionNotice",
     "MessageCategory",
     "MessageDisconnectedError",
     "MessageError",

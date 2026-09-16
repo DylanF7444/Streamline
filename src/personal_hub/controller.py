@@ -15,12 +15,13 @@ import os
 import tempfile
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
 from pathlib import Path
+from threading import Lock
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from personal_hub import __version__
@@ -33,6 +34,13 @@ from personal_hub.calendar.ical import (
     IcalCalendarFeed,
     IcalFeedFetcher,
     IcalFeedManager,
+)
+from personal_hub.calendar.local import (
+    LOCAL_IMPORT_PROVIDER_ID,
+    LOCAL_IMPORT_SOURCE_ID,
+    CalendarImport,
+    CalendarImportRepository,
+    ImportedCalendarEvent,
 )
 from personal_hub.calendar.service import CalendarService
 from personal_hub.calendar.today import project_calendar_today
@@ -59,7 +67,20 @@ from personal_hub.feeds.repository import FeedEntryRepository, FeedSubscriptionR
 from personal_hub.feeds.security import origin_for_url
 from personal_hub.feeds.service import FeedRefreshService
 from personal_hub.feeds.today import project_feed_today
+from personal_hub.imports import (
+    BulkImportResult,
+    CalendarImportItem,
+    ImportFormat,
+    ImportIssue,
+    ImportTarget,
+    TaskImportItem,
+    normalize_import_name,
+    normalize_import_target,
+    parse_import,
+    read_import_file,
+)
 from personal_hub.messages import (
+    MessageAttentionNotice,
     MessageBody,
     MessageQuery,
     MessageRepository,
@@ -149,6 +170,7 @@ class HubController:
         notification_repository: NotificationRepository | None = None,
         task_repository: TaskRepository | None = None,
         calendar_service: CalendarService | None = None,
+        calendar_import_repository: CalendarImportRepository | None = None,
         ical_feed_manager: IcalFeedManager | None = None,
         feed_subscription_repository: FeedSubscriptionRepository | None = None,
         feed_entry_repository: FeedEntryRepository | None = None,
@@ -213,6 +235,9 @@ class HubController:
             offline=self._settings.offline_mode
         )
         self.calendar_service.set_offline(self._settings.offline_mode)
+        self.calendar_import_repository = calendar_import_repository or CalendarImportRepository(
+            selected_database
+        )
         selected_ical_manager = ical_feed_manager or getattr(container, "ical_feed_manager", None)
         self.ical_feed_manager = selected_ical_manager or IcalFeedManager(
             self.settings_repository,
@@ -304,6 +329,8 @@ class HubController:
             timezone=self._settings.default_timezone,
         )
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
+        self._message_attention_notice_keys: list[str] = []
+        self._message_attention_notice_lock = Lock()
         self._closed = False
 
     @property
@@ -760,12 +787,366 @@ class HubController:
         display_timezone = timezone or self._settings.default_timezone
         zone = ZoneInfo(display_timezone)
         selected_day = day or datetime.now(zone).date()
+        day_start = datetime.combine(selected_day, time.min, tzinfo=zone)
+        day_end = day_start + timedelta(days=1)
+        imported_names = {
+            item.import_id: item.name for item in self.calendar_import_repository.list_imports()
+        }
+        for imported in self.calendar_import_repository.list_events(
+            starts_at=day_start,
+            ends_at=day_end,
+            limit=5_000,
+        ):
+            if selected is not None and not _calendar_selection_matches(
+                LOCAL_IMPORT_SOURCE_ID,
+                str(imported.import_id),
+                selected,
+            ):
+                continue
+            events_by_identity[
+                (LOCAL_IMPORT_SOURCE_ID, str(imported.import_id), str(imported.event_id))
+            ] = imported.as_calendar_event(
+                calendar_name=imported_names.get(imported.import_id, "Imported calendar")
+            )
         return project_calendar_today(
             events_by_identity.values(),
             day=selected_day,
             timezone=display_timezone,
             limit=limit,
         )
+
+    # ------------------------------------------------------------------
+    # Explicitly local CSV and text-list imports.
+
+    def list_calendar_imports(self, *, limit: int = 1_000) -> list[CalendarImport]:
+        self._ensure_open()
+        return self.calendar_import_repository.list_imports(limit=limit)
+
+    def list_imported_calendar_events(
+        self,
+        import_id: UUID | str | None = None,
+        *,
+        starts_at: datetime | None = None,
+        ends_at: datetime | None = None,
+        limit: int = 5_000,
+    ) -> list[ImportedCalendarEvent]:
+        self._ensure_open()
+        return self.calendar_import_repository.list_events(
+            import_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            limit=limit,
+        )
+
+    def count_imported_calendar_events(self, import_id: UUID | str | None = None) -> int:
+        self._ensure_open()
+        return self.calendar_import_repository.count(import_id)
+
+    list_local_calendar_events = list_imported_calendar_events
+
+    def delete_calendar_import(self, import_id: UUID | str) -> bool:
+        self._ensure_open()
+        deleted = self.calendar_import_repository.delete_import(import_id)
+        if deleted:
+            self.audit_repository.add(
+                AuditEvent(
+                    event_type="calendar.import_deleted",
+                    source_type="local_calendar_import",
+                    source_id=str(import_id),
+                    outcome="succeeded",
+                    occurred_at=datetime.now(UTC),
+                    metadata={"provider_id": LOCAL_IMPORT_PROVIDER_ID},
+                )
+            )
+        return deleted
+
+    remove_calendar_import = delete_calendar_import
+
+    def import_items(
+        self,
+        content_or_path: str | Path,
+        *,
+        target: ImportTarget | str,
+        source_format: ImportFormat | str,
+        import_name: str | None = None,
+        default_calendar_date: date | None = None,
+        default_start_time: time | str | None = None,
+        default_duration_minutes: int = 60,
+        default_all_day: bool = False,
+    ) -> BulkImportResult:
+        """Import a bounded CSV or text list into local Hub data."""
+
+        self._ensure_open()
+        normalized_target = normalize_import_target(target)
+        normalized_format = _normalize_import_format(source_format)
+        content, derived_name = _read_import_source(content_or_path)
+        source_name = normalize_import_name(
+            import_name,
+            fallback=(
+                derived_name
+                or ("Task import" if normalized_target == "tasks" else "Calendar import")
+            ),
+        )
+        parsed = parse_import(
+            content,
+            target=normalized_target,
+            source_format=normalized_format,
+            default_timezone=self._settings.default_timezone,
+            default_calendar_date=default_calendar_date,
+            default_start_time=default_start_time,
+            default_duration_minutes=default_duration_minutes,
+            default_all_day=default_all_day,
+        )
+        if normalized_target == "tasks":
+            created, updated, _skipped, persistence_issues = self._import_task_items(
+                parsed.task_items,
+                source_name=source_name,
+            )
+            issues = (*parsed.issues, *persistence_issues)
+            import_id = None
+        else:
+            created, updated, _skipped, persistence_issues, import_id = self._import_calendar_items(
+                parsed.calendar_items,
+                source_name=source_name,
+                source_format=normalized_format,
+                parser_has_issues=bool(parsed.issues),
+            )
+            issues = (*parsed.issues, *persistence_issues)
+        return BulkImportResult(
+            target=normalized_target,
+            source_format=normalized_format,
+            source_name=source_name,
+            imported_count=created,
+            updated_count=updated,
+            skipped_count=len(issues),
+            issues=tuple(issues),
+            import_id=import_id,
+        )
+
+    import_csv_or_text = import_items
+
+    def import_tasks_from_csv(
+        self,
+        content_or_path: str | Path,
+        *,
+        import_name: str | None = None,
+    ) -> BulkImportResult:
+        return self.import_items(
+            content_or_path,
+            target="tasks",
+            source_format="csv",
+            import_name=import_name,
+        )
+
+    import_task_csv = import_tasks_from_csv
+
+    def import_tasks_from_text(
+        self,
+        content: str,
+        *,
+        import_name: str | None = None,
+    ) -> BulkImportResult:
+        return self.import_items(
+            content,
+            target="tasks",
+            source_format="text",
+            import_name=import_name,
+        )
+
+    import_task_list = import_tasks_from_text
+
+    def import_calendar_from_csv(
+        self,
+        content_or_path: str | Path,
+        *,
+        import_name: str | None = None,
+    ) -> BulkImportResult:
+        return self.import_items(
+            content_or_path,
+            target="calendar",
+            source_format="csv",
+            import_name=import_name,
+        )
+
+    import_calendar_csv = import_calendar_from_csv
+
+    def import_calendar_from_text(
+        self,
+        content: str,
+        *,
+        import_name: str | None = None,
+        default_calendar_date: date | None = None,
+        default_start_time: time | str | None = None,
+        default_duration_minutes: int = 60,
+        default_all_day: bool = False,
+    ) -> BulkImportResult:
+        return self.import_items(
+            content,
+            target="calendar",
+            source_format="text",
+            import_name=import_name,
+            default_calendar_date=default_calendar_date,
+            default_start_time=default_start_time,
+            default_duration_minutes=default_duration_minutes,
+            default_all_day=default_all_day,
+        )
+
+    import_calendar_list = import_calendar_from_text
+
+    def _import_task_items(
+        self,
+        items: Iterable[TaskImportItem],
+        *,
+        source_name: str,
+    ) -> tuple[int, int, int, tuple[ImportIssue, ...]]:
+        created = 0
+        updated = 0
+        skipped = 0
+        issues: list[ImportIssue] = []
+        timestamp = datetime.now(UTC)
+        for item in items:
+            try:
+                identity = item.stable_key
+                if not identity.startswith("task:id:"):
+                    identity = f"{source_name.casefold()}:{identity}"
+                task_id = uuid5(
+                    NAMESPACE_URL,
+                    f"personal-hub:task-import:{identity}",
+                )
+                list_id = self._resolve_import_task_list(item.list_name)
+                current = self.task_repository.get(task_id)
+                if current is None:
+                    task = HubTask(
+                        task_id=task_id,
+                        title=item.title,
+                        notes=item.notes,
+                        state="open",
+                        priority=item.priority,
+                        due_at=item.due_at,
+                        due_is_all_day=item.due_is_all_day,
+                        timezone=item.timezone,
+                        list_id=list_id,
+                        tags=item.tags,
+                        reminder_offsets_minutes=item.reminder_offsets_minutes,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                    self.task_repository.add(task)
+                    self._audit_task_change("task.imported", task)
+                    created += 1
+                    continue
+                payload = current.model_dump()
+                payload.update(
+                    {
+                        "title": item.title,
+                        "notes": item.notes,
+                        "priority": item.priority,
+                        "due_at": item.due_at,
+                        "due_is_all_day": item.due_is_all_day,
+                        "timezone": item.timezone,
+                        "list_id": list_id,
+                        "tags": item.tags,
+                        "reminder_offsets_minutes": item.reminder_offsets_minutes,
+                        "updated_at": timestamp,
+                    }
+                )
+                revised = HubTask.model_validate(payload)
+                if revised != current:
+                    self.task_repository.add(revised)
+                    self._audit_task_change("task.imported", revised)
+                    updated += 1
+            except (TypeError, ValueError, RuntimeError):
+                skipped += 1
+                issues.append(_import_issue(item.row_number, "Task row could not be saved safely."))
+        return created, updated, skipped, tuple(issues)
+
+    def _resolve_import_task_list(self, value: str) -> UUID | None:
+        if not value:
+            return None
+        normalized = " ".join(value.split())
+        for task_list in self.task_list_repository.list(limit=1_000):
+            if task_list.name.casefold() == normalized.casefold():
+                return task_list.list_id
+        return self.task_list_repository.create(normalized).list_id
+
+    def _import_calendar_items(
+        self,
+        items: Iterable[CalendarImportItem],
+        *,
+        source_name: str,
+        source_format: ImportFormat,
+        parser_has_issues: bool,
+    ) -> tuple[int, int, int, tuple[ImportIssue, ...], str | None]:
+        selected_items = tuple(items)
+        if not selected_items:
+            return 0, 0, 0, (), None
+        existing_batch = self.calendar_import_repository.get_by_name(source_name)
+        import_id = existing_batch.import_id if existing_batch is not None else uuid4()
+        existing_events = {
+            event.stable_key: event
+            for event in self.calendar_import_repository.list_events(import_id)
+        }
+        timestamp = datetime.now(UTC)
+        events: list[ImportedCalendarEvent] = []
+        issues: list[ImportIssue] = []
+        for item in selected_items:
+            try:
+                event_id = uuid5(
+                    NAMESPACE_URL,
+                    f"personal-hub:calendar-import:{import_id}:{item.stable_key}",
+                )
+                events.append(
+                    ImportedCalendarEvent(
+                        event_id=event_id,
+                        import_id=import_id,
+                        stable_key=item.stable_key,
+                        title=item.title,
+                        starts_at=item.starts_at,
+                        ends_at=item.ends_at,
+                        all_day=item.all_day,
+                        timezone=item.timezone,
+                        location=item.location,
+                        description=item.description,
+                        deep_link=item.deep_link,
+                        created_at=(
+                            existing_events[item.stable_key].created_at
+                            if item.stable_key in existing_events
+                            else timestamp
+                        ),
+                        updated_at=timestamp,
+                    )
+                )
+            except (TypeError, ValueError):
+                issues.append(
+                    _import_issue(item.row_number, "Calendar row could not be saved safely.")
+                )
+        if not events:
+            return 0, 0, len(issues), tuple(issues), str(import_id)
+        batch, _saved = self.calendar_import_repository.replace_import(
+            name=source_name,
+            source_format=source_format,
+            events=events,
+            import_id=import_id,
+            remove_missing=not parser_has_issues,
+            now=timestamp,
+        )
+        created = sum(event.stable_key not in existing_events for event in events)
+        updated = sum(event.stable_key in existing_events for event in events)
+        self.audit_repository.add(
+            AuditEvent(
+                event_type="calendar.imported",
+                source_type="local_calendar_import",
+                source_id=str(batch.import_id),
+                outcome="succeeded",
+                occurred_at=timestamp,
+                metadata={
+                    "created_count": created,
+                    "updated_count": updated,
+                    "source_format": source_format,
+                },
+            )
+        )
+        return created, updated, len(issues), tuple(issues), str(batch.import_id)
 
     def list_ical_feeds(
         self,
@@ -1596,15 +1977,38 @@ class HubController:
             for summary in summaries
         )
 
-    def reconcile_message_digest(
+    def remove_legacy_message_digests(self, *, limit: int = 1_000) -> int:
+        """Remove durable message digest rows created by older Hub builds."""
+
+        removed = 0
+        for item in self.inbox_repository.list(limit=limit):
+            if item.kind != "digest":
+                continue
+            if not (
+                item.item_id.startswith("messages.digest.")
+                or (item.deduplication_key or "").startswith("message-digest:")
+            ):
+                continue
+            removed += int(self.inbox_repository.delete(item.item_id))
+        return removed
+
+    def reconcile_message_attention_notice(
         self,
         *,
         now: datetime | None = None,
         limit: int = 100,
-    ) -> InboxItem | None:
+    ) -> MessageAttentionNotice | None:
+        """Build one ephemeral startup notice for the current unread messages.
+
+        Message summaries stay in the bounded Messages surface.  The notice is
+        intentionally kept in memory for this controller session so opening or
+        refreshing the app does not add another durable Inbox row.
+        """
+
         timestamp = now or datetime.now(UTC)
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            raise ValueError("message digest timestamp must be timezone-aware")
+            raise ValueError("message attention notice timestamp must be timezone-aware")
+        self.remove_legacy_message_digests()
         summaries = self.list_message_summaries(
             unread=True,
             include_spam=False,
@@ -1613,30 +2017,41 @@ class HubController:
         if not summaries:
             return None
         local_date = timestamp.astimezone(ZoneInfo(self._settings.default_timezone)).date()
-        key = f"message-digest:{self._settings.default_timezone}:{local_date.isoformat()}"
-        if not self.notification_repository.claim_key(
-            key,
-            "digest",
-            now=timestamp,
-            safe_message="An attention-message digest was claimed.",
-        ):
-            return None
-        sources = len({item.source_id for item in summaries})
-        return self.inbox_repository.add(
-            InboxItem(
-                item_id=f"messages.digest.{local_date.strftime('%Y%m%d')}",
-                kind="digest",
-                title="Attention messages",
-                safe_summary=f"{len(summaries)} unread message(s) from {sources} selected source(s).",
-                reason="Scheduled message digest",
-                source=SourceRef(provider_id="messages", display_name="Attention messages"),
-                created_at=timestamp,
-                severity="info",
-                navigation_target="hub://inbox/messages",
-                deduplication_key=key,
-                metadata={"item_count": len(summaries), "source_count": sources},
+        summary_fingerprint = sha256(
+            "\0".join(sorted(f"{item.source_id}:{item.message_id}" for item in summaries)).encode(
+                "utf-8"
             )
+        ).hexdigest()[:24]
+        key = (
+            f"message-attention:{self._settings.default_timezone}:"
+            f"{local_date.isoformat()}:{summary_fingerprint}"
         )
+        with self._message_attention_notice_lock:
+            if key in self._message_attention_notice_keys:
+                return None
+            self._message_attention_notice_keys.append(key)
+            if len(self._message_attention_notice_keys) > 32:
+                del self._message_attention_notice_keys[:-32]
+        sources = len({item.source_id for item in summaries})
+        return MessageAttentionNotice(
+            notice_id=f"messages.attention.{local_date.strftime('%Y%m%d')}.{summary_fingerprint}",
+            safe_summary=f"{len(summaries)} unread message(s) from {sources} selected source(s).",
+            unread_count=len(summaries),
+            source_count=sources,
+            created_at=timestamp,
+            navigation_target="hub://inbox/messages",
+            deduplication_key=key,
+        )
+
+    def reconcile_message_digest(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> MessageAttentionNotice | None:
+        """Compatibility alias for callers of the former durable digest API."""
+
+        return self.reconcile_message_attention_notice(now=now, limit=limit)
 
     # ------------------------------------------------------------------
     # Source operations.
@@ -1819,6 +2234,18 @@ class HubController:
             for state in ("open", "completed", "archived")
             for task in self.task_repository.list(state=state, limit=10_000)
         ]
+        calendar_imports = self.list_calendar_imports(limit=1_000)
+        imported_calendar_events: list[ImportedCalendarEvent] = []
+        for calendar_import in calendar_imports:
+            remaining = 10_000 - len(imported_calendar_events)
+            if remaining <= 0:
+                break
+            imported_calendar_events.extend(
+                self.list_imported_calendar_events(
+                    calendar_import.import_id,
+                    limit=min(remaining, 5_000),
+                )
+            )
         payload = {
             "format": "personal-hub-local-export-v1",
             "exported_at": timestamp.astimezone(UTC).isoformat(),
@@ -1827,6 +2254,10 @@ class HubController:
                 item.model_dump(mode="json") for item in self.list_source_connections()
             ],
             "tasks": [item.model_dump(mode="json") for item in tasks],
+            "calendar_imports": [item.model_dump(mode="json") for item in calendar_imports],
+            "imported_calendar_events": [
+                item.model_dump(mode="json") for item in imported_calendar_events
+            ],
             "inbox": [item.model_dump(mode="json") for item in self.list_inbox(limit=1_000)],
             "feed_subscriptions": [
                 item.model_dump(mode="json") for item in self.list_feed_subscriptions(limit=1_000)
@@ -2245,6 +2676,36 @@ def _feed_source_result(result: FeedResult) -> SourceResult:
         duration_ms=result.duration_ms,
         safe_message=safe_state_message(SourceState(result.state)),
     )
+
+
+def _normalize_import_format(value: ImportFormat | str) -> ImportFormat:
+    if not isinstance(value, str):
+        raise TypeError("import format must be text")
+    normalized = value.strip().casefold()
+    if normalized in {"text", "txt", "list"}:
+        return "text"
+    if normalized == "csv":
+        return "csv"
+    raise ValueError("import format must be csv or text")
+
+
+def _read_import_source(source: str | Path) -> tuple[str, str | None]:
+    if isinstance(source, Path):
+        return read_import_file(source), source.stem
+    if not isinstance(source, str):
+        raise TypeError("import source must be text or a file path")
+    # Accept a path string for headless callers while avoiding filesystem
+    # probing for ordinary multi-line CSV/text content.
+    if "\n" not in source and "\r" not in source and len(source) <= 4_096:
+        with suppress(OSError, ValueError):
+            selected = Path(source)
+            if selected.is_file():
+                return read_import_file(selected), selected.stem
+    return source, None
+
+
+def _import_issue(row_number: int, message: str) -> ImportIssue:
+    return ImportIssue(row_number=max(1, int(row_number)), message=message)
 
 
 __all__ = ["HubContainerLike", "HubController"]

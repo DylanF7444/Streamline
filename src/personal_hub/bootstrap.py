@@ -11,6 +11,7 @@ from datetime import timedelta
 
 from personal_hub import __version__
 from personal_hub.calendar.ical import IcalFeedFetcher, IcalFeedManager
+from personal_hub.calendar.local import CalendarImportRepository
 from personal_hub.calendar.service import CalendarService
 from personal_hub.config import HubSettings
 from personal_hub.controller import HubController
@@ -47,6 +48,7 @@ class HubContainer:
     notification_repository: NotificationRepository
     task_repository: TaskRepository
     calendar_service: CalendarService
+    calendar_import_repository: CalendarImportRepository
     ical_feed_manager: IcalFeedManager
     feed_subscription_repository: FeedSubscriptionRepository
     feed_entry_repository: FeedEntryRepository
@@ -122,6 +124,7 @@ def build_hub_container(
         secret_vault = HubSecretVault(persisted_settings)
         task_repository = TaskRepository(database)
         calendar_service = CalendarService(offline=persisted_settings.offline_mode)
+        calendar_import_repository = CalendarImportRepository(database)
         ical_feed_manager = IcalFeedManager(
             settings_repository,
             calendar_service,
@@ -182,6 +185,7 @@ def build_hub_container(
             message_refresh_minutes=persisted_settings.message_refresh_minutes,
             message_retention_days=persisted_settings.message_summary_retention_days,
             default_timezone=persisted_settings.default_timezone,
+            canvas_remove_completed_assignments=persisted_settings.canvas_remove_completed_assignments,
         )
         source_service = SourceService(
             source_registry,
@@ -203,6 +207,7 @@ def build_hub_container(
             notification_repository=notification_repository,
             task_repository=task_repository,
             calendar_service=calendar_service,
+            calendar_import_repository=calendar_import_repository,
             ical_feed_manager=ical_feed_manager,
             feed_subscription_repository=feed_subscription_repository,
             feed_entry_repository=feed_entry_repository,
@@ -224,6 +229,7 @@ def build_hub_container(
             notification_repository=notification_repository,
             task_repository=task_repository,
             calendar_service=calendar_service,
+            calendar_import_repository=calendar_import_repository,
             ical_feed_manager=ical_feed_manager,
             feed_subscription_repository=feed_subscription_repository,
             feed_entry_repository=feed_entry_repository,

@@ -197,6 +197,23 @@ class HubTaskRow(HubBase):
     )
 
 
+class HubTaskDeletionMarkerRow(HubBase):
+    """Durable marker for an externally sourced task deleted in Personal Hub."""
+
+    __tablename__ = "hub_task_deletion_markers"
+
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    external_key: Mapped[str] = mapped_column(String(1_024), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_hub_task_deletion_markers_task", "task_id"),
+        Index("ix_hub_task_deletion_markers_deleted", "deleted_at"),
+    )
+
+
 class HubTaskTagRow(HubBase):
     __tablename__ = "hub_task_tags"
 
@@ -483,6 +500,53 @@ class HubCalendarEventStateRow(HubBase):
     )
 
 
+class HubCalendarImportRow(HubBase):
+    """A named batch of explicitly imported, local calendar items."""
+
+    __tablename__ = "hub_calendar_imports"
+
+    import_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_format: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (Index("ix_hub_calendar_imports_name", "name"),)
+
+
+class HubImportedCalendarEventRow(HubBase):
+    """Bounded local event content owned by one CSV/text import batch."""
+
+    __tablename__ = "hub_imported_calendar_events"
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    import_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("hub_calendar_imports.import_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    stable_key: Mapped[str] = mapped_column(String(320), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    timezone: Mapped[str] = mapped_column(String(128), nullable=False, default="UTC")
+    location: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    deep_link: Mapped[str] = mapped_column(String(1_024), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "import_id",
+            "stable_key",
+            name="uq_hub_imported_calendar_events_import_key",
+        ),
+        Index("ix_hub_imported_calendar_events_import_start", "import_id", "starts_at"),
+    )
+
+
 class HubDatabase:
     """Small, explicit database boundary used by the Hub composition root."""
 
@@ -496,10 +560,12 @@ class HubDatabase:
     # message category. Declarative table
     # Version 9 retires calendar-event completion and deletes those legacy rows.
     # Version 10 adds a safe provider URL to local tasks so imported tasks can
-    # open their source platform without storing a private feed URL.
+    # open their source platform without storing a private feed URL. Version
+    # 11 adds explicitly local CSV/text calendar import batches and events.
+    # Version 12 adds durable local deletion markers for external tasks.
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 10
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 12
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -513,6 +579,7 @@ class HubDatabase:
             "hub_tasks",
             "hub_task_tags",
             "hub_task_occurrences",
+            "hub_task_deletion_markers",
             "hub_feed_subscriptions",
             "hub_feed_entries",
             "hub_feed_read_state",
@@ -522,6 +589,8 @@ class HubDatabase:
             "hub_message_sources",
             "hub_message_summaries",
             "hub_calendar_event_states",
+            "hub_calendar_imports",
+            "hub_imported_calendar_events",
         }
     )
     PHASE0_REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset({"hub_schema_migrations"})
@@ -560,6 +629,7 @@ class HubDatabase:
                 "hub_message_sources",
                 "hub_message_summaries",
                 "hub_calendar_event_states",
+                "hub_task_deletion_markers",
             }
         )
     )
@@ -569,11 +639,19 @@ class HubDatabase:
                 "hub_message_sources",
                 "hub_message_summaries",
                 "hub_calendar_event_states",
+                "hub_task_deletion_markers",
             }
         )
     )
     PHASE6_REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
-        REQUIRED_TABLES.difference({"hub_calendar_event_states"})
+        REQUIRED_TABLES.difference(
+            {
+                "hub_calendar_event_states",
+                "hub_calendar_imports",
+                "hub_imported_calendar_events",
+                "hub_task_deletion_markers",
+            }
+        )
     )
     REQUIRED_TABLES_BY_VERSION: ClassVar[dict[int, frozenset[str]]] = {
         1: PHASE0_REQUIRED_TABLES,
@@ -582,10 +660,20 @@ class HubDatabase:
         4: PHASE4_REQUIRED_TABLES,
         5: PHASE5_REQUIRED_TABLES,
         6: PHASE6_REQUIRED_TABLES,
-        7: REQUIRED_TABLES,
-        8: REQUIRED_TABLES,
-        9: REQUIRED_TABLES,
-        10: REQUIRED_TABLES,
+        7: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
+        8: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
+        9: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
+        10: frozenset(
+            REQUIRED_TABLES.difference(
+                {
+                    "hub_calendar_imports",
+                    "hub_imported_calendar_events",
+                    "hub_task_deletion_markers",
+                }
+            )
+        ),
+        11: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
+        12: REQUIRED_TABLES,
     }
 
     def __init__(self, path: Path | str) -> None:
@@ -906,14 +994,17 @@ class HubDatabase:
 __all__ = [
     "HubAuditEventRow",
     "HubBase",
+    "HubCalendarImportRow",
     "HubCalendarEventStateRow",
     "HubDatabase",
     "HubInboxItemRow",
+    "HubImportedCalendarEventRow",
     "HubNotificationDeliveryRow",
     "HubSchemaVersionRow",
     "HubSettingRow",
     "HubSourceConnectionRow",
     "HubSourceSyncStateRow",
+    "HubTaskDeletionMarkerRow",
     "HubTaskListRow",
     "HubTaskOccurrenceRow",
     "HubTaskRow",

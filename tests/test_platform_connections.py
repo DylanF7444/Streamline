@@ -14,6 +14,7 @@ from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.integrations.http import BoundedProviderTransport
 from personal_hub.integrations.oauth import OAuthConnectionService
 from personal_hub.sources import SourceState
+from personal_hub.storage.database import HubTaskDeletionMarkerRow
 
 
 class _ProviderTransport:
@@ -240,7 +241,9 @@ async def test_canvas_ical_connection_imports_stable_due_tasks_without_storing_f
             first_id,
             completed_at=tasks[0].created_at + timedelta(minutes=1),
         )
-        refreshed = await manager.refresh_canvas()
+        refreshed = await manager.refresh_canvas(
+            now=datetime(2026, 9, 13, tzinfo=UTC),
+        )
         assert refreshed.metadata["imported_task_count"] == 2
         assert container.task_repository.count(tags=("canvas",)) == 2
         completed = container.task_repository.get(first_id)
@@ -252,6 +255,79 @@ async def test_canvas_ical_connection_imports_stable_due_tasks_without_storing_f
         assert container.task_repository.count(tags=("canvas",)) == 2
     finally:
         container.close()
+
+
+@pytest.mark.asyncio
+async def test_canvas_setting_removes_completed_past_due_assignments_only(tmp_path: Path) -> None:
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
+    manager = container.platform_connections
+    transport = _CanvasTransport()
+    manager.canvas_importer.fetcher = IcalFeedFetcher(transport=transport)
+    private_feed_url = "https://canvas.example.edu/feeds/calendars/private-feed-token.ics"
+    refresh_at = datetime(2026, 9, 11, 12, tzinfo=UTC)
+    try:
+        manager.configure(
+            "canvas",
+            {
+                "account_label": "School Canvas",
+                "capabilities": ("tasks", "calendar"),
+                "feed_url": private_feed_url,
+            },
+        )
+        await manager.refresh_canvas(now=refresh_at)
+        tasks = container.task_repository.list(tags=("canvas",), limit=10)
+        assignment = next(task for task in tasks if task.external_url is not None)
+        container.task_repository.complete(
+            assignment.task_id,
+            completed_at=datetime(2026, 9, 12, 23, 59, 1, tzinfo=UTC),
+        )
+        container.controller.update_settings(canvas_remove_completed_assignments=True)
+
+        refreshed = await manager.refresh_canvas(
+            now=datetime(2026, 9, 13, tzinfo=UTC),
+        )
+
+        assert refreshed.metadata["imported_task_count"] == 1
+        assert container.task_repository.get(assignment.task_id) is None
+        remaining = container.task_repository.list(tags=("canvas",), limit=10)
+        assert [task.title for task in remaining] == ["Read module 4"]
+
+        assert assignment.external_url is not None
+        with container.database.session() as session:
+            marker = session.get(
+                HubTaskDeletionMarkerRow,
+                ("canvas", assignment.external_url),
+            )
+            assert marker is not None
+            assert marker.task_id == str(assignment.task_id)
+            assert marker.completed_at is not None
+            assert marker.deleted_at is not None
+
+        # The same successful feed response must not recreate the task as open.
+        refreshed_again = await manager.refresh_canvas(
+            now=datetime(2026, 9, 14, tzinfo=UTC),
+        )
+        assert refreshed_again.metadata["imported_task_count"] == 1
+        assert container.task_repository.get(assignment.task_id) is None
+    finally:
+        container.close()
+
+    restarted = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
+    restarted.platform_connections.canvas_importer.fetcher = IcalFeedFetcher(
+        transport=_CanvasTransport()
+    )
+    try:
+        assert restarted.controller.settings.canvas_remove_completed_assignments
+        refreshed_after_restart = await restarted.platform_connections.refresh_canvas(
+            now=datetime(2026, 9, 15, tzinfo=UTC),
+        )
+        assert refreshed_after_restart.metadata["imported_task_count"] == 1
+        assert restarted.task_repository.get(assignment.task_id) is None
+        assert [
+            task.title for task in restarted.task_repository.list(tags=("canvas",), limit=10)
+        ] == ["Read module 4"]
+    finally:
+        restarted.close()
 
 
 def test_canvas_requires_a_private_https_ical_url(tmp_path: Path) -> None:

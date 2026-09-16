@@ -178,6 +178,10 @@ def test_coordinator_refreshes_summaries_without_bodies_then_clears_body_on_lock
     assert source.body_calls == 0
     assert window.message_list.count() == 1
     assert window.message_body is None
+    assert not window.attention_notification_panel.isHidden()
+    assert window.attention_notification is not None
+    assert "1 unread message" in window.attention_notification_body.text()
+    assert container.controller.list_inbox() == []
     messages_section = next(
         section for section in window.today_sections if section.section_id == "inbox"
     )
@@ -194,6 +198,24 @@ def test_coordinator_refreshes_summaries_without_bodies_then_clears_body_on_lock
     assert window.message_body is None
     assert container.message_service.cached_body("gmail-primary", "message-1") is None
     assert source.body_calls == 1
+    assert window.attention_notification_body.text() == "Hidden by privacy settings"
+    assert not window.attention_notification_open_button.isEnabled()
+    assert not window.attention_notification_dismiss_button.isEnabled()
+
+    container.lifecycle.handle_session_unlock()
+    window.attention_notification_dismiss_button.click()
+    assert window.attention_notification is None
+    assert window.attention_notification_panel.isHidden()
+    window.render_attention_notification(
+        {
+            "notice_id": "messages.attention.test",
+            "safe_summary": "1 unread message from 1 selected source.",
+        }
+    )
+    window.attention_notification_open_button.click()
+    assert window.active_destination == "Inbox"
+    assert window.inbox_mode == "messages"
+    assert window.attention_notification_panel.isHidden()
 
     coordinator.shutdown()
     container.close()

@@ -1,6 +1,6 @@
 # Personal Hub implementation status
 
-Updated September 9, 2026. The authoritative product and technical specification is
+Updated September 14, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
@@ -10,12 +10,30 @@ material, assistive-technology users, a clean Windows VM, or elapsed wall-clock 
 | 0. Boundary proof and application skeleton | Complete | Independent package, entry point, data root, database, process/mutex/startup identities, Qt shell, coexistence tests, and measured import boundary. |
 | 1. Hub storage, shell, Inbox, and lifecycle | Complete | Schema migration, repositories, Hub-only encrypted vault, tray/lifecycle/offline/privacy behavior, Inbox/source/settings controls, diagnostics, backup/restore, and credential-free export. |
 | 2. Native tasks and Today | Complete | Visual CRUD, recurrence, reminders, deterministic digest, timezone-aware Today projection, restart deduplication, and 10,000-task responsiveness coverage. |
-| 3. Calendar | Complete at deterministic source gate | Read-only Google and Outlook adapters, PKCE/vault isolation, bounded multi-account refresh, cached states, UI views, and Today projection. Live-account acceptance remains a release check. |
+| 3. Calendar | Complete at deterministic source gate | Read-only Google and Outlook adapters, PKCE/vault isolation, bounded multi-account refresh, cached states, Month/Day/Week/Agenda views with an hourly Week grid, and Today projection. Live-account acceptance remains a release check. |
 | 4. News feeds | Complete | Secure RSS/Atom fetch, parsing, conditional requests, filters, retention, read state, deep links, digest grouping, source isolation, and UI authoring. |
 | 5. Deal, restock, and webpage watches | Complete | Typed watches, secure collection, structured/text/selector extraction, baseline/change/cooldown logic, changedetection.io read mapping, Inbox/Today projection, and UI authoring/test-now. |
 | 6. Attention messages | Complete at deterministic source gate | Read-only Gmail, Outlook, and Slack adapters; selected-query/folder/channel bounds; retained summaries; explicit memory-only body fetch; sanitization; masking; Inbox/Today UI. Live-account acceptance remains a release check. |
 | 7. Packaging and release hardening | Implemented; release approval pending external evidence | One-file build, isolated package verifier, separate installer, install/upgrade/uninstall verifier, signed-update boundary, SBOM/provenance tooling, accessibility checks, and reliability harness are implemented. See the release-gate table below. |
 | 8. Optional intelligence | Deferred | Deliberately excluded from non-AI 1.0 until stable daily-use evidence exists. |
+
+## Local CSV and text-list imports — September 14, 2026
+
+Personal Hub now accepts bounded UTF-8 CSV files or pasted text lists for both local tasks
+and local calendar items. The Tasks page provides **Import** beside Quick add; Calendar exposes
+**Import CSV or list** under the collapsed **Calendars** panel. The dialog includes calendar
+defaults for unprefixed text rows and can save the task or calendar CSV header template.
+
+Task rows use deterministic identities so an explicit `id` updates the same local task while
+preserving its completion/archive state. Calendar rows are stored as named, selectable local
+calendar batches with safe HTTP(S) links, replace-on-repeat behavior, and an explicit Remove
+action. They remain read-only and never write to connected provider calendars. Invalid rows
+are reported without discarding valid rows; limits are 2 MB and 5,000 rows.
+
+The database schema is now version 12 with dedicated local calendar import and event tables plus
+durable provider-task deletion markers.
+Focused import parser, persistence, controller, and UI coverage is included in the test suite;
+the import templates and field guidance live in `docs/PERSONAL_HUB_IMPORT_TEMPLATE.md`.
 
 ## Canvas Student iCalendar source — September 9, 2026
 
@@ -30,10 +48,15 @@ same-origin native `/courses/{course}/assignments/{id}` URL using the assignment
 course context that Canvas includes. The safe link is retained on the local task and exposed as
 **Open in Canvas** in Tasks and Calendar; items without an assignment identity have no
 native-open action.
+An opt-in setting, **Remove completed Canvas assignments after due date**, now removes only
+completed, past-due assignment task copies during a successful Canvas refresh and records a
+durable Personal Hub deletion marker. Later refreshes and restarts honor that marker instead of
+recreating the assignment as an open task. Generic Canvas calendar items, open/future
+assignments, and Canvas itself are unaffected.
 
 Deterministic evidence for this slice:
 
-- focused Canvas/platform/iCalendar and related task/calendar tests: 35 passed;
+- focused Canvas/platform/iCalendar and related task/calendar tests: 36 passed;
 - complete UI lane: 58 passed;
 - fast non-UI lane: 177 passed, 10 deselected;
 - Ruff lint, changed-surface format checks, documentation consistency, and import isolation:
@@ -106,6 +129,28 @@ Validation for this UI slice:
 Screenshot review used synthetic local content in navy/light themes, edit mode, and
 720×460 at 1.75× text scale. No live account, new installer, or release artifact was used.
 
+## UX density cleanup — September 9, 2026
+
+The Calendar, Tasks, and Inbox surfaces now use progressive disclosure and persistent
+master-detail layouts to reduce simultaneous controls without changing Hub data contracts:
+
+- Calendar source selection and iCalendar management are collapsed behind **Calendars**;
+  selected event details render in a right-side inspector beside the active view.
+- Tasks expose a compact quick-view/search toolbar, disclose advanced state/due/sort filters,
+  keep the editor beside the task list, and move secondary row actions into an accessible
+  overflow menu.
+- Inbox separates durable Hub alerts from attention messages with **Alerts** and **Messages**
+  tabs. Message summaries and their explicit memory-only body use a master-detail splitter,
+  while category counts and structured two-line rows improve scanning.
+- Page headers and task/message/inbox rows use a lighter hierarchy with fewer heavy card borders;
+  existing high-contrast, privacy, keyboard, and accessible-name paths remain covered.
+
+Deterministic UI evidence for this slice:
+
+- Calendar, Tasks, message, and category UI tests: 17 passed.
+- Accessibility, window, appearance, Today/dashboard UI tests: 22 passed.
+- Ruff checks and changed-file formatting: passed.
+
 ## Isolation contract
 
 Personal Hub uses `personal_hub.app:main`, `%LOCALAPPDATA%\PersonalHub`,
@@ -121,7 +166,7 @@ repurposed.
 
 - Startup import measurement rejects all Assistant and pre-desktop Qt modules.
 - Hub configuration rejects any data/database overlap with Local Assistant.
-- The database migrates idempotently through Hub schema version 10. The migration retires and
+- The database migrates idempotently through Hub schema version 12. The migration retires and
   clears legacy calendar-event completion rows; task completion remains in the task table.
 - Offline mode is checked before adapter, DNS, or token work in deterministic tests.
 - Source failures become fixed safe states and durable Inbox records without blocking Qt.
@@ -166,12 +211,15 @@ repurposed.
   calendars, cancellation, and safe error normalization.
 - OAuth authorization uses PKCE and short-lived in-memory state/verifier values; stored
   tokens use the Hub vault and disconnect clears its Hub-scoped secret.
-- Month, week, and agenda views, account-scoped selection, privacy masking, deep links, and
+- Month, day, week, and agenda views, account-scoped selection, privacy masking, deep links, and
   Today projection have UI coverage.
 - Provider events expose no completion control. Successful Google refreshes replace the
   in-memory snapshot and omit cancelled/deleted resources, while stale, offline, and
   permission/error results retain the last successful snapshot. Due-dated local to-do items
   appear in every Calendar view and can complete or reopen their underlying task.
+- Day and Week provide a bounded hour-by-hour grid. Timed items are clipped across visible
+  days, overlapping items receive deterministic columns, and selecting an hour opens a local
+  scheduled-task editor with the due date, time, and default timezone prefilled.
 
 ### Phase 4
 
@@ -211,7 +259,9 @@ repurposed.
   item count.
 - Gmail-style categories use provider labels when available and conservative local heuristics
   otherwise. Primary is the default view; Promotions, Social, Updates, and Spam are local
-  filters, and Spam is excluded from Today and scheduled message digests.
+  filters, and Spam is excluded from Today and the count-only startup attention notice.
+- Unread selected messages surface through a session-only count notice at the top of the Hub
+  window; message attention notices do not create durable Inbox rows.
 
 ## Phase 7 package and reliability evidence
 

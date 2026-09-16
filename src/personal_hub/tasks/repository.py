@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from personal_hub.storage.database import (
     HubDatabase,
+    HubTaskDeletionMarkerRow,
     HubTaskListRow,
     HubTaskOccurrenceRow,
     HubTaskRow,
@@ -58,6 +59,19 @@ def _as_uuid(value: UUID | str) -> UUID:
         except ValueError as error:
             raise ValueError("task identifier must be a UUID") from error
     raise TypeError("task identifier must be a UUID")
+
+
+def _marker_value(value: str, *, name: str, max_length: int) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > max_length
+        or any(character in normalized for character in "\r\n\x00")
+    ):
+        raise ValueError(f"{name} is invalid")
+    return normalized
 
 
 def _aware_now(value: datetime | None = None) -> datetime:
@@ -294,6 +308,73 @@ class TaskRepository:
                 return False
             session.delete(row)
             return True
+
+    def has_external_deletion_marker(
+        self,
+        *,
+        provider_id: str,
+        external_key: str | None = None,
+        task_id: UUID | str | None = None,
+    ) -> bool:
+        """Return whether an external task was previously deleted in Personal Hub."""
+
+        provider = _marker_value(provider_id, name="provider_id", max_length=64)
+        identities: list[Any] = []
+        if external_key is not None:
+            key = _marker_value(external_key, name="external_key", max_length=1_024)
+            identities.append(HubTaskDeletionMarkerRow.external_key == key)
+        if task_id is not None:
+            identities.append(HubTaskDeletionMarkerRow.task_id == str(_as_uuid(task_id)))
+        if not identities:
+            raise ValueError("an external key or task identifier is required")
+        with self.database.session() as session:
+            statement = select(HubTaskDeletionMarkerRow.provider_id).where(
+                HubTaskDeletionMarkerRow.provider_id == provider,
+                or_(*identities),
+            )
+            return session.scalar(statement) is not None
+
+    is_external_task_deleted = has_external_deletion_marker
+
+    def mark_deleted_on_hub(
+        self,
+        task_id: UUID | str,
+        *,
+        provider_id: str,
+        external_key: str,
+        deleted_at: datetime | None = None,
+    ) -> bool:
+        """Delete a completed external task while retaining a durable local tombstone."""
+
+        identifier = str(_as_uuid(task_id))
+        provider = _marker_value(provider_id, name="provider_id", max_length=64)
+        key = _marker_value(external_key, name="external_key", max_length=1_024)
+        timestamp = _aware_now(deleted_at)
+        with self.database.session() as session:
+            row = session.get(HubTaskRow, identifier)
+            if row is None or row.state != "completed":
+                return False
+            marker = session.get(HubTaskDeletionMarkerRow, (provider, key))
+            completed_at = _contract_time(row.completed_at) or timestamp
+            if marker is None:
+                session.add(
+                    HubTaskDeletionMarkerRow(
+                        provider_id=provider,
+                        external_key=key,
+                        task_id=identifier,
+                        completed_at=_db_time(completed_at),
+                        deleted_at=_db_time(timestamp),
+                    )
+                )
+            else:
+                marker.task_id = identifier
+                marker.completed_at = _db_time(completed_at)
+                marker.deleted_at = _db_time(timestamp)
+            session.delete(row)
+            session.flush()
+            return True
+
+    mark_external_deleted = mark_deleted_on_hub
 
     def complete(
         self,
