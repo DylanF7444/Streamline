@@ -171,6 +171,20 @@ class SettingsView:
 
 
 @dataclass(frozen=True, slots=True)
+class SyncView:
+    """Safe presentation data for the encrypted shared-folder sync card."""
+
+    state: str = "not_configured"
+    enabled: bool = False
+    endpoint: str = ""
+    profile_paired: bool = False
+    last_sync_at: str = ""
+    last_error: str = ""
+    remote_device_count: int = 0
+    record_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class SourceFailureView:
     """A bounded, user-safe source failure summary."""
 
@@ -1007,6 +1021,24 @@ def _coerce_source(value: object, index: int) -> SourceView:
         ),
         sensitive=_bool_value(_field(value, "sensitive", False)),
         enabled=_bool_value(_field(value, "enabled", True), default=True),
+    )
+
+
+def _coerce_sync(value: SyncView | Mapping[str, object] | None) -> SyncView:
+    if isinstance(value, SyncView):
+        return value
+    data: object = value or {}
+    return SyncView(
+        state=_safe_text(
+            _field(data, "state", "not_configured"), fallback="not_configured", limit=32
+        ),
+        enabled=_bool_value(_field(data, "enabled", False)),
+        endpoint=_safe_text(_field(data, "endpoint", ""), limit=1_024),
+        profile_paired=_bool_value(_field(data, "profile_paired", False)),
+        last_sync_at=_safe_text(_field(data, "last_sync_at", ""), limit=120),
+        last_error=_safe_text(_field(data, "last_error", ""), limit=240),
+        remote_device_count=max(0, _int_value(_field(data, "remote_device_count", 0), 0)),
+        record_count=max(0, _int_value(_field(data, "record_count", 0), 0)),
     )
 
 
@@ -3459,6 +3491,9 @@ class PersonalHubMainWindow(QMainWindow):
     backup_requested = Signal()
     restore_requested = Signal()
     export_requested = Signal()
+    sync_configure_requested = Signal(str)
+    sync_requested = Signal(str)
+    sync_disable_requested = Signal()
     source_refresh_requested = Signal(str)
     platform_configure_requested = Signal(str)
     source_reconnect_requested = Signal(str)
@@ -3531,6 +3566,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._inbox_items: tuple[InboxItemView, ...] = ()
         self._sources: tuple[SourceView, ...] = ()
         self._settings_view = SettingsView()
+        self._sync_view = SyncView()
         self._diagnostics_view = DiagnosticsView()
         self._source_failures: dict[str, SourceFailureView] = {}
         self._attention_notification: AttentionNotificationView | None = None
@@ -8238,6 +8274,60 @@ class PersonalHubMainWindow(QMainWindow):
         editor_layout.addRow(settings_actions)
         layout.addWidget(editor)
 
+        sync_card = QFrame()
+        sync_card.setObjectName("todayCard")
+        sync_card.setAccessibleName("Encrypted cross-device sync")
+        sync_layout = QFormLayout(sync_card)
+        sync_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        sync_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        sync_layout.setContentsMargins(20, 16, 20, 16)
+        sync_layout.setHorizontalSpacing(14)
+        sync_layout.setVerticalSpacing(8)
+        sync_title = QLabel("Sync across devices")
+        sync_title.setObjectName("diagnosticsTitle")
+        sync_title.setTextFormat(Qt.TextFormat.PlainText)
+        sync_title.setAccessibleName("Encrypted sync heading")
+        sync_layout.addRow(sync_title)
+        sync_description = QLabel(
+            "Use a shared folder from OneDrive, Dropbox, a network drive, or a USB device. "
+            "Only encrypted Hub-owned state is published; credentials stay on each device."
+        )
+        sync_description.setObjectName("pageSubtitle")
+        sync_description.setTextFormat(Qt.TextFormat.PlainText)
+        sync_description.setWordWrap(True)
+        sync_layout.addRow(sync_description)
+        self.sync_status_label = QLabel("Not configured")
+        self.sync_status_label.setObjectName("diagnosticsBody")
+        self.sync_status_label.setAccessibleName("Encrypted sync status")
+        self.sync_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.sync_status_label.setWordWrap(True)
+        sync_layout.addRow(QLabel("Status"), self.sync_status_label)
+        self.sync_endpoint_input = QLineEdit()
+        self.sync_endpoint_input.setPlaceholderText("Path to a shared sync folder")
+        self.sync_endpoint_input.setAccessibleName("Shared sync folder path")
+        sync_layout.addRow(QLabel("Shared folder"), self.sync_endpoint_input)
+        self.sync_passphrase_input = QLineEdit()
+        self.sync_passphrase_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.sync_passphrase_input.setPlaceholderText("Passphrase, never stored by Personal Hub")
+        self.sync_passphrase_input.setAccessibleName("Personal Hub sync passphrase")
+        sync_layout.addRow(QLabel("Passphrase"), self.sync_passphrase_input)
+        sync_actions = QHBoxLayout()
+        self.sync_configure_button = QPushButton("Save folder")
+        self.sync_configure_button.setAccessibleName("Save encrypted sync folder")
+        self.sync_configure_button.clicked.connect(self._request_sync_configure)
+        sync_actions.addWidget(self.sync_configure_button)
+        self.sync_button = QPushButton("Sync now")
+        self.sync_button.setAccessibleName("Sync Personal Hub across devices")
+        self.sync_button.clicked.connect(self._request_sync)
+        sync_actions.addWidget(self.sync_button)
+        self.sync_disable_button = QPushButton("Disable")
+        self.sync_disable_button.setAccessibleName("Disable Personal Hub sync")
+        self.sync_disable_button.clicked.connect(self.sync_disable_requested.emit)
+        sync_actions.addWidget(self.sync_disable_button)
+        sync_actions.addStretch(1)
+        sync_layout.addRow(sync_actions)
+        layout.addWidget(sync_card)
+
         self.diagnostics_view = QFrame()
         self.diagnostics_view.setObjectName("diagnosticsView")
         self.diagnostics_view.setAccessibleName("Diagnostics skeleton")
@@ -8967,6 +9057,47 @@ class PersonalHubMainWindow(QMainWindow):
     update_sources = render_sources
     set_sources = render_sources
 
+    def _request_sync_configure(self) -> None:
+        endpoint = self.sync_endpoint_input.text().strip()
+        if endpoint:
+            self.sync_configure_requested.emit(endpoint)
+
+    def _request_sync(self) -> None:
+        passphrase = self.sync_passphrase_input.text()
+        if passphrase:
+            self.sync_requested.emit(passphrase)
+
+    def clear_sync_passphrase(self) -> None:
+        if hasattr(self, "sync_passphrase_input"):
+            self.sync_passphrase_input.clear()
+
+    def render_sync_status(self, status: SyncView | Mapping[str, object] | None) -> None:
+        view = _coerce_sync(status)
+        self._sync_view = view
+        state_labels = {
+            "not_configured": "Not configured",
+            "disabled": "Disabled",
+            "ready": "Ready to sync",
+            "error": "Needs attention",
+        }
+        state = state_labels.get(view.state, "Unavailable")
+        detail = view.last_error or (
+            f"{view.record_count} record(s) · {view.remote_device_count} other device(s)"
+            if view.last_sync_at
+            else "Choose a shared folder and sync passphrase."
+        )
+        if view.last_sync_at:
+            detail = f"{detail} · Last sync {view.last_sync_at}"
+        self.sync_status_label.setText(f"{state} — {detail}")
+        if view.endpoint and not self.sync_endpoint_input.hasFocus():
+            self.sync_endpoint_input.setText(view.endpoint)
+        configured = bool(view.endpoint)
+        self.sync_button.setEnabled(configured and view.enabled)
+        self.sync_disable_button.setEnabled(configured and view.enabled)
+
+    def sync_view(self) -> SyncView:
+        return self._sync_view
+
     def _request_settings_save(self) -> None:
         values: dict[str, object] = {
             key: checkbox.isChecked() for key, checkbox in self.settings_checkboxes.items()
@@ -9457,6 +9588,7 @@ __all__ = [
     "PersonalHubTrayController",
     "PersonalHubWindow",
     "SettingsView",
+    "SyncView",
     "SourceFailureView",
     "SourceView",
     "TaskItemView",

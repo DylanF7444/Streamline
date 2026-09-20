@@ -1,6 +1,6 @@
 # Personal Hub implementation status
 
-Updated September 14, 2026. The authoritative product and technical specification is
+Updated September 20, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
@@ -16,6 +16,29 @@ material, assistive-technology users, a clean Windows VM, or elapsed wall-clock 
 | 6. Attention messages | Complete at deterministic source gate | Read-only Gmail, Outlook, and Slack adapters; selected-query/folder/channel bounds; retained summaries; explicit memory-only body fetch; sanitization; masking; Inbox/Today UI. Live-account acceptance remains a release check. |
 | 7. Packaging and release hardening | Implemented; release approval pending external evidence | One-file build, isolated package verifier, separate installer, install/upgrade/uninstall verifier, signed-update boundary, SBOM/provenance tooling, accessibility checks, and reliability harness are implemented. See the release-gate table below. |
 | 8. Optional intelligence | Deferred | Deliberately excluded from non-AI 1.0 until stable daily-use evidence exists. |
+
+## Encrypted cross-device synchronization — September 20, 2026
+
+Personal Hub now supports optional manual synchronization through a user-selected shared
+folder. Each device writes an independently encrypted shard under `.personal-hub-sync`, using
+a passphrase-derived Scrypt key and AES-256-GCM. The passphrase is required for each explicit
+sync and is never stored. A shared folder can be a local directory, removable drive, SMB share,
+or user-managed cloud folder; Personal Hub does not provide a hosted sync account or inbound
+network service.
+
+The synchronized boundary is deliberately narrow: local task lists and tasks, explicitly
+imported calendar items, feed subscriptions, watch definitions, and allowlisted shared
+preferences/view state. Credentials and vault data, provider connections and caches, message
+content, feed entries/read state, watch observations/alerts, Inbox history, and private
+iCalendar URLs remain device-local. Deterministic UTC last-write-wins merging includes
+tombstones for deletion propagation, conflict counting, profile pairing, bounded payloads, and
+safe failure for wrong passphrases, tampering, malformed shards, and foreign profiles.
+
+The Settings page exposes shared-folder selection, passphrase entry, manual **Sync now**, status,
+and disable controls. Focused deterministic coverage verifies two-device round trips, settings
+pairing, conflict tie-breaking, deletion propagation, encrypted shard contents, and rejection
+of wrong passphrases or mismatched profiles. No provider or cloud account was contacted by these
+tests.
 
 ## Local CSV and text-list imports — September 14, 2026
 

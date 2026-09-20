@@ -126,8 +126,16 @@ class SettingsRepository:
         return normalized
 
     def set(self, key: str, value: JSONValue) -> None:
+        self.set_at(key, value, updated_at=datetime.now(UTC))
+
+    def set_at(self, key: str, value: JSONValue, *, updated_at: datetime) -> None:
+        """Persist one setting while retaining an externally supplied edit time."""
+
         normalized_key = self._validate_key(key)
         encoded = _json_dump(value)
+        timestamp = _as_db_time(updated_at)
+        if timestamp is None:
+            raise ValueError("setting update time is required")
         with self.database.session() as session:
             row = session.get(HubSettingRow, normalized_key)
             if row is None:
@@ -135,15 +143,16 @@ class SettingsRepository:
                     HubSettingRow(
                         key=normalized_key,
                         value_json=encoded,
-                        updated_at=datetime.now(UTC),
+                        updated_at=timestamp,
                     )
                 )
             else:
                 row.value_json = encoded
-                row.updated_at = datetime.now(UTC)
+                row.updated_at = timestamp
 
     put = set
     set_value = set
+    set_with_timestamp = set_at
 
     def get(self, key: str, default: JSONValue = None) -> JSONValue:
         normalized_key = self._validate_key(key)
@@ -159,6 +168,27 @@ class SettingsRepository:
             return {row.key: _json_load(row.value_json) for row in rows}
 
     values = all
+
+    def all_with_timestamps(self) -> dict[str, tuple[JSONValue, datetime]]:
+        """Return bounded setting values with their durable update times.
+
+        Synchronization uses this narrow read API so a preference changed on
+        one device can be merged independently from other preferences.  The
+        existing ``all`` method remains the simpler value-only API used by the
+        rest of the application.
+        """
+
+        with self.database.session() as session:
+            rows = session.scalars(select(HubSettingRow).order_by(HubSettingRow.key)).all()
+            return {
+                row.key: (
+                    _json_load(row.value_json),
+                    _as_contract_time(row.updated_at) or datetime.now(UTC),
+                )
+                for row in rows
+            }
+
+    items_with_timestamps = all_with_timestamps
 
     def delete(self, key: str) -> bool:
         normalized_key = self._validate_key(key)

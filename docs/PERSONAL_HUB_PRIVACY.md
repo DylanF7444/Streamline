@@ -16,6 +16,7 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 | Operational metadata | source state, last success, safe failure class, notification claims, audit event type | Hub database/log boundary; no titles, bodies, tokens, or raw provider errors |
 | Backups | Hub SQLite data and non-secret state | User-selected or Hub backup directory; ordinary backups exclude credentials |
 | JSON exports | bounded visible local data and retained summaries | Explicit user-selected file; excludes credentials, data paths, message bodies, and calendar snapshots |
+| Encrypted sync shards | selected Hub-owned local state for cross-device use | User-selected shared folder; each device shard is passphrase-encrypted and replaced on successful sync |
 
 Local Assistant has a different default data root, `assistant.db`, vault namespace, mutex,
 startup value, executable, installer ID, and update channel. Hub path validation rejects an
@@ -92,6 +93,28 @@ users should protect it like any personal-data export. It
 never reads the secret vault or the memory-only message-body and connected-calendar snapshot
 caches.
 
+## Encrypted sync boundary
+
+The optional **Sync across devices** feature uses a user-selected folder as a file transport.
+Each device writes its own bounded shard beneath `.personal-hub-sync`; the snapshot is encrypted
+with a passphrase-derived Scrypt key and AES-256-GCM. The passphrase is held only for the
+explicit sync operation. The folder may be local, removable, SMB-backed, or managed by a cloud
+file provider, but Personal Hub does not operate a hosted sync account, inbound listener, or
+provider write path.
+
+The encrypted snapshot may contain local task lists and tasks, explicitly imported calendar
+items, feed subscriptions, watch definitions, and an allowlisted subset of shared preferences
+and view state. It never contains vault credentials, OAuth tokens, provider connection metadata,
+provider snapshots, message summaries or bodies, feed entries/read state, watch observations or
+alerts, Inbox history, or private iCalendar feed URLs. The shard filename contains only a
+random device identity; user records are inside the encrypted payload.
+
+Sync pairs devices to one Hub profile and merges with deterministic UTC last-write-wins rules.
+Durable tombstones carry deletions, equal-time payload conflicts are counted, and malformed,
+tampered, wrong-passphrase, or foreign-profile shards are rejected before the local database is
+changed. The shared-folder provider's account permissions and retention policies remain outside
+Personal Hub's control, so users should protect the folder as they would any encrypted backup.
+
 ## Display and notifications
 
 Privacy masking hides sensitive calendar, message, and Inbox fields. Session lock overlays
@@ -116,7 +139,8 @@ session-only behavior described above and does not use durable notification clai
 Offline mode is persisted and checked before token retrieval, DNS, HTTP, or provider adapter
 work. Local tasks, retained summaries, and the Inbox remain usable. Last-good memory snapshots
 can be marked offline or stale. Turning offline mode off allows later refresh; it does not
-replay every missed interval.
+replay every missed interval. An explicit local sync can still run when its shared folder is
+reachable; it does not create a network relay or bypass provider/network gating.
 
 ## Deletion and uninstall
 

@@ -109,6 +109,15 @@ from personal_hub.storage.repositories import (
     SettingsRepository,
     SourceRepository,
 )
+from personal_hub.sync import (
+    SyncError,
+    SyncRecord,
+    SyncResult,
+    SyncService,
+    SyncSnapshot,
+    SyncStatus,
+)
+from personal_hub.sync.contracts import JSONValue
 from personal_hub.tasks import HubTask, HubTaskList, TaskFilter, TaskRepository
 from personal_hub.today import (
     DailyDigest,
@@ -126,6 +135,57 @@ from personal_hub.watches import (
     WatchRepository,
     WatchResult,
     WatchService,
+)
+
+_SYNCABLE_HUB_SETTINGS = frozenset(
+    {
+        "default_timezone",
+        "calendar_refresh_minutes",
+        "digest_enabled",
+        "digest_time",
+        "inbox_retention_days",
+        "audit_retention_days",
+        "feed_retention_days",
+        "feed_max_entries_per_subscription",
+        "feed_refresh_minutes",
+        "watch_observation_retention_days",
+        "watch_max_observations_per_watch",
+        "watch_refresh_minutes",
+        "message_summary_retention_days",
+        "message_max_summaries_per_source",
+        "message_refresh_minutes",
+        "canvas_remove_completed_assignments",
+        "ui_text_scale",
+        "ui_high_contrast",
+        "ui_reduced_motion",
+        "ui_theme",
+        "ui_accent_color",
+        "ui_background_color",
+        "ui_surface_color",
+    }
+)
+_SYNCABLE_DYNAMIC_SETTINGS = frozenset(
+    {
+        "today_dashboard_layout",
+        "today_section_order",
+        "today_section_visibility",
+        "calendar_view_mode",
+        "calendar_selected_ids",
+        "news_view_filters",
+        "news_selected_subscription_ids",
+        "message_category_filter",
+    }
+)
+_SYNCABLE_COLLECTIONS = frozenset(
+    {
+        "settings",
+        "task_lists",
+        "tasks",
+        "calendar_imports",
+        "calendar_events",
+        "feed_subscriptions",
+        "watches",
+    }
 )
 
 
@@ -180,6 +240,7 @@ class HubController:
         message_repository: MessageRepository | None = None,
         message_service: MessageService | None = None,
         diagnostics: DiagnosticsAggregator | None = None,
+        sync_service: SyncService | None = None,
         application_version: str = __version__,
     ) -> None:
         """Build a controller around a migrated Hub database and source service.
@@ -231,6 +292,7 @@ class HubController:
             defaults=initial_settings,
             database_path=selected_database.path,
         )
+        self.sync_service = sync_service or SyncService(self.settings_repository)
         self.calendar_service = calendar_service or CalendarService(
             offline=self._settings.offline_mode
         )
@@ -2177,6 +2239,349 @@ class HubController:
     refresh = refresh_source
 
     # ------------------------------------------------------------------
+    # Optional encrypted cross-device synchronization.
+
+    def sync_status(self) -> SyncStatus:
+        """Return safe local sync configuration and last-run metadata."""
+
+        self._ensure_open()
+        return self.sync_service.status()
+
+    get_sync_status = sync_status
+
+    def configure_sync(self, endpoint: Path | str, *, enabled: bool = True) -> SyncStatus:
+        """Configure a user-selected shared folder without storing a passphrase."""
+
+        self._ensure_open()
+        status = self.sync_service.configure(endpoint, enabled=enabled)
+        self.audit_repository.add(
+            AuditEvent(
+                event_type="sync.configured",
+                source_type="encrypted_shared_folder",
+                source_id=None,
+                outcome="succeeded",
+                occurred_at=datetime.now(UTC),
+                metadata={"enabled": enabled},
+            )
+        )
+        return status
+
+    def disable_sync(self) -> SyncStatus:
+        """Disable future sync runs while leaving the shared shard untouched."""
+
+        self._ensure_open()
+        status = self.sync_service.disable()
+        self.audit_repository.add(
+            AuditEvent(
+                event_type="sync.disabled",
+                source_type="encrypted_shared_folder",
+                source_id=None,
+                outcome="succeeded",
+                occurred_at=datetime.now(UTC),
+                metadata={},
+            )
+        )
+        return status
+
+    def sync_now(
+        self,
+        passphrase: str,
+        *,
+        now: datetime | None = None,
+    ) -> SyncResult:
+        """Merge and publish Hub-owned state using an in-memory passphrase.
+
+        The callback applies only after the encrypted shards have been read and
+        validated.  A failed validation therefore leaves both the active
+        database and the shared folder unchanged.
+        """
+
+        self._ensure_open()
+        timestamp = _utc_sync_time(now)
+        local = self._build_sync_snapshot(now=timestamp)
+        try:
+            result = self.sync_service.synchronize(
+                local,
+                passphrase,
+                apply=lambda merged: self._apply_sync_snapshot(merged, current=local),
+                now=timestamp,
+            )
+        except SyncError:
+            raise
+        except (TypeError, ValueError, KeyError, RuntimeError) as error:
+            self.sync_service.record_error("Synchronized data failed Hub validation safely.")
+            raise SyncError("Synchronized data failed Hub validation safely.") from error
+        self.audit_repository.add(
+            AuditEvent(
+                event_type="sync.completed",
+                source_type="encrypted_shared_folder",
+                source_id=None,
+                outcome="succeeded",
+                occurred_at=result.completed_at,
+                metadata={
+                    "record_count": result.record_count,
+                    "tombstone_count": result.tombstone_count,
+                    "conflict_count": result.conflict_count,
+                    "remote_device_count": result.remote_device_count,
+                },
+            )
+        )
+        return result
+
+    synchronize = sync_now
+
+    def _build_sync_snapshot(self, *, now: datetime) -> SyncSnapshot:
+        timestamp = _utc_sync_time(now)
+        persisted = self.settings_repository.all_with_timestamps()
+        settings_values = self._settings.model_dump(mode="json")
+        records: list[SyncRecord] = []
+
+        for key in sorted(_SYNCABLE_HUB_SETTINGS):
+            if key not in settings_values:
+                continue
+            setting_value = cast(JSONValue, settings_values[key])
+            setting_timestamp = persisted.get(key, (setting_value, timestamp))[1]
+            records.append(
+                SyncRecord(
+                    collection="settings",
+                    record_id=key,
+                    updated_at=setting_timestamp,
+                    payload={"key": key, "value": setting_value},
+                )
+            )
+        for key in sorted(_SYNCABLE_DYNAMIC_SETTINGS):
+            if key not in persisted:
+                continue
+            setting_value, setting_timestamp = persisted[key]
+            records.append(
+                SyncRecord(
+                    collection="settings",
+                    record_id=key,
+                    updated_at=setting_timestamp,
+                    payload={"key": key, "value": cast(JSONValue, setting_value)},
+                )
+            )
+
+        for task_list in self.task_list_repository.list(limit=10_000):
+            records.append(
+                SyncRecord(
+                    collection="task_lists",
+                    record_id=str(task_list.list_id),
+                    updated_at=task_list.updated_at,
+                    payload=cast(dict[str, JSONValue], task_list.model_dump(mode="json")),
+                )
+            )
+        for state in ("open", "completed", "archived"):
+            for task in self.task_repository.list(state=state, limit=10_000):
+                records.append(
+                    SyncRecord(
+                        collection="tasks",
+                        record_id=str(task.task_id),
+                        updated_at=task.updated_at,
+                        payload=cast(dict[str, JSONValue], task.model_dump(mode="json")),
+                    )
+                )
+
+        imports = self.calendar_import_repository.list_imports(limit=5_000)
+        for calendar_import in imports:
+            records.append(
+                SyncRecord(
+                    collection="calendar_imports",
+                    record_id=str(calendar_import.import_id),
+                    updated_at=calendar_import.updated_at,
+                    payload=cast(
+                        dict[str, JSONValue],
+                        calendar_import.model_dump(mode="json"),
+                    ),
+                )
+            )
+        for event in self.calendar_import_repository.list_events(limit=5_000):
+            records.append(
+                SyncRecord(
+                    collection="calendar_events",
+                    record_id=str(event.event_id),
+                    updated_at=event.updated_at,
+                    payload=cast(dict[str, JSONValue], event.model_dump(mode="json")),
+                )
+            )
+
+        for subscription, updated_at in self.feed_subscription_repository.list_with_timestamps(
+            limit=10_000
+        ):
+            records.append(
+                SyncRecord(
+                    collection="feed_subscriptions",
+                    record_id=str(subscription.subscription_id),
+                    updated_at=updated_at,
+                    payload=cast(dict[str, JSONValue], subscription.model_dump(mode="json")),
+                )
+            )
+        for watch in self.watch_repository.list(limit=10_000):
+            records.append(
+                SyncRecord(
+                    collection="watches",
+                    record_id=str(watch.watch_id),
+                    updated_at=watch.updated_at,
+                    payload=cast(dict[str, JSONValue], watch.model_dump(mode="json")),
+                )
+            )
+
+        profile_value = self.settings_repository.get("sync.profile_id")
+        profile_id = profile_value if isinstance(profile_value, str) else None
+        return SyncSnapshot(
+            profile_id=profile_id,
+            device_id=self.sync_service.device_id(),
+            generated_at=timestamp,
+            records=tuple(records),
+        )
+
+    def _apply_sync_snapshot(self, merged: SyncSnapshot, *, current: SyncSnapshot) -> None:
+        """Validate and apply a merged snapshot through Hub-owned repositories."""
+
+        tombstone_keys = {
+            (tombstone.collection, tombstone.record_id) for tombstone in merged.tombstones
+        }
+        current_keys = {(record.collection, record.record_id) for record in current.records}
+
+        setting_changes: dict[str, object] = {}
+        setting_records: dict[str, tuple[JSONValue, datetime]] = {}
+        dynamic_settings: dict[str, tuple[JSONValue, datetime]] = {}
+        task_lists: dict[str, HubTaskList] = {}
+        tasks: dict[str, HubTask] = {}
+        calendar_imports: dict[str, CalendarImport] = {}
+        calendar_events: dict[str, list[ImportedCalendarEvent]] = {}
+        feed_subscriptions: dict[str, tuple[FeedSubscription, datetime]] = {}
+        watches: dict[str, WatchDefinition] = {}
+
+        for record in merged.records:
+            payload = record.payload
+            if record.collection == "settings":
+                key = payload.get("key")
+                if not isinstance(key, str) or key != record.record_id:
+                    raise ValueError("sync setting identity is invalid")
+                if "value" not in payload:
+                    raise ValueError("sync setting value is missing")
+                value = payload["value"]
+                if key in _SYNCABLE_HUB_SETTINGS:
+                    setting_changes[key] = value
+                    setting_records[key] = (value, record.updated_at)
+                elif key in _SYNCABLE_DYNAMIC_SETTINGS:
+                    dynamic_settings[key] = (value, record.updated_at)
+                else:
+                    raise ValueError("sync setting is not allowlisted")
+            elif record.collection == "task_lists":
+                task_list = HubTaskList.model_validate_json(json.dumps(payload))
+                if str(task_list.list_id) != record.record_id:
+                    raise ValueError("sync task-list identity is invalid")
+                task_lists[record.record_id] = task_list
+            elif record.collection == "tasks":
+                task = HubTask.model_validate_json(json.dumps(payload))
+                if str(task.task_id) != record.record_id:
+                    raise ValueError("sync task identity is invalid")
+                tasks[record.record_id] = task
+            elif record.collection == "calendar_imports":
+                calendar_import = CalendarImport.model_validate_json(json.dumps(payload))
+                if str(calendar_import.import_id) != record.record_id:
+                    raise ValueError("sync calendar-import identity is invalid")
+                calendar_imports[record.record_id] = calendar_import
+            elif record.collection == "calendar_events":
+                event = ImportedCalendarEvent.model_validate_json(json.dumps(payload))
+                if str(event.event_id) != record.record_id:
+                    raise ValueError("sync calendar-event identity is invalid")
+                calendar_events.setdefault(str(event.import_id), []).append(event)
+            elif record.collection == "feed_subscriptions":
+                subscription = FeedSubscription.model_validate_json(json.dumps(payload))
+                if str(subscription.subscription_id) != record.record_id:
+                    raise ValueError("sync feed identity is invalid")
+                feed_subscriptions[record.record_id] = (subscription, record.updated_at)
+            elif record.collection == "watches":
+                watch = WatchDefinition.model_validate_json(json.dumps(payload))
+                if str(watch.watch_id) != record.record_id:
+                    raise ValueError("sync watch identity is invalid")
+                watches[record.record_id] = watch
+            else:  # pragma: no cover - SyncSnapshot already constrains collections.
+                raise ValueError("sync collection is not supported")
+
+        if set(calendar_events).difference(calendar_imports):
+            raise ValueError("sync calendar event has no import batch")
+        revised_settings = HubSettings.model_validate(
+            {**self._settings.model_dump(mode="python"), **setting_changes}
+        )
+
+        def deleted(collection: str) -> tuple[str, ...]:
+            active = {
+                record.record_id for record in merged.records if record.collection == collection
+            }
+            return tuple(
+                record_id
+                for item_collection, record_id in current_keys
+                if item_collection == collection
+                and record_id not in active
+                and (collection, record_id) in tombstone_keys
+            )
+
+        for key in deleted("settings"):
+            if key in _SYNCABLE_DYNAMIC_SETTINGS:
+                self.settings_repository.delete(key)
+        if revised_settings != self._settings:
+            self.update_settings(revised_settings)
+            if self.container is not None and hasattr(self.container, "settings"):
+                self.container.settings = revised_settings
+        for key, (value, updated_at) in setting_records.items():
+            self.settings_repository.set_at(key, value, updated_at=updated_at)
+        for key, (value, updated_at) in dynamic_settings.items():
+            self.settings_repository.set_at(key, value, updated_at=updated_at)
+
+        for identifier in deleted("task_lists"):
+            self.task_list_repository.delete(identifier)
+        for task_list in task_lists.values():
+            self.task_list_repository.add(task_list)
+        for identifier in deleted("tasks"):
+            self.task_repository.delete(identifier)
+        for task in tasks.values():
+            self.task_repository.add(task)
+
+        for identifier in deleted("calendar_imports"):
+            self.calendar_import_repository.delete_import(identifier)
+        for calendar_import in calendar_imports.values():
+            self.calendar_import_repository.replace_import(
+                name=calendar_import.name,
+                source_format=calendar_import.source_format,
+                events=tuple(calendar_events.get(str(calendar_import.import_id), ())),
+                import_id=calendar_import.import_id,
+                remove_missing=True,
+                now=calendar_import.updated_at,
+            )
+
+        for identifier in deleted("feed_subscriptions"):
+            self.delete_feed_subscription(identifier)
+        for subscription, updated_at in feed_subscriptions.values():
+            current_subscription = self.feed_subscription_repository.get(
+                subscription.subscription_id
+            )
+            if current_subscription is not None and (
+                str(current_subscription.feed_url) != str(subscription.feed_url)
+                or current_subscription.allow_http != subscription.allow_http
+            ):
+                with suppress(KeyError):
+                    self.feed_service.unregister(subscription.subscription_id)
+            self.feed_subscription_repository.add_at(subscription, updated_at=updated_at)
+            self.feed_service.upsert(subscription)
+
+        for identifier in deleted("watches"):
+            self.delete_watch(identifier)
+        for watch in watches.values():
+            current_watch = self.watch_repository.get(watch.watch_id)
+            should_reset = current_watch is not None and any(
+                current_watch.model_dump(mode="json")[key] != watch.model_dump(mode="json")[key]
+                for key in ("kind", "source_url", "condition")
+            )
+            self.watch_repository.add(watch)
+            if should_reset:
+                self.watch_repository.reset_baseline(watch.watch_id)
+        self._restore_feed_service(reset=True)
+
+    # ------------------------------------------------------------------
     # Metadata-only observability.
 
     def audit_events(self, *, limit: int = 100) -> list[AuditEvent]:
@@ -2706,6 +3111,13 @@ def _read_import_source(source: str | Path) -> tuple[str, str | None]:
 
 def _import_issue(row_number: int, message: str) -> ImportIssue:
     return ImportIssue(row_number=max(1, int(row_number)), message=message)
+
+
+def _utc_sync_time(value: datetime | None) -> datetime:
+    timestamp = value or datetime.now(UTC)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("sync timestamp must be timezone-aware")
+    return timestamp.astimezone(UTC)
 
 
 __all__ = ["HubContainerLike", "HubController"]

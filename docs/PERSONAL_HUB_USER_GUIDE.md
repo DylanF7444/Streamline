@@ -237,6 +237,27 @@ message summaries. It excludes the Hub data path, credentials, message bodies, a
 calendar snapshots. It includes local tasks and explicitly imported calendar items. Treat the
 export as sensitive because it intentionally contains your visible local content.
 
+## Sync across devices
+
+Personal Hub can share selected local state through a folder that you control. In **Settings**,
+open **Sync across devices**, choose the same shared folder on each device, select **Save
+folder**, enter a passphrase, and choose **Sync now**. Use the same passphrase on every device.
+Sync is manual; the folder may be local, removable, an SMB share, or a user-managed cloud folder
+such as OneDrive or Dropbox. Personal Hub does not create a hosted account or run an inbound
+network service.
+
+Sync includes local task lists and tasks, explicitly imported calendar items, feed subscriptions,
+watch definitions, and selected shared preferences and view state. It does not include passwords,
+OAuth tokens, the credential vault, provider connections or caches, message content, feed entries,
+watch history, Inbox history, or private iCalendar feed URLs. The passphrase is used only for the
+current sync and is not saved by Hub.
+
+Changes merge by their UTC update time. A deletion is carried by an encrypted tombstone, so it
+continues to propagate after another device has been offline. Equal-time conflicting edits use a
+stable deterministic tie-breaker and are reported in the sync result. If the passphrase is wrong,
+the folder is damaged, or it belongs to another Hub profile, the sync stops without replacing
+your local data. Keep a separate backup before changing or removing a shared folder.
+
 ## Troubleshooting
 
 - **Offline:** turn off Offline mode before retrying a remote source.
@@ -248,6 +269,9 @@ export as sensitive because it intentionally contains your visible local content
   state, last success, and safe error category.
 - **A body disappeared:** message bodies intentionally clear on lock, source clear, shutdown,
   and process exit; open the summary again while online.
+- **Sync failed:** confirm that the folder is reachable, every device uses the same passphrase,
+  and the folder was not paired with a different Personal Hub profile. Sync again after restoring
+  access; a failed sync does not replace the local database.
 
 See `PERSONAL_HUB_PRIVACY.md` for the exact data boundary and
 `PERSONAL_HUB_RELEASE_RUNBOOK.md` for release-only acceptance steps.

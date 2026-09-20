@@ -133,12 +133,24 @@ class FeedSubscriptionRepository:
         )
 
     def add(self, subscription: FeedSubscription) -> FeedSubscription:
+        return self.add_at(subscription)
+
+    def add_at(
+        self,
+        subscription: FeedSubscription,
+        *,
+        updated_at: datetime | None = None,
+    ) -> FeedSubscription:
+        """Persist a definition, optionally retaining its durable edit time."""
+
         if not isinstance(subscription, FeedSubscription):
             raise TypeError("feed subscription repository expects FeedSubscription")
         identifier = str(subscription.subscription_id)
         with self.database.session() as session:
             row = session.get(HubFeedSubscriptionRow, identifier)
             values = self._row(subscription)
+            if updated_at is not None:
+                values.updated_at = _db_time(updated_at)
             if row is None:
                 session.add(values)
             else:
@@ -159,6 +171,7 @@ class FeedSubscriptionRepository:
     save = add
     upsert = add
     save_subscription = add
+    add_with_timestamp = add_at
 
     def update(
         self,
@@ -240,6 +253,31 @@ class FeedSubscriptionRepository:
             return [self._contract(row) for row in rows]
 
     list_subscriptions = list
+
+    def list_with_timestamps(
+        self,
+        *,
+        enabled: bool | None = None,
+        limit: int = 1_000,
+    ) -> list[tuple[FeedSubscription, datetime]]:
+        """List subscription definitions with their durable edit times."""
+
+        if not 1 <= limit <= 10_000:
+            raise ValueError("feed subscription limit must be between 1 and 10000")
+        with self.database.session() as session:
+            statement = select(HubFeedSubscriptionRow).order_by(
+                HubFeedSubscriptionRow.title.asc(), HubFeedSubscriptionRow.subscription_id.asc()
+            )
+            if enabled is not None:
+                statement = statement.where(HubFeedSubscriptionRow.enabled == enabled)
+            rows = session.scalars(statement.limit(limit)).all()
+            return [
+                (
+                    self._contract(row),
+                    _contract_time(row.updated_at) or datetime.now(UTC),
+                )
+                for row in rows
+            ]
 
     def count(self, *, enabled: bool | None = None) -> int:
         with self.database.session() as session:

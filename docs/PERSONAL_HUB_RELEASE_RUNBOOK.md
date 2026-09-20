@@ -31,6 +31,7 @@ python scripts/check_personal_hub_imports.py --output .benchmark-data/personal-h
 $env:QT_QPA_PLATFORM = "offscreen"
 powershell -ExecutionPolicy Bypass -File scripts/test_personal_hub.ps1 -Lane fast
 powershell -ExecutionPolicy Bypass -File scripts/test_personal_hub.ps1 -Lane all
+python -m pytest -q tests/test_sync.py
 git diff --check
 ```
 
@@ -123,6 +124,24 @@ Repeat on clean VM snapshots:
    namespace metadata, settings, startup value, and behavior before the Hub lifecycle.
 8. Install, run, upgrade, rollback, and uninstall Hub; prove all Assistant artifacts and
    behavior are unchanged and both processes/mutexes coexist.
+
+For the cross-device sync acceptance, use two isolated Hub data roots and one temporary shared
+folder:
+
+1. Configure the same folder and passphrase on both profiles, create a task, imported calendar
+   item, feed subscription, and watch definition on the first device, and verify they arrive on
+   the second after an explicit **Sync now**.
+2. Edit records on each device, exercise a deletion while the other device is offline, and verify
+   deterministic last-write-wins behavior, conflict reporting, and deletion tombstones after the
+   next sync.
+3. Retry with a wrong passphrase, a tampered shard, and a shard from a different profile. Each
+   attempt must fail without replacing the receiving database or exposing a raw error.
+4. Confirm the shard bytes do not contain recognizable task text, provider payloads, OAuth tokens,
+   private iCalendar URLs, or vault material. Confirm the credential vault and provider caches
+   remain outside the shared folder.
+
+This acceptance is manual and offline from providers; a cloud file provider, if used, is only the
+user-managed transport and does not replace the local security checks.
 
 ## SBOM, provenance, and update signatures
 

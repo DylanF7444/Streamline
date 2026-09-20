@@ -45,6 +45,7 @@ from personal_hub.notifications import (
 )
 from personal_hub.sources import SourceResult, SourceState, safe_state_message
 from personal_hub.startup import WindowsStartupRegistration
+from personal_hub.sync import SyncError
 from personal_hub.tasks import Recurrence
 from personal_hub.ui.desktop.connection_dialog import ExternalPlatformDialog
 from personal_hub.ui.desktop.ical_dialog import IcalFeedDialog
@@ -691,6 +692,9 @@ class HubDesktopCoordinator(QObject):
         window.backup_requested.connect(self._backup_requested)
         window.restore_requested.connect(self._restore_requested)
         window.export_requested.connect(self._export_requested)
+        window.sync_configure_requested.connect(self._sync_configure_requested)
+        window.sync_requested.connect(self._sync_requested)
+        window.sync_disable_requested.connect(self._sync_disable_requested)
         window.source_refresh_requested.connect(self._source_refresh_requested)
         window.platform_configure_requested.connect(self._platform_configure_requested)
         window.source_reconnect_requested.connect(self._source_reconnect_requested)
@@ -754,6 +758,7 @@ class HubDesktopCoordinator(QObject):
                 network_refresh_paused=self.container.lifecycle.network_paused,
             )
         )
+        self.window.render_sync_status(self.container.controller.sync_status())
         self.window.render_inbox(
             tuple(_inbox_view(item) for item in self.container.controller.list_inbox())
         )
@@ -2111,6 +2116,46 @@ class HubDesktopCoordinator(QObject):
         self.container.settings = updated
         self.render_all()
         self.window.set_settings_status("Settings saved.")
+
+    @Slot(str)
+    def _sync_configure_requested(self, endpoint: str) -> None:
+        try:
+            self.container.controller.configure_sync(endpoint)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            self.window.set_settings_status("The sync folder could not be configured safely.")
+            return
+        self.window.render_sync_status(self.container.controller.sync_status())
+        self.window.set_settings_status(
+            "Encrypted sync folder saved. Enter the same passphrase on each device."
+        )
+
+    @Slot(str)
+    def _sync_requested(self, passphrase: str) -> None:
+        try:
+            result = self.container.controller.sync_now(passphrase)
+        except (OSError, RuntimeError, TypeError, ValueError, SyncError):
+            self.window.clear_sync_passphrase()
+            self.window.render_sync_status(self.container.controller.sync_status())
+            self.window.set_settings_status(
+                "Sync failed safely. Check the shared folder and passphrase."
+            )
+            return
+        self.window.clear_sync_passphrase()
+        self.render_all()
+        self.window.set_settings_status(
+            f"Sync complete: {result.record_count} record(s) across "
+            f"{result.remote_device_count + 1} device(s)."
+        )
+
+    @Slot()
+    def _sync_disable_requested(self) -> None:
+        try:
+            self.container.controller.disable_sync()
+        except (RuntimeError, TypeError, ValueError):
+            self.window.set_settings_status("Sync could not be disabled safely.")
+            return
+        self.window.render_sync_status(self.container.controller.sync_status())
+        self.window.set_settings_status("Cross-device sync is disabled.")
 
     @Slot()
     def _backup_requested(self) -> None:

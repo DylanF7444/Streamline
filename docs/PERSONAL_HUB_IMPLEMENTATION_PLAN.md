@@ -335,6 +335,8 @@ It contains no model, voice, planner, command, or assistant settings.
 - Local CSV/text import for tasks and read-only calendar items with downloadable templates.
 - Scheduled morning or evening digest.
 - Full packaging, installer, update, and recovery paths.
+- Optional encrypted shared-folder synchronization for Hub-owned local state; credentials and
+  provider caches remain device-local.
 
 ### Later candidates
 
@@ -344,7 +346,8 @@ It contains no model, voice, planner, command, or assistant settings.
 - Calendar writes.
 - Draft-only email workflows.
 - Local-only LAN display mode.
-- Mobile companion or encrypted sync.
+- Hosted/mobile synchronization service; encrypted shared-folder synchronization is available
+  as an optional local transport.
 - Optional local summaries and relevance ranking.
 - Optional assistant interoperability.
 
@@ -730,6 +733,7 @@ keys, WAL mode where appropriate, bounded busy timeouts, and explicit backup/res
 | Full message bodies | Memory only |
 | Audit metadata | 30 days |
 | Credentials | Until disconnect, encrypted at rest |
+| Encrypted sync shards | Until the user removes the shared-folder copy or a device shard is replaced |
 
 Retention cleanup is transactional, scheduled, bounded, and visible in diagnostics.
 
@@ -743,6 +747,31 @@ Retention cleanup is transactional, scheduled, bounded, and visible in diagnosti
 - Verify database integrity before replacing active data during restore.
 - Restore into a temporary database, validate schema, then atomically switch.
 - Never overwrite the Local Assistant database or data directory.
+
+### Encrypted shared-folder synchronization
+
+Personal Hub can synchronize a bounded subset of Hub-owned state through a user-selected shared
+folder. The transport may be a local directory, removable drive, SMB share, or a user-managed
+cloud folder such as OneDrive or Dropbox; the folder is only a file transport and is not a
+Personal Hub account or hosted service.
+
+- Each device publishes its own encrypted shard. The plaintext snapshot uses strict schema
+  validation and is encrypted with a passphrase-derived AES-256-GCM key using Scrypt. The
+  passphrase is entered for an explicit sync and is never persisted by Hub.
+- The synchronized collections are local task lists and tasks, explicitly imported calendar
+  items, feed subscriptions, watch definitions, and an allowlisted subset of shared preferences
+  and view state.
+- Credentials, vault contents, provider connection metadata, provider snapshots, message
+  summaries and bodies, feed entries and read state, watch observations and alerts, Inbox
+  history, and private iCalendar feed URLs are excluded. Sync never writes to a provider.
+- Merging is deterministic UTC last-write-wins. Equal-time payload conflicts use a canonical
+  JSON tie-breaker and are counted. Deletions use durable tombstones so a removed record cannot
+  reappear from an older device shard.
+- The first device establishes a profile identity. A new device pairs only with that profile;
+  malformed, tampered, wrong-passphrase, or foreign-profile shards fail safely without
+  replacing the local database.
+- Sync is manual and explicit. It adds no inbound listener, provider network scope, or
+  automatic background upload, and remains useful when the shared folder is unavailable.
 
 ## Provider Architecture
 
@@ -1072,6 +1101,9 @@ When offline mode is enabled:
 - source cards explain that refresh is paused by offline mode;
 - scheduled network polls advance safely without building an unbounded backlog;
 - local reminders and deterministic digests still run from available data.
+- encrypted shared-folder synchronization is available only as an explicit local file operation
+  when the user-selected folder is reachable; offline mode never creates a Personal Hub network
+  relay or bypasses provider/network gating.
 
 ## Desktop Lifecycle
 
