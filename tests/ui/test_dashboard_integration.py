@@ -28,9 +28,10 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
     qtbot.addWidget(window)
     coordinator = HubDesktopCoordinator(container, window, QApplication.instance())
     window.dashboard.set_widget_size("schedule", "wide")
+    window.dashboard.set_widget_size("mini_calendar", "compact")
     layout = window.dashboard.export_layout()
     layout["order"] = list(reversed(layout["order"]))
-    layout["hidden"] = ["news", "upcoming"]
+    layout["hidden"] = ["news", "upcoming", "mini_calendar"]
     window.restore_dashboard_layout(layout)
     window.dashboard.layout_changed.emit(window.dashboard.export_layout())
     window.appearance_panel.changed.emit(
@@ -45,7 +46,8 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
     expected = window.dashboard.export_layout()
     assert expected["sizes"]["schedule"] == "wide"
     assert expected["order"] == layout["order"]
-    assert set(expected["hidden"]) == {"news", "upcoming"}
+    assert set(expected["hidden"]) == {"news", "upcoming", "mini_calendar"}
+    assert expected["sizes"]["mini_calendar"] == "compact"
     assert window.reduced_motion
     coordinator.render_task_surfaces()
     assert window.dashboard.export_layout() == expected

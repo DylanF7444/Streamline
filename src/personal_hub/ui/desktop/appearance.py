@@ -604,6 +604,13 @@ QTreeWidget::item:selected, QTableView::item:selected {{
     color: {page_text};
 }}
 
+#miniCalendarGrid, #miniCalendarGrid QAbstractItemView {{
+    background: {surface};
+    color: {surface_text};
+    selection-background-color: {selected};
+    selection-color: {page_text};
+}}
+
 QCheckBox, QRadioButton {{
     color: {surface_text};
     spacing: 7px;
@@ -718,6 +725,13 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
 #dashboardGrid, #dashboardWidgetCard #todaySection {{
     background: transparent;
     border: 0;
+}}
+
+#miniCalendarGrid, #miniCalendarGrid QAbstractItemView {{
+    background: #000000;
+    color: #ffffff;
+    selection-background-color: #003b5c;
+    selection-color: #ffffff;
 }}
 
 QLabel, QCheckBox, QRadioButton, QGroupBox, QAbstractItemView,

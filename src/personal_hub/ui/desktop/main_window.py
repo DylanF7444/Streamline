@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from PySide6.QtCore import QDateTime, QEvent, QObject, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QDateTime, QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -61,10 +61,13 @@ from personal_hub.messages.categories import (
 from personal_hub.ui.desktop.appearance import AppearancePanel, theme_stylesheet
 from personal_hub.ui.desktop.dashboard import DashboardBoard
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
+from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
 
 APPLICATION_NAME: Final = "Personal Hub"
-TODAY_DESTINATION: Final = "Today"
+HOME_DESTINATION: Final = "Home"
+# Retain the public constant and Today view APIs for existing callers and saved links.
+TODAY_DESTINATION: Final = HOME_DESTINATION
 NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     TODAY_DESTINATION,
     "Calendar",
@@ -78,7 +81,7 @@ NAVIGATION_LABELS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS
 PLANNED_NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[1:]
 
 _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
-    "Today": "todayButton",
+    HOME_DESTINATION: "todayButton",
     "Calendar": "calendarButton",
     "Tasks": "tasksButton",
     "Watchlists": "watchlistsButton",
@@ -2229,7 +2232,8 @@ def _calendar_display_timezone(value: object) -> str:
 
 
 _DEFAULT_TODAY_SECTIONS: Final[tuple[TodaySectionView, ...]] = (
-    TodaySectionView("schedule", "Calendar", "No calendar events are scheduled."),
+    TodaySectionView("mini_calendar", "Mini calendar"),
+    TodaySectionView("schedule", "Agenda", "No calendar events are scheduled."),
     TodaySectionView("today", "Due today", "No tasks are due today."),
     TodaySectionView("attention", "Inbox", "You're all caught up."),
     TodaySectionView("watchlist", "Watchlist", "Add a watch to follow what changes."),
@@ -2954,7 +2958,7 @@ class PersonalHubTrayController(QObject):
 
         self.menu = QMenu(parent if isinstance(parent, QWidget) else None)
         self.open_action = QAction("Open Hub", self)
-        self.today_action = QAction("Open Today", self)
+        self.today_action = QAction("Open Home", self)
         self.inbox_action = QAction("Open Inbox", self)
         self.refresh_action = QAction("Refresh enabled sources", self)
         self.network_pause_action = QAction("Pause network refresh", self)
@@ -3710,7 +3714,7 @@ class PersonalHubMainWindow(QMainWindow):
         content_layout.addWidget(self.pages, 1)
         root_layout.addWidget(content, 1)
 
-        self.status_label = QLabel("Today · ready")
+        self.status_label = QLabel("Home · ready")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setAccessibleName("Personal Hub status")
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -3770,6 +3774,8 @@ class PersonalHubMainWindow(QMainWindow):
                 lambda _checked=False, value=destination: self._set_active_destination(value)
             )
             layout.addWidget(button)
+
+        self.today_button = self.navigation_buttons[HOME_DESTINATION]
 
         layout.addStretch(1)
 
@@ -3854,7 +3860,7 @@ class PersonalHubMainWindow(QMainWindow):
         return eyebrow, title, subtitle
 
     def _build_today_page(self) -> QWidget:
-        page, layout = self._new_page("todayPage", "Today page", scrollable=True)
+        page, layout = self._new_page("todayPage", "Home page", scrollable=True)
         self.today_page = page
         self._today_layout = layout
         self.today_eyebrow, self.today_title, self.today_subtitle = self._add_page_header(
@@ -3890,7 +3896,7 @@ class PersonalHubMainWindow(QMainWindow):
         controls_layout.addWidget(self.today_last_refresh_label, 0, 2)
         self.today_refresh_button = QPushButton("Refresh")
         self.today_refresh_button.setObjectName("todayRefreshButton")
-        self.today_refresh_button.setAccessibleName("Refresh Today")
+        self.today_refresh_button.setAccessibleName("Refresh Home")
         self.today_refresh_button.setAccessibleDescription(
             "Request a refresh of available Hub data."
         )
@@ -3938,6 +3944,10 @@ class PersonalHubMainWindow(QMainWindow):
         """Update one section body without replacing or hiding its widgets."""
 
         title, body, items = controls
+        if section.section_id == "mini_calendar":
+            body.hide()
+            items.hide()
+            return
         title.setText(section.title)
         title.setAccessibleName(f"{section.title} heading")
         body.setAccessibleName(f"{section.title} summary")
@@ -4005,6 +4015,11 @@ class PersonalHubMainWindow(QMainWindow):
         self._today_section_controls[section.section_id] = controls
         self.today_section_item_lists[section.section_id] = items
         self._update_today_section_widget(section, controls)
+        if section.section_id == "mini_calendar":
+            self.mini_calendar = MiniCalendar(card)
+            self.mini_calendar.date_requested.connect(self._open_mini_calendar_date)
+            self.mini_calendar.month_changed.connect(self._browse_mini_calendar_month)
+            card_layout.addWidget(self.mini_calendar)
         return card
 
     def _render_today_item_text(self, item: object, index: int) -> str:
@@ -4061,6 +4076,49 @@ class PersonalHubMainWindow(QMainWindow):
         self._today_section_controls = controls_by_section
         self.dashboard.set_sections(sections)
         self._sync_dashboard_sections(self.dashboard.export_layout())
+        self._render_mini_calendar()
+
+    def _render_mini_calendar(self) -> None:
+        if not hasattr(self, "mini_calendar"):
+            return
+        timezone = _calendar_display_timezone(self._calendar_view.timezone)
+        today = _coerce_date_value(self._today_view.local_date)
+        local_today = (
+            datetime.now().date()
+            if timezone == "local"
+            else datetime.now(ZoneInfo(timezone)).date()
+        )
+        self.mini_calendar.set_today(today or local_today)
+        first = date(self.mini_calendar.grid.yearShown(), self.mini_calendar.grid.monthShown(), 1)
+        start = first - timedelta(days=first.weekday())
+        events = self._calendar_events_for_selected()
+        counts: dict[date, int] = {}
+        # Reuse the full calendar's timezone and multi-day clipping semantics.
+        for week in range(6):
+            schedule = build_hourly_schedule_layout(
+                events, start_date=start + timedelta(days=7 * week), day_count=7, timezone=timezone
+            )
+            for placement in (*schedule.timed, *schedule.all_day):
+                counts[placement.day] = counts.get(placement.day, 0) + 1
+        freshness = "offline" if self._offline_mode else self._calendar_view.freshness
+        self.mini_calendar.set_activity(counts, status=_CALENDAR_FRESHNESS_MESSAGES[freshness])
+        self.dashboard.refresh_geometry()
+
+    def _browse_mini_calendar_month(self, year: int, month: int) -> None:
+        self._calendar_cursor = date(year, month, 1)
+        if hasattr(self, "calendar_view_stack"):
+            self.set_calendar_mode("month")
+            self._render_calendar_views()
+            self.calendar_period_changed.emit(self._calendar_cursor)
+        else:
+            self._render_mini_calendar()
+
+    def _open_mini_calendar_date(self, value: date) -> None:
+        self._calendar_cursor = value
+        self.set_calendar_mode("day")
+        self._render_calendar_views()
+        self.calendar_period_changed.emit(value)
+        self.show_destination("Calendar")
 
     def _dashboard_changed(self, layout: object) -> None:
         if not isinstance(layout, Mapping):
@@ -4962,6 +5020,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._update_calendar_period_label()
         self.calendar_view_stack.setCurrentWidget(self.calendar_views[self._calendar_mode_value])
         self._sync_calendar_event_details()
+        self._render_mini_calendar()
 
     def _update_calendar_period_label(self) -> None:
         if self._calendar_mode_value == "month":
@@ -5749,6 +5808,12 @@ class PersonalHubMainWindow(QMainWindow):
             }
             self._today_section_order = tuple(self._today_sections)
         self._today_view = today
+        if "mini_calendar" not in self._today_sections:
+            self._today_sections = {
+                "mini_calendar": _DEFAULT_TODAY_SECTIONS[0],
+                **self._today_sections,
+            }
+            self._today_section_order = ("mini_calendar", *self._today_section_order)
         if today.local_date:
             self.today_date_label.setText(today.local_date)
         else:
@@ -8434,6 +8499,8 @@ class PersonalHubMainWindow(QMainWindow):
             self.privacy_overlay.setGeometry(self.pages.rect())
 
     def _set_active_destination(self, destination: str, *, emit: bool = True) -> bool:
+        if destination == "Today":
+            destination = HOME_DESTINATION
         if destination not in self.page_widgets:
             return False
         changed = destination != self._active_destination
@@ -8535,6 +8602,7 @@ class PersonalHubMainWindow(QMainWindow):
                 )
         if sync_tray:
             self.tray_controller.set_offline_mode(enabled, emit=False)
+        self._render_mini_calendar()
         self._update_status()
         if changed:
             self.offline_mode_changed.emit(enabled)
@@ -9470,6 +9538,10 @@ class PersonalHubMainWindow(QMainWindow):
             application.setStyleSheet(rendered)
         if self.styleSheet() != rendered:
             self.setStyleSheet(rendered)
+        self._refresh_mini_calendar_geometry()
+        # Qt polishes the native calendar's internal table on the next event turn.
+        # Measure again after its font inherits a new text scale.
+        QTimer.singleShot(0, self._refresh_mini_calendar_geometry)
         self.dashboard.set_reduced_motion(self._reduced_motion)
         self.dashboard.refresh_geometry()
         self.appearance_panel.set_high_contrast(self._high_contrast)
@@ -9477,6 +9549,11 @@ class PersonalHubMainWindow(QMainWindow):
             self.page_transition.set_reduced_motion(self._reduced_motion)
 
     set_accessibility_preferences = apply_accessibility_preferences
+
+    def _refresh_mini_calendar_geometry(self) -> None:
+        self.mini_calendar.refresh_style()
+        self.today_section_widgets["mini_calendar"].layout().invalidate()
+        self.dashboard.refresh_geometry()
 
     def set_text_scale(self, scale: float) -> None:
         self.apply_accessibility_preferences(text_scale=scale)
@@ -9572,6 +9649,7 @@ __all__ = [
     "HubTodayItemView",
     "HubTodaySectionView",
     "HubTodayView",
+    "HOME_DESTINATION",
     "HourlyCalendarGrid",
     "InboxItemView",
     "MainWindow",

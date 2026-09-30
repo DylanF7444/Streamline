@@ -22,15 +22,21 @@ as a public release until the signing and release-evidence gates in the runbook 
 
 ## Main screens
 
-### Today
+### Home
 
-Today is the default view. It offers calendar events, overdue/due/upcoming/unscheduled tasks,
+Home (previously Today) is the default view. It offers calendar events, overdue/due/upcoming/unscheduled tasks,
 attention messages, unread news, and watch alerts. One refresh request runs the provider passes
 through one background worker and shows one stable refresh state; repeat clicks are coalesced.
-The main panel is a widget dashboard, including Calendar, task sections, Inbox, Watchlist,
+The main panel is a widget dashboard, including a mini calendar, Agenda, task sections, Inbox, Watchlist,
 attention messages, news, and watch alerts. Each widget opens its corresponding full page.
-Calendar, due and overdue tasks, Inbox, and Watchlist start on the board; the other widgets
+Mini calendar, Agenda, due and overdue tasks, Inbox, and Watchlist start on the board; the other widgets
 are available from **Add widget**.
+
+The **Mini calendar** shows a compact month grid with an outline around today and dots on
+dates with loaded events or due tasks from selected calendars. Use the arrows to browse months
+or **Today** to return to the current date. Select a date (or press Enter on a selected date)
+to open its full Calendar day view. The widget shows calendar freshness and offline status;
+markers reflect available data. The separate **Agenda** widget retains the event list.
 
 Use **Edit layout** to arrange your space. Drag a widget by its heading to move it, or use
 its earlier/later controls with the keyboard. Drag the bottom-right resize grip or choose

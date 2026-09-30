@@ -150,7 +150,7 @@ new cloud service.
 The main window uses a persistent left navigation rail and a content area. The initial
 navigation is:
 
-1. **Today**
+1. **Home** (the Today dashboard)
 2. **Calendar**
 3. **Tasks**
 4. **Watchlists**
@@ -161,9 +161,9 @@ navigation is:
 There is no Assistant tab, transcript, prompt box, microphone control, command palette, or
 model status in Personal Hub.
 
-### Today
+### Home (Today dashboard)
 
-Today is the default screen and contains ordered sections rather than arbitrary monitoring
+Home is the default screen and contains ordered sections rather than arbitrary monitoring
 metrics:
 
 - date, local time, and last refresh;
@@ -181,6 +181,12 @@ Layouts persist locally, reflow into one column in narrow windows, and can be re
 The dashboard projects existing Hub data; layout settings contain no provider content.
 Theme presets, custom accent/background/surface colors, and optional page and layout
 animations are Hub-owned preferences. Reduced motion disables all Hub transitions.
+
+The Home dashboard also includes a compact month-grid mini calendar alongside the Agenda
+event list. It marks today and dates with loaded selected-calendar events or due tasks,
+supports month navigation and returning to today, and opens a selected date in Calendar's
+day view. It shares Calendar's timezone, source selection, and freshness/offline state.
+The existing Today projection APIs and saved dashboard preferences remain compatible.
 
 ### Calendar
 
@@ -1116,7 +1122,7 @@ When offline mode is enabled:
 5. Register source adapters.
 6. Restore source and scheduler state.
 7. Reconcile due local reminders and polls.
-8. Show Today or start hidden in tray according to settings.
+8. Show Home or start hidden in tray according to settings.
 
 No language model, audio model, browser engine, or assistant skill package is preloaded.
 
@@ -1125,7 +1131,7 @@ No language model, audio model, browser engine, or assistant skill package is pr
 Tray actions:
 
 - Open Personal Hub.
-- Open Today.
+- Open Home.
 - Open Inbox.
 - Refresh enabled sources.
 - Pause or resume network refresh.

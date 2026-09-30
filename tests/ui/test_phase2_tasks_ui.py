@@ -198,12 +198,17 @@ def test_today_sections_render_in_order_and_support_visibility_hooks(qtbot):
         TodayView(sections=sections, local_date="2026-08-31", timezone="America/Chicago")
     )
     assert window.today_date_label.text() == "2026-08-31"
-    assert window.today_section_order == ("schedule", "today", "source_problems")
-    assert list(window.today_section_widgets) == ["schedule", "today", "source_problems"]
+    assert window.today_section_order == ("mini_calendar", "schedule", "today", "source_problems")
+    assert list(window.today_section_widgets) == [
+        "mini_calendar",
+        "schedule",
+        "today",
+        "source_problems",
+    ]
     assert window.today_section_item_lists["schedule"].count() == 1
 
     window.set_today_section_order(("source_problems", "schedule"))
-    assert window.today_section_order == ("source_problems", "schedule", "today")
+    assert window.today_section_order == ("source_problems", "schedule", "mini_calendar", "today")
     assert order_changes[-1] == window.today_section_order
     window.set_today_section_visibility("schedule", False)
     assert window.today_section_visibility["schedule"] is False

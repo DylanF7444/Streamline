@@ -1,6 +1,6 @@
 # Personal Hub implementation status
 
-Updated September 20, 2026. The authoritative product and technical specification is
+Updated September 30, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
@@ -16,6 +16,27 @@ material, assistive-technology users, a clean Windows VM, or elapsed wall-clock 
 | 6. Attention messages | Complete at deterministic source gate | Read-only Gmail, Outlook, and Slack adapters; selected-query/folder/channel bounds; retained summaries; explicit memory-only body fetch; sanitization; masking; Inbox/Today UI. Live-account acceptance remains a release check. |
 | 7. Packaging and release hardening | Implemented; release approval pending external evidence | One-file build, isolated package verifier, separate installer, install/upgrade/uninstall verifier, signed-update boundary, SBOM/provenance tooling, accessibility checks, and reliability harness are implemented. See the release-gate table below. |
 | 8. Optional intelligence | Deferred | Deliberately excluded from non-AI 1.0 until stable daily-use evidence exists. |
+
+## Home dashboard and mini calendar — September 30, 2026
+
+The default Today page is now labeled **Home** in navigation, its heading, status, and tray
+action. Existing Today navigation links and saved dashboard preference keys remain compatible.
+Home includes a separate **Mini calendar** month grid alongside the **Agenda** event list.
+It supports month browsing, returning to today, activity dots for selected-calendar events
+and due tasks, and opening a selected date in Calendar's day view by mouse or keyboard.
+Markers use Calendar's timezone and multi-day placement rules without displaying event titles.
+Freshness and offline states are visible; widget visibility, order, and size use existing
+dashboard persistence.
+
+The five focused Home/mini-calendar tests pass with synthetic offline data. They cover legacy
+links and tray navigation, timezone and multi-day markers, source selection, masking, offline
+status, year boundaries, refresh stability, keyboard activation, and minimum-window layout
+at 100% and 175% text scale. Visual inspection covers normal and high-contrast rendering.
+Fourteen related navigation, dashboard persistence/refresh, and accessibility checks also
+pass on the final source. Ruff formatting/lint, documentation consistency, and Git whitespace
+checks pass. Tests explicitly used this repository's `src` directory on `PYTHONPATH`.
+An additional complete-suite run was interrupted during unusually slow Windows Qt tests;
+no failures were reported before interruption. This is not a completed full-suite gate.
 
 ## Encrypted cross-device synchronization — September 20, 2026
 

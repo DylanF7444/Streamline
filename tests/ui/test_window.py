@@ -14,7 +14,7 @@ from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMainWindow, QTabBar, QWidget
 
 EXPECTED_NAVIGATION = (
-    "Today",
+    "Home",
     "Calendar",
     "Tasks",
     "Watchlists",
@@ -146,7 +146,7 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
     assert "YOUR PERSONAL SPACE" not in texts
     assert "Stored on this device" not in texts
     assert any(
-        isinstance(widget, (QAbstractButton, QLabel)) and widget.text().strip() == "Today"
+        isinstance(widget, (QAbstractButton, QLabel)) and widget.text().strip() == "Home"
         for widget in [window, *window.findChildren(QWidget)]
         if hasattr(widget, "text") and callable(widget.text)
     )
@@ -174,8 +174,8 @@ def test_phase1_navigation_is_enabled_accessible_and_responsive(qtbot):
     qtbot.waitUntil(window.isVisible, timeout=2000)
 
     assert window.pages.count() == len(EXPECTED_NAVIGATION)
-    assert window.active_destination == "Today"
-    assert window.navigation_buttons["Today"].isChecked()
+    assert window.active_destination == "Home"
+    assert window.navigation_buttons["Home"].isChecked()
     assert all(button.isEnabled() for button in window.navigation_buttons.values())
     assert all(
         button.accessibleName() == destination and button.accessibleDescription()
@@ -375,7 +375,7 @@ def test_tray_actions_emit_requests_and_close_to_tray_is_reversible(qtbot):
     window.tray_controller.trigger("offline")
     assert window.offline_mode is True
     window.tray_controller.trigger("today")
-    assert window.active_destination == "Today"
+    assert window.active_destination == "Home"
 
     window.set_close_to_tray(True)
     window.close()

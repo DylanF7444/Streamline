@@ -66,6 +66,7 @@ SIZE_LABELS: Final[dict[str, str]] = {
 }
 
 SECTION_DESTINATIONS: Final[dict[str, str]] = {
+    "mini_calendar": "Calendar",
     "schedule": "Calendar",
     "calendar": "Calendar",
     "overdue": "Tasks",

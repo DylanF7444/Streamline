@@ -815,7 +815,7 @@ class HubDesktopCoordinator(QObject):
         sections = (
             TodaySectionView(
                 section_id="schedule",
-                title="Calendar",
+                title="Agenda",
                 body="No calendar events are scheduled.",
                 items=tuple(_today_item_view(item) for item in calendar_items),
             ),
