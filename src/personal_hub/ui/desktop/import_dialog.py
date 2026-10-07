@@ -131,6 +131,7 @@ class ImportDialog(QDialog):
         self.default_date_input.setObjectName("calendarImportDefaultDate")
         self.default_date_input.setAccessibleName("Default calendar date")
         self.default_date_input.setCalendarPopup(True)
+        self.default_date_input.calendarWidget().setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
         defaults_layout.addRow("Default date", self.default_date_input)
         self.default_time_input = QTimeEdit(QTime(9, 0))
         self.default_time_input.setObjectName("calendarImportDefaultTime")

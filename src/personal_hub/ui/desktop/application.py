@@ -2556,13 +2556,13 @@ class HubDesktopCoordinator(QObject):
         mode = self.window.calendar_mode_value
         if mode == "month":
             month_start = cursor.replace(day=1)
-            starts_on = month_start - timedelta(days=month_start.weekday())
+            starts_on = month_start - timedelta(days=(month_start.weekday() + 1) % 7)
             ends_on = starts_on + timedelta(days=42)
         elif mode == "day":
             starts_on = cursor
             ends_on = starts_on + timedelta(days=1)
         elif mode == "week":
-            starts_on = cursor - timedelta(days=cursor.weekday())
+            starts_on = cursor - timedelta(days=(cursor.weekday() + 1) % 7)
             ends_on = starts_on + timedelta(days=7)
         else:
             starts_on = cursor
