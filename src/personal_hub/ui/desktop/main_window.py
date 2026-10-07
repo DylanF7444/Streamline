@@ -4090,7 +4090,7 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.mini_calendar.set_today(today or local_today)
         first = date(self.mini_calendar.grid.yearShown(), self.mini_calendar.grid.monthShown(), 1)
-        start = first - timedelta(days=first.weekday())
+        start = first - timedelta(days=(first.weekday() + 1) % 7)
         events = self._calendar_events_for_selected()
         counts: dict[date, int] = {}
         # Reuse the full calendar's timezone and multi-day clipping semantics.
@@ -4845,7 +4845,7 @@ class PersonalHubMainWindow(QMainWindow):
     def _render_calendar_month(self) -> None:
         self._clear_layout(self.calendar_month_layout)
         self.calendar_month_cells.clear()
-        weekdays = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        weekdays = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
         for column, name in enumerate(weekdays):
             label = QLabel(name)
             label.setObjectName("calendarWeekdayLabel")
@@ -4858,7 +4858,7 @@ class PersonalHubMainWindow(QMainWindow):
             self.calendar_month_layout.setColumnMinimumWidth(column, 0)
             self.calendar_month_layout.setColumnStretch(column, 1)
         first = self._calendar_cursor.replace(day=1)
-        grid_start = first - timedelta(days=first.weekday())
+        grid_start = first - timedelta(days=(first.weekday() + 1) % 7)
         for week in range(6):
             self.calendar_month_layout.setRowStretch(week + 1, 1)
             for column in range(7):
@@ -4942,7 +4942,9 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_day_time_slots = self.calendar_day_grid.slot_buttons
 
     def _render_calendar_week(self) -> None:
-        week_start = self._calendar_cursor - timedelta(days=self._calendar_cursor.weekday())
+        week_start = self._calendar_cursor - timedelta(
+            days=(self._calendar_cursor.weekday() + 1) % 7
+        )
         self._render_calendar_hourly(
             self.calendar_week_grid_widget,
             start_date=week_start,
@@ -5032,7 +5034,9 @@ class PersonalHubMainWindow(QMainWindow):
                 f"{self._calendar_cursor.year}"
             )
         elif self._calendar_mode_value == "week":
-            start = self._calendar_cursor - timedelta(days=self._calendar_cursor.weekday())
+            start = self._calendar_cursor - timedelta(
+                days=(self._calendar_cursor.weekday() + 1) % 7
+            )
             end = start + timedelta(days=6)
             if start.year == end.year and start.month == end.month:
                 label = f"{start.strftime('%B')} {start.day}–{end.day}, {end.year}"
@@ -5675,6 +5679,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_due_input.setObjectName("taskDueInput")
         self.task_due_input.setAccessibleName("Task due date and time")
         self.task_due_input.setCalendarPopup(True)
+        self.task_due_input.calendarWidget().setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
         form.addWidget(self.task_due_input, 2, 1)
         self.task_due_edit = self.task_due_input
         self.task_due_date_input = self.task_due_input

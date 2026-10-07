@@ -30,7 +30,7 @@ class _MonthGrid(QCalendarWidget):
         self.setNavigationBarVisible(False)
         self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
         self.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
-        self.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
+        self.setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
 
     def paintCell(self, painter: QPainter, rect: QRect, value: QDate) -> None:  # noqa: N802
         super().paintCell(painter, rect, value)
