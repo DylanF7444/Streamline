@@ -23,7 +23,9 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
 
 from personal_hub.calendar.contracts import CalendarQuery, CalendarResult
+from personal_hub.calendar.google_sync import CalendarSyncReport
 from personal_hub.calendar.local import LOCAL_IMPORT_PROVIDER_ID
+from personal_hub.calendar.native import LOCAL_CALENDAR_ID
 from personal_hub.feeds.contracts import FeedResult, FeedSyncState
 from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.lifecycle import LifecycleEvent
@@ -47,6 +49,7 @@ from personal_hub.sources import SourceResult, SourceState, safe_state_message
 from personal_hub.startup import WindowsStartupRegistration
 from personal_hub.sync import SyncError
 from personal_hub.tasks import Recurrence
+from personal_hub.ui.desktop.calendar_item_dialog import CalendarItemDialog
 from personal_hub.ui.desktop.connection_dialog import ExternalPlatformDialog
 from personal_hub.ui.desktop.ical_dialog import IcalFeedDialog
 from personal_hub.ui.desktop.import_dialog import ImportDialog
@@ -219,6 +222,7 @@ class _CalendarRefreshThread(QThread):
     """Run one bounded multi-account calendar refresh off the Qt thread."""
 
     results_ready = Signal(object)
+    sync_ready = Signal(object)
     refresh_failed = Signal()
 
     def __init__(
@@ -228,6 +232,7 @@ class _CalendarRefreshThread(QThread):
         *,
         source_ids: tuple[str, ...] | None = None,
         queries_by_source: Mapping[str, CalendarQuery] | None = None,
+        sync_google: bool = False,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -235,6 +240,8 @@ class _CalendarRefreshThread(QThread):
         self._query = query
         self._source_ids = source_ids
         self._queries_by_source = dict(queries_by_source or {}) or None
+        self._sync_google = sync_google
+        self._sync_report: CalendarSyncReport | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[dict[str, CalendarResult]] | None = None
 
@@ -243,13 +250,7 @@ class _CalendarRefreshThread(QThread):
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            self._task = loop.create_task(
-                self._container.controller.refresh_calendars(
-                    self._query,
-                    self._source_ids,
-                    queries_by_source=self._queries_by_source,
-                )
-            )
+            self._task = loop.create_task(self._refresh())
             results = loop.run_until_complete(self._task)
         except asyncio.CancelledError:
             return
@@ -262,6 +263,17 @@ class _CalendarRefreshThread(QThread):
             asyncio.set_event_loop(None)
             loop.close()
         self.results_ready.emit(results)
+        if self._sync_report is not None:
+            self.sync_ready.emit(self._sync_report)
+
+    async def _refresh(self) -> dict[str, CalendarResult]:
+        if self._sync_google:
+            self._sync_report = await self._container.platform_connections.sync_calendar_items(
+                self._container.controller.local_calendar
+            )
+        return await self._container.controller.refresh_calendars(
+            self._query, self._source_ids, queries_by_source=self._queries_by_source
+        )
 
     def cancel(self) -> None:
         loop = self._loop
@@ -672,6 +684,12 @@ class HubDesktopCoordinator(QObject):
         window.ical_feed_enabled_changed.connect(self._ical_feed_enabled)
         window.calendar_import_requested.connect(lambda: self._open_import_dialog("calendar"))
         window.calendar_import_delete_requested.connect(self._calendar_import_deleted)
+        window.calendar_item_create_requested.connect(self._calendar_item_editor)
+        window.calendar_item_edit_requested.connect(self._calendar_item_editor)
+        window.calendar_item_delete_requested.connect(self._calendar_item_deleted)
+        window.calendar_google_sync_requested.connect(
+            lambda: self.refresh_calendars(sync_google=True)
+        )
         window.news_entry_read_changed.connect(self._feed_entry_read_changed)
         window.news_filter_changed.connect(self._save_news_filters)
         window.news_subscription_selection_changed.connect(self._news_selection_changed)
@@ -939,6 +957,13 @@ class HubDesktopCoordinator(QObject):
         calendars: list[CalendarSourceView] = []
         seen_events: set[tuple[str, str, str]] = set()
         seen_calendars: set[str] = set()
+        linked_google_ids = (
+            self.container.controller.local_calendar.remote_ids()
+            if _calendar_selection_applies(
+                LOCAL_IMPORT_PROVIDER_ID, str(LOCAL_CALENDAR_ID), explicit_selection
+            )
+            else frozenset()
+        )
         for source_id in self.container.calendar_service.source_ids:
             result = selected_results.get(source_id)
             source = self.container.calendar_service.source(source_id)
@@ -989,6 +1014,11 @@ class HubDesktopCoordinator(QObject):
                     )
                 )
             for event in snapshot.events:
+                if (
+                    snapshot.provider_id == "google-calendar"
+                    and (event.calendar_id, event.event_id) in linked_google_ids
+                ):
+                    continue
                 identity = (source_id, event.calendar_id, event.event_id)
                 if identity in seen_events:
                     continue
@@ -1030,6 +1060,7 @@ class HubDesktopCoordinator(QObject):
                 ),
             )
             for item in local_import_records
+            if item.source_format != "manual"
         )
         local_events = self.container.controller.list_imported_calendar_events(
             starts_at=query.starts_at,
@@ -1046,7 +1077,9 @@ class HubDesktopCoordinator(QObject):
                         calendar_id=calendar_key,
                         display_name=imported.name,
                         source_id=LOCAL_IMPORT_PROVIDER_ID,
-                        source_name="Local import",
+                        source_name="Local calendar"
+                        if imported.source_format == "manual"
+                        else "Local import",
                         selected=_calendar_selection_applies(
                             LOCAL_IMPORT_PROVIDER_ID,
                             import_id,
@@ -1077,7 +1110,9 @@ class HubDesktopCoordinator(QObject):
                     calendar_id=calendar_key,
                     calendar_name=local_import_names.get(import_id, "Local calendar import"),
                     source_id=LOCAL_IMPORT_PROVIDER_ID,
-                    source_name="Local import",
+                    source_name="Local calendar"
+                    if import_id == str(LOCAL_CALENDAR_ID)
+                    else "Local import",
                     location=imported.location,
                     description=imported.description,
                     navigation_target=imported.deep_link,
@@ -1842,6 +1877,101 @@ class HubDesktopCoordinator(QObject):
         self.render_calendar()
         self.render_task_surfaces()
 
+    @Slot()
+    @Slot(object)
+    def _calendar_item_editor(self, value: object = None) -> None:
+        if self._closed or self.window.locked:
+            return
+        if isinstance(value, CalendarEventView) and self.window.privacy_masked:
+            self.window.calendar_status_label.setText(
+                "Turn off privacy masking to edit this calendar item."
+            )
+            return
+        local = self.container.controller.local_calendar
+        current = None
+        if isinstance(value, CalendarEventView):
+            if value.external_calendar_id != str(LOCAL_CALENDAR_ID):
+                return
+            current = local.get(value.external_event_id)
+            if current is None:
+                return
+        binding = local.binding(current.event_id) if current else None
+        config = self.container.platform_connections.configuration("google")
+        destinations: list[tuple[str, str]] = []
+        if config and config.enabled and config.calendar_sync_enabled:
+            for result in self.container.controller.calendar_results():
+                if result.provider_id == "google-calendar" and result.snapshot:
+                    destinations.extend(
+                        (
+                            identifier,
+                            result.snapshot.calendar_display_names.get(identifier, identifier),
+                        )
+                        for identifier in result.snapshot.available_calendar_ids
+                    )
+            if not destinations:
+                destinations.append(("primary", "Primary calendar"))
+        dialog = CalendarItemDialog(
+            day=self.window.current_calendar_date,
+            timezone=self.container.controller.settings.default_timezone,
+            current=current,
+            binding=binding,
+            google_calendars=tuple(destinations),
+            parent=self.window,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        fields = dialog.payload()
+        resolution = fields.pop("conflict_resolution", None)
+        try:
+            if current is None:
+                event = self.container.controller.create_calendar_item(**fields)
+            else:
+                event = self.container.controller.update_calendar_item(current.event_id, **fields)
+            if resolution is not None and binding is not None:
+                local.save_binding(binding.model_copy(update={"resolution": resolution}))
+            if fields.get("google_calendar_id") is None and binding is not None:
+                local.stop_sync(event.event_id)
+        except (TypeError, ValueError):
+            self.window.calendar_status_label.setText(
+                "The calendar item could not be saved. Check its dates and fields."
+            )
+            return
+        selected = _saved_calendar_selection(self.container)
+        key = _calendar_selection_key(LOCAL_IMPORT_PROVIDER_ID, str(event.import_id))
+        if selected is not None and key not in selected:
+            self.container.settings_repository.set("calendar_selected_ids", [*selected, key])
+        self.render_calendar()
+        self.render_task_surfaces()
+        self.window.calendar_status_label.setText(
+            "Calendar item saved locally. Choose Sync Google to sync selected items."
+        )
+
+    @Slot(object)
+    def _calendar_item_deleted(self, value: object) -> None:
+        if self._closed or self.window.locked:
+            return
+        if not isinstance(value, CalendarEventView) or value.external_calendar_id != str(
+            LOCAL_CALENDAR_ID
+        ):
+            return
+        self.container.controller.delete_calendar_item(value.external_event_id)
+        self.render_calendar()
+        self.render_task_surfaces()
+        self.window.calendar_status_label.setText(
+            "Calendar item removed locally. Its Google copy is retained."
+        )
+
+    @Slot(object)
+    def _calendar_sync_completed(self, value: object) -> None:
+        if not isinstance(value, CalendarSyncReport) or self._closed:
+            return
+        self.window.calendar_status_label.setText(
+            f"{value.message} Sent {value.uploaded}, received {value.downloaded}, "
+            f"conflicts {value.conflicts}, removed at Google {value.remote_deleted}, failed {value.failed}. "
+            "Edit a conflicting local item to choose which version to use."
+        )
+        self.render_task_surfaces()
+
     @Slot(object)
     def _feed_entry_read_changed(self, value: object) -> None:
         if not isinstance(value, Mapping):
@@ -2488,17 +2618,31 @@ class HubDesktopCoordinator(QObject):
         worker.start()
 
     @Slot()
-    def refresh_calendars(self) -> None:
+    def refresh_calendars(self, *, sync_google: bool = False) -> None:
         if self._closed:
             return
         if self._global_refresh_thread is not None:
+            if sync_google:
+                self.window.calendar_status_label.setText(
+                    "Refresh is running. Choose Sync Google when it finishes."
+                )
+                return
             self._calendar_refresh_pending = True
             return
         if self._calendar_refresh_thread is not None:
+            if sync_google:
+                self.window.calendar_status_label.setText(
+                    "Calendar refresh is running. Choose Sync Google when it finishes."
+                )
+                return
             self._calendar_refresh_pending = True
             return
         if not self.container.lifecycle.network_refresh_allowed:
             self.render_calendar()
+            if sync_google:
+                self.window.calendar_status_label.setText(
+                    "Google sync is paused. Your calendar items are saved locally."
+                )
             return
         query, source_ids, queries_by_source = self._calendar_refresh_request()
         worker = _CalendarRefreshThread(
@@ -2506,10 +2650,12 @@ class HubDesktopCoordinator(QObject):
             query,
             source_ids=source_ids,
             queries_by_source=queries_by_source,
+            sync_google=sync_google,
             parent=self,
         )
         self._calendar_refresh_thread = worker
         worker.results_ready.connect(self._calendar_refresh_completed)
+        worker.sync_ready.connect(self._calendar_sync_completed)
         worker.refresh_failed.connect(self._calendar_refresh_failed)
         worker.finished.connect(self._calendar_refresh_finished)
         worker.start()

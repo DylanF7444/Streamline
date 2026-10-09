@@ -60,7 +60,7 @@ class ExternalPlatformDialog(QDialog):
         layout.addWidget(description)
 
         permissions = QLabel(self._permission_text())
-        permissions.setAccessibleName("Requested read-only access")
+        permissions.setAccessibleName("Requested platform access")
         permissions.setTextFormat(Qt.TextFormat.PlainText)
         permissions.setWordWrap(True)
         layout.addWidget(permissions)
@@ -78,6 +78,7 @@ class ExternalPlatformDialog(QDialog):
         self.client_secret_input: QLineEdit | None = None
         self.tenant_input: QLineEdit | None = None
         self.calendar_checkbox: QCheckBox | None = None
+        self.calendar_sync_checkbox: QCheckBox | None = None
         self.messages_checkbox: QCheckBox | None = None
         self.token_input: QLineEdit | None = None
         self.canvas_feed_input: QLineEdit | None = None
@@ -126,6 +127,18 @@ class ExternalPlatformDialog(QDialog):
             self.calendar_checkbox.setChecked("calendar" in selected)
             self.calendar_checkbox.setAccessibleName("Enable read-only calendar access")
             form.addRow("Calendar", self.calendar_checkbox)
+            if definition.platform_id == "google":
+                self.calendar_sync_checkbox = QCheckBox(
+                    "Allow syncing selected local events to Google"
+                )
+                self.calendar_sync_checkbox.setAccessibleName("Allow Google calendar event sync")
+                self.calendar_sync_checkbox.setChecked(
+                    bool(self.current and self.current.calendar_sync_enabled)
+                )
+                self.calendar_sync_checkbox.setToolTip(
+                    "Requires Google event write access and signing in again. Only events you select are synced."
+                )
+                form.addRow("Optional sync", self.calendar_sync_checkbox)
             self.messages_checkbox = QCheckBox("Message summaries (read only)")
             self.messages_checkbox.setChecked("messages" in selected)
             self.messages_checkbox.setAccessibleName("Enable read-only message summaries")
@@ -180,8 +193,8 @@ class ExternalPlatformDialog(QDialog):
             )
         if self.definition.platform_id == "google":
             return (
-                "Requests only Calendar read-only and/or Gmail read-only access. "
-                "Personal Hub cannot send mail or change calendar events."
+                "Calendar and Gmail access start read-only. Optional calendar sync requests "
+                "event write access after you sign in again, for individually selected local events."
             )
         if self.definition.platform_id == "microsoft":
             return (
@@ -233,6 +246,11 @@ class ExternalPlatformDialog(QDialog):
                 self.status_label.setText("Select at least one read-only capability.")
                 return
             payload.update({"client_id": client_id, "capabilities": tuple(capabilities)})
+            if self.calendar_sync_checkbox is not None:
+                if self.calendar_sync_checkbox.isChecked() and "calendar" not in capabilities:
+                    self.status_label.setText("Enable Calendar access to use optional sync.")
+                    return
+                payload["calendar_sync_enabled"] = self.calendar_sync_checkbox.isChecked()
             if self.client_secret_input is not None and self.client_secret_input.text().strip():
                 payload["client_secret"] = self.client_secret_input.text().strip()
             if self.tenant_input is not None:

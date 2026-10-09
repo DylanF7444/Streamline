@@ -145,13 +145,9 @@ def test_calendar_source_selection_and_event_open_are_injected_signals(qtbot):
 
     assert window.calendar_freshness_label.text().startswith("Stale")
     assert "last successful" in window.calendar_status_label.text()
-    visible_buttons = [
-        button.text().casefold() for button in window.calendar_page.findChildren(QPushButton)
-    ]
-    assert all(
-        not any(word in text for word in ("create", "edit", "delete", "write"))
-        for text in visible_buttons
-    )
+    # Provider-originated data cannot expose local event mutation controls.
+    assert window.calendar_item_edit_button.isHidden()
+    assert window.calendar_item_delete_button.isHidden()
 
 
 @pytest.mark.ui

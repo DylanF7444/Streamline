@@ -25,7 +25,7 @@ from personal_hub.storage.database import (
     HubImportedCalendarEventRow,
 )
 
-LocalCalendarImportFormat = Literal["csv", "text"]
+LocalCalendarImportFormat = Literal["csv", "text", "manual"]
 LOCAL_IMPORT_PROVIDER_ID = "personal-hub-import"
 LOCAL_IMPORT_SOURCE_ID = "personal-hub-imported-calendar"
 
@@ -291,6 +291,11 @@ class CalendarImportRepository:
             return [self._event_contract(row) for row in rows]
 
     list_calendar_events = list_events
+
+    def get_event(self, event_id: UUID | str) -> ImportedCalendarEvent | None:
+        with self.database.session() as session:
+            row = session.get(HubImportedCalendarEventRow, str(_as_uuid(event_id)))
+            return None if row is None else self._event_contract(row)
 
     def count(self, import_id: UUID | str | None = None) -> int:
         with self.database.session() as session:

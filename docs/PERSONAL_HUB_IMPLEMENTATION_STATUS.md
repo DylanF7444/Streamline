@@ -1,6 +1,6 @@
 # Personal Hub implementation status
 
-Updated September 30, 2026. The authoritative product and technical specification is
+Updated October 9, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
@@ -16,6 +16,35 @@ material, assistive-technology users, a clean Windows VM, or elapsed wall-clock 
 | 6. Attention messages | Complete at deterministic source gate | Read-only Gmail, Outlook, and Slack adapters; selected-query/folder/channel bounds; retained summaries; explicit memory-only body fetch; sanitization; masking; Inbox/Today UI. Live-account acceptance remains a release check. |
 | 7. Packaging and release hardening | Implemented; release approval pending external evidence | One-file build, isolated package verifier, separate installer, install/upgrade/uninstall verifier, signed-update boundary, SBOM/provenance tooling, accessibility checks, and reliability harness are implemented. See the release-gate table below. |
 | 8. Optional intelligence | Deferred | Deliberately excluded from non-AI 1.0 until stable daily-use evidence exists. |
+
+## Calendar authoring and optional Google sync — October 9, 2026
+
+Calendar now provides **Add item**, local editing/removal, timed and all-day scheduling,
+timezone validation, location, and notes. Local items are stored with durable calendar data
+in **My calendar**, remain usable offline, and participate in Home, calendar selection,
+backup/restore, export, and encrypted shared-folder synchronization.
+
+Google event syncing requires a separate account opt-in, reauthorization for
+`calendar.events`, per-item selection, and an explicit **Sync Google** action. Stable event
+IDs make uncertain insert retries safe. Linked Google changes update local records;
+version preconditions and explicit conflict resolution prevent silent overwrites. Remote
+removal retains a local copy without recreating it; local removal and stopping sync retain
+the provider copy. Bindings and credentials stay device-local. Outlook and unlinked provider
+events remain read-only.
+
+The 28 core calendar-item tests and five desktop authoring tests pass with synthetic data.
+They cover restart, backup/restore, export, shared-folder authorization isolation, source
+selection/deduplication, validation, offline/disabled gating, new OAuth grants, bounded
+write transport/redirect rejection, round trips, uncertain inserts, version races, ownership,
+conflicts/resolution, and local/remote removal. The desktop tests exercise actual add/edit/remove
+controls and reject ambiguous or nonexistent daylight-saving times. Import-boundary,
+documentation, Ruff, and whitespace checks pass. Real Google account acceptance remains
+the manual extension check in the release runbook.
+
+The complete regression run passed 311 tests in 31 minutes 30 seconds, with one existing Qt
+deprecation warning. The final focused checks passed all 28 calendar-item tests and 17
+related desktop checks on the final implementation. Tests use this checkout's `src`
+directory explicitly so an older editable installation cannot shadow the code under test.
 
 ## Home dashboard and mini calendar — September 30, 2026
 

@@ -11,7 +11,7 @@ Python 3.12 is required.
 
 ```powershell
 python -m pip install -e ".[desktop,test,dev,ui-test,build]"
-python -m personal_hub.app
+powershell -ExecutionPolicy Bypass -File scripts/run_personal_hub.ps1
 powershell -ExecutionPolicy Bypass -File scripts/test_personal_hub.ps1
 ```
 

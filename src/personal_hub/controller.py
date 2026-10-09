@@ -42,6 +42,7 @@ from personal_hub.calendar.local import (
     CalendarImportRepository,
     ImportedCalendarEvent,
 )
+from personal_hub.calendar.native import LOCAL_CALENDAR_ID, LocalCalendarItems
 from personal_hub.calendar.service import CalendarService
 from personal_hub.calendar.today import project_calendar_today
 from personal_hub.config import HubSettings
@@ -299,6 +300,9 @@ class HubController:
         self.calendar_service.set_offline(self._settings.offline_mode)
         self.calendar_import_repository = calendar_import_repository or CalendarImportRepository(
             selected_database
+        )
+        self.local_calendar = LocalCalendarItems(
+            self.calendar_import_repository, self.settings_repository
         )
         selected_ical_manager = ical_feed_manager or getattr(container, "ical_feed_manager", None)
         self.ical_feed_manager = selected_ical_manager or IcalFeedManager(
@@ -834,11 +838,19 @@ class HubController:
         limit: int = 200,
     ) -> tuple[TodayItem, ...]:
         selected = None if selected_calendar_keys is None else set(selected_calendar_keys)
+        linked_google_ids = (
+            self.local_calendar.remote_ids()
+            if selected is None
+            or _calendar_selection_matches(LOCAL_IMPORT_SOURCE_ID, str(LOCAL_CALENDAR_ID), selected)
+            else frozenset()
+        )
         events_by_identity = {
             (result.source_id, event.calendar_id, event.event_id): event
             for result in self.calendar_service.results()
             if result.snapshot is not None
             for event in result.snapshot.events
+            if result.provider_id != "google-calendar"
+            or (event.calendar_id, event.event_id) not in linked_google_ids
             if selected is None
             or _calendar_selection_matches(
                 result.source_id,
@@ -905,6 +917,39 @@ class HubController:
         return self.calendar_import_repository.count(import_id)
 
     list_local_calendar_events = list_imported_calendar_events
+
+    def create_calendar_item(
+        self, *, google_calendar_id: str | None = None, **fields: object
+    ) -> ImportedCalendarEvent:
+        self._ensure_open()
+        event = self.local_calendar.save(google_calendar_id=google_calendar_id, **fields)
+        self._audit_calendar_item("created", event.event_id)
+        return event
+
+    def update_calendar_item(self, event_id: UUID | str, **fields: object) -> ImportedCalendarEvent:
+        self._ensure_open()
+        event = self.local_calendar.save(event_id=event_id, **fields)
+        self._audit_calendar_item("updated", event.event_id)
+        return event
+
+    def delete_calendar_item(self, event_id: UUID | str) -> bool:
+        self._ensure_open()
+        deleted = self.local_calendar.delete(event_id)
+        if deleted:
+            self._audit_calendar_item("deleted", event_id)
+        return deleted
+
+    def _audit_calendar_item(self, operation: str, event_id: UUID | str) -> None:
+        self.audit_repository.add(
+            AuditEvent(
+                event_type=f"calendar.item_{operation}",
+                source_type="local_calendar",
+                source_id=str(event_id),
+                outcome="succeeded",
+                occurred_at=datetime.now(UTC),
+                metadata={"provider_id": LOCAL_IMPORT_PROVIDER_ID},
+            )
+        )
 
     def delete_calendar_import(self, import_id: UUID | str) -> bool:
         self._ensure_open()
@@ -1143,6 +1188,12 @@ class HubController:
         if not selected_items:
             return 0, 0, 0, (), None
         existing_batch = self.calendar_import_repository.get_by_name(source_name)
+        if existing_batch is not None and existing_batch.source_format == "manual":
+            issues = tuple(
+                _import_issue(item.row_number, "Choose an import name other than My calendar.")
+                for item in selected_items
+            )
+            return 0, 0, len(issues), issues, None
         import_id = existing_batch.import_id if existing_batch is not None else uuid4()
         existing_events = {
             event.stable_key: event
@@ -3061,10 +3112,16 @@ def _calendar_selection_matches(
 ) -> bool:
     """Honor source-level ``*`` selections as well as exact calendar keys."""
 
-    return (
-        _calendar_selection_key(source_id, calendar_id) in selected
-        or _calendar_selection_key(source_id, "*") in selected
-        or source_id in selected
+    aliases = (
+        (source_id, LOCAL_IMPORT_PROVIDER_ID)
+        if source_id == LOCAL_IMPORT_SOURCE_ID
+        else (source_id,)
+    )
+    return any(
+        _calendar_selection_key(alias, calendar_id) in selected
+        or _calendar_selection_key(alias, "*") in selected
+        or alias in selected
+        for alias in aliases
     )
 
 

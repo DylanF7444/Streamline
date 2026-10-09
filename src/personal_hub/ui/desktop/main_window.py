@@ -3459,6 +3459,10 @@ class PersonalHubMainWindow(QMainWindow):
     calendar_deep_link_requested = Signal(object)
     calendar_import_requested = Signal()
     calendar_import_delete_requested = Signal(str)
+    calendar_item_create_requested = Signal()
+    calendar_item_edit_requested = Signal(object)
+    calendar_item_delete_requested = Signal(object)
+    calendar_google_sync_requested = Signal()
     ical_feed_create_requested = Signal()
     ical_feed_update_requested = Signal(str)
     ical_feed_delete_requested = Signal(str)
@@ -4151,6 +4155,22 @@ class PersonalHubMainWindow(QMainWindow):
             "View selected calendars and event details.",
         )
 
+        item_actions = QHBoxLayout()
+        self.calendar_add_item_button = QPushButton("Add item")
+        self.calendar_add_item_button.setObjectName("calendarAddItemButton")
+        self.calendar_add_item_button.setAccessibleName("Add local calendar item")
+        self.calendar_add_item_button.clicked.connect(self.calendar_item_create_requested.emit)
+        item_actions.addWidget(self.calendar_add_item_button)
+        self.calendar_google_sync_button = QPushButton("Sync Google")
+        self.calendar_google_sync_button.setObjectName("calendarGoogleSyncButton")
+        self.calendar_google_sync_button.setAccessibleName(
+            "Sync selected local calendar items with Google"
+        )
+        self.calendar_google_sync_button.clicked.connect(self.calendar_google_sync_requested.emit)
+        item_actions.addWidget(self.calendar_google_sync_button)
+        item_actions.addStretch(1)
+        layout.addLayout(item_actions)
+
         toolbar = QFrame()
         toolbar.setObjectName("calendarToolbar")
         toolbar_layout = QHBoxLayout(toolbar)
@@ -4472,6 +4492,22 @@ class PersonalHubMainWindow(QMainWindow):
         details_layout.addWidget(self.calendar_event_details_status)
         details_actions = QHBoxLayout()
         details_actions.setContentsMargins(0, 2, 0, 0)
+        self.calendar_item_edit_button = QPushButton("Edit item")
+        self.calendar_item_edit_button.setObjectName("calendarItemEditButton")
+        self.calendar_item_edit_button.setAutoDefault(False)
+        self.calendar_item_edit_button.setAccessibleName("Edit local calendar item")
+        self.calendar_item_edit_button.clicked.connect(
+            lambda: self.calendar_item_edit_requested.emit(self.selected_calendar_event)
+        )
+        details_actions.addWidget(self.calendar_item_edit_button)
+        self.calendar_item_delete_button = QPushButton("Remove locally")
+        self.calendar_item_delete_button.setObjectName("calendarItemDeleteButton")
+        self.calendar_item_delete_button.setAutoDefault(False)
+        self.calendar_item_delete_button.setAccessibleName("Remove local calendar item")
+        self.calendar_item_delete_button.clicked.connect(
+            lambda: self.calendar_item_delete_requested.emit(self.selected_calendar_event)
+        )
+        details_actions.addWidget(self.calendar_item_delete_button)
         details_actions.addStretch(1)
         self.calendar_event_native_open_button = QPushButton("Open in native calendar")
         self.calendar_event_native_open_button.setObjectName("calendarEventNativeOpenButton")
@@ -4728,6 +4764,14 @@ class PersonalHubMainWindow(QMainWindow):
             status = "Status: Completed to-do" if event.is_completed else "Status: Open to-do"
         else:
             status = "Status: Read-only calendar event"
+        local_item = (
+            event.source_id == "personal-hub-import"
+            and event.external_calendar_id == "e5940710-4841-4801-bbc2-f367e3339828"
+        )
+        if local_item:
+            status = "Status: Local calendar item"
+        self.calendar_item_edit_button.setVisible(local_item)
+        self.calendar_item_delete_button.setVisible(local_item)
         self.calendar_event_details_status.setText(status)
         target = self._calendar_event_native_target(event)
         native_label = self._calendar_event_native_open_label(event)

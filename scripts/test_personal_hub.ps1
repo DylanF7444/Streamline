@@ -7,6 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 $hubRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $hubRoot
+$sourcePath = Join-Path $hubRoot "src"
+$env:PYTHONPATH = if ($env:PYTHONPATH) { "$sourcePath;$env:PYTHONPATH" } else { $sourcePath }
 
 if ($Lane -in @("ui", "release", "phase2", "phase3", "phase4", "phase5", "phase6", "phase7", "all")) {
     $env:QT_QPA_PLATFORM = "offscreen"

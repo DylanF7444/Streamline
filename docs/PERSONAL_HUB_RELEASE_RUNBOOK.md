@@ -166,6 +166,17 @@ failure, and rollback tests. An ephemeral test signature never satisfies this ga
 
 ## Live-provider acceptance
 
+For the optional Google calendar sync extension, use a non-production account and calendar:
+verify read-only setup by default, explicitly enable local-event sync and reauthorize, create
+one local-only and one linked item offline, restart, then use **Sync Google**. Confirm only
+the linked item uploads. Edit it at Google and sync to verify local persistence; edit it in
+both places to verify conflict review and each resolution choice. Retry an uncertain insert
+without duplicates, disable sync and go offline to verify no token or API access, and remove
+items in each direction to confirm the documented retained-copy behavior. Capture consent
+for `calendar.events` and fixed event POST/PATCH requests with `sendUpdates=none`; confirm
+no invitation, response, or remote DELETE request. This manual account check is distinct
+from deterministic fake-provider coverage.
+
 Use synthetic accounts with no private production content:
 
 - Google Calendar and Outlook Calendar: authorize exact read scopes, select one calendar,

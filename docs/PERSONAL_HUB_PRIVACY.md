@@ -8,7 +8,7 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 | Category | Examples | Location and lifetime |
 | --- | --- | --- |
-| Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state, explicitly imported calendar items, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
+| Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state, imported and manually created calendar items, linked event changes, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
 | Retained remote summaries | feed entries, watch observations/alerts, selected message headers/previews | Hub SQLite database; bounded by age and count |
 | Memory-only provider content | connected-calendar snapshots and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
 | Provider-canonical data | Canvas calendar items, calendar events, email, Slack messages, and public pages | Remains at the provider; Hub read adapters do not mutate it |
@@ -58,16 +58,34 @@ content and cannot execute scripts, submit forms, automate login, or alter Hub s
 
 ## Minimum permissions
 
-- Google Calendar: `https://www.googleapis.com/auth/calendar.readonly`.
+- Google Calendar: `https://www.googleapis.com/auth/calendar.readonly` by default; optional
+  `https://www.googleapis.com/auth/calendar.events` only after explicit sync opt-in and
+  reauthorization.
 - Outlook Calendar: `Calendars.Read`.
 - Gmail: `https://www.googleapis.com/auth/gmail.readonly`.
 - Outlook Mail: `Mail.Read`.
 - Slack: only the selected subset of `channels:history`, `groups:history`, and `search:read`.
 - Canvas Student: private HTTPS iCalendar feed only; no Canvas API or OAuth scope.
 
-Adapters reject unapproved or write scopes. The Hub exposes no calendar write, mail send,
-reply, draft, label, move, delete, Slack post/reaction/upload, form submission, or purchase
-operation.
+Read adapters retain their exact read scopes. A separate Google sync path can insert and
+patch individually selected local events, only during an explicit **Sync Google** action.
+It uses fixed HTTPS endpoints, bounded JSON, redirect rejection, stable retry identities,
+linked-event ownership markers, and version preconditions. It cannot send invitations,
+respond to events, delete remote events, or modify unlinked events. Mail send, reply, draft,
+label, move, delete, Slack post/reaction/upload, form submission, and purchase operations
+remain unavailable.
+
+Manually created calendar items and linked Google changes are stored with local imported
+calendar items in the Hub database, backups, and explicit exports until local removal.
+Google event IDs, calendar IDs, version markers, and sync fingerprints are device-local
+settings; they contain no tokens or copies of notes. The provider event write scope is broader
+than the app's linked-event policy and is shown at Google consent. Disabling sync or going
+offline prevents credential and provider access by the sync path. Conflicts preserve the local and provider
+versions until the user chooses a resolution. Google removal retains the local copy and
+stops its outbound sync; local removal or stopping sync retains the Google copy. Ordinary
+provider snapshots remain memory-only. Shared-folder sync includes the local item, but
+excludes these Google bindings and credentials, so receiving another device's item does
+not authorize provider writes.
 
 Canvas iCalendar paths contain bearer-like calendar tokens. The full URL is encrypted in the
 Hub vault and excluded from ordinary settings, logs, diagnostics, and exports. Canvas event

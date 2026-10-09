@@ -80,10 +80,15 @@ def test_hourly_calendar_places_due_task_and_exposes_addable_time_slots(qtbot) -
     assert len(window.calendar_week_columns) == 7
     assert len(window.calendar_time_slots) == 7 * 24
     monday_column = window.calendar_week_columns[visible_day]
+    week_placement = next(
+        item
+        for item in window.calendar_week_grid.schedule_layout.timed
+        if item.event_id == due_task.event_id
+    )
     week_row = next(
         row
         for row in window.calendar_week_grid.findChildren(QWidget, "calendarEventRow")
-        if row.property("calendarPlacementKey") == (due_task.event_id, 0)
+        if row.property("calendarPlacementKey") == (due_task.event_id, week_placement.day_index)
     )
     assert monday_column.geometry().x() < week_row.geometry().x()
     assert week_row.geometry().x() < monday_column.geometry().right()

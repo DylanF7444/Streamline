@@ -16,6 +16,7 @@ _PHASE_PATTERN = re.compile(r"test_phase(?P<phase>[1-7])(?:_|\.)")
 _RELEASE_FILES = {"test_phase7_release.py", "test_phase7_accessibility.py"}
 _ARCHITECTURE_FILES = {"test_boundaries.py", "test_isolation.py"}
 _INTEGRATION_FILES = {
+    "test_calendar_items.py",
     "test_phase3_calendar.py",
     "test_phase3_controller.py",
     "test_phase3_oauth.py",

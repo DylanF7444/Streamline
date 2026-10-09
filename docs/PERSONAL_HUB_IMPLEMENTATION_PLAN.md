@@ -190,6 +190,16 @@ The existing Today projection APIs and saved dashboard preferences remain compat
 
 ### Calendar
 
+October 9, 2026 extension: Calendar supports direct local event creation, editing, and local
+removal in **My calendar**, independent of AI and connectivity. Google is the first optional
+outbound sync provider: account-level opt-in and event-write reauthorization are required,
+followed by per-item target selection and explicit **Sync Google**. Only linked local
+events can be inserted or patched. Stable IDs prevent duplicate retries, version checks
+protect concurrent changes, and conflicts require choosing a version. Incoming changes to
+linked events update their local records. Remote removals retain a local copy without
+recreating the remote event; local removal retains the provider copy. Outlook, feed, and
+unlinked Google data remain read-only. Sync bindings stay device-local.
+
 Calendar provides month, day, week, and agenda views with:
 
 - multiple selected calendars;
@@ -349,7 +359,7 @@ It contains no model, voice, planner, command, or assistant settings.
 - CalDAV calendars and task providers.
 - IMAP read-only mail.
 - Provider task synchronization.
-- Calendar writes.
+- Additional calendar write providers and background provider sync.
 - Draft-only email workflows.
 - Local-only LAN display mode.
 - Hosted/mobile synchronization service; encrypted shared-folder synchronization is available
@@ -1387,7 +1397,8 @@ Acceptance gate:
 - due-dated local tasks appear in the correct display day and hour, and an hourly slot opens a
   local scheduled-task editor.
 - disconnected, permission, stale, offline, empty, and error states are distinct.
-- no calendar write scope or operation is available.
+- calendar writes remain unavailable by default; the October 9 extension permits only
+  explicit, reauthorized synchronization of individually linked local Google events.
 - calendar content is not stored in logs, metrics, or audit details.
 
 ### Phase 4: News feeds
@@ -1618,7 +1629,7 @@ decision.
 | Refresh strategy | Polling while process/tray runtime is active |
 | Public inbound endpoint | None |
 | AI dependency | None through 1.0 core |
-| External writes | None in initial release |
+| External writes | None by default; explicit opt-in Google event sync extension |
 | Default message-body retention | Memory only |
 | Default remote-image policy | Blocked |
 | Default notification policy | Digest for news; immediate only for user-selected task/deal rules |

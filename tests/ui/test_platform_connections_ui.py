@@ -49,6 +49,7 @@ def test_google_setup_dialog_returns_read_only_fields_and_clears_secret_control(
     assert dialog.connection_payload() == {
         "account_label": "Google",
         "enabled": True,
+        "calendar_sync_enabled": False,
         "client_id": "desktop-client.apps.googleusercontent.com",
         "capabilities": ("calendar", "messages"),
         "client_secret": "temporary-secret",

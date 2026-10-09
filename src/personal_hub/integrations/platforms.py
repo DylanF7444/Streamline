@@ -17,11 +17,14 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from personal_hub.calendar import GoogleCalendarAdapter, OutlookCalendarSource
+from personal_hub.calendar.google_sync import CalendarSyncReport, GoogleCalendarSync
+from personal_hub.calendar.native import LocalCalendarItems
 from personal_hub.calendar.service import CalendarService
 from personal_hub.integrations.canvas import CanvasIcalTaskImporter
 from personal_hub.integrations.http import BoundedProviderTransport
 from personal_hub.integrations.oauth import (
     GMAIL_READONLY_SCOPE,
+    GOOGLE_CALENDAR_EVENTS_SCOPE,
     GOOGLE_CALENDAR_READ_SCOPE,
     OUTLOOK_CALENDAR_READ_SCOPE,
     OUTLOOK_MAIL_READ_SCOPE,
@@ -130,6 +133,7 @@ class ExternalPlatformConfig(BaseModel):
     slack_scopes: tuple[str, ...] = Field(default=(), max_length=2)
     canvas_origin: str | None = Field(default=None, max_length=512)
     enabled: bool = True
+    calendar_sync_enabled: bool = False
 
     @field_validator("client_id", "slack_selection", "canvas_origin")
     @classmethod
@@ -143,6 +147,10 @@ class ExternalPlatformConfig(BaseModel):
 
     @model_validator(mode="after")
     def _platform_fields_match(self) -> ExternalPlatformConfig:
+        if self.calendar_sync_enabled and (
+            self.platform_id != "google" or "calendar" not in self.capabilities
+        ):
+            raise ValueError("Calendar sync requires Google calendar access")
         allowed = _CAPABILITIES[self.platform_id]
         if not set(self.capabilities).issubset(allowed) or len(set(self.capabilities)) != len(
             self.capabilities
@@ -394,6 +402,29 @@ class ExternalPlatformManager:
     def configuration(self, platform_id: str) -> ExternalPlatformConfig | None:
         return self._configs.get(self.platform_id(platform_id))
 
+    async def sync_calendar_items(self, local: LocalCalendarItems) -> CalendarSyncReport:
+        def allowed() -> bool:
+            config = self.configuration("google")
+            return bool(
+                config
+                and config.enabled
+                and config.calendar_sync_enabled
+                and not self.calendar_service.offline
+            )
+
+        async def token() -> str:
+            return await _OAuthTokenProvider(self, "google").get_token(
+                (GOOGLE_CALENDAR_EVENTS_SCOPE,)
+            )
+
+        if allowed():
+            status = self._oauth_service("google").status()
+            if not status.connected or GOOGLE_CALENDAR_EVENTS_SCOPE not in status.scopes:
+                return CalendarSyncReport(
+                    message="Reconnect Google to grant calendar event sync access. Local items are saved."
+                )
+        return await GoogleCalendarSync(local, self.transport, token, allowed).sync()
+
     def configure(
         self,
         platform_id: str,
@@ -610,6 +641,8 @@ class ExternalPlatformManager:
             scopes: list[str] = []
             if "calendar" in config.capabilities:
                 scopes.append(GOOGLE_CALENDAR_READ_SCOPE)
+                if config.calendar_sync_enabled:
+                    scopes.append(GOOGLE_CALENDAR_EVENTS_SCOPE)
             if "messages" in config.capabilities:
                 scopes.append(GMAIL_READONLY_SCOPE)
             provider = OAuthProviderConfig(
@@ -620,7 +653,11 @@ class ExternalPlatformManager:
                 client_secret=secret,
                 redirect_uri=redirect_uri,
                 scopes=tuple(scopes),
-                allowed_scopes=(GOOGLE_CALENDAR_READ_SCOPE, GMAIL_READONLY_SCOPE),
+                allowed_scopes=(
+                    GOOGLE_CALENDAR_READ_SCOPE,
+                    GMAIL_READONLY_SCOPE,
+                    GOOGLE_CALENDAR_EVENTS_SCOPE,
+                ),
                 extra_authorization_parameters={"access_type": "offline", "prompt": "consent"},
             )
         else:

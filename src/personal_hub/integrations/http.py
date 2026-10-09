@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -42,6 +43,11 @@ class ProviderHttpError(RuntimeError):
         super().__init__(message[:200])
 
 
+class _NoProviderRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class BoundedProviderTransport:
     """GET-only JSON and OAuth form transport for reviewed provider endpoints."""
 
@@ -64,7 +70,72 @@ class BoundedProviderTransport:
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = int(max_response_bytes)
         self._ssl_context = ssl.create_default_context(cafile=certifi.where())
-        self._opener = opener or urllib.request.urlopen
+        self._opener = (
+            opener
+            or urllib.request.build_opener(
+                _NoProviderRedirects(), urllib.request.HTTPSHandler(context=self._ssl_context)
+            ).open
+        )
+        self._calendar_opener = self._opener
+
+    async def write_calendar_event(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Narrow opt-in Google event insert/patch transport; redirects are rejected."""
+        parsed = urllib.parse.urlsplit(url)
+        target = self._target(url, {"sendUpdates": "none"})
+        if (
+            parsed.hostname != "www.googleapis.com"
+            or parsed.query
+            or method not in {"POST", "PATCH"}
+            or re.fullmatch(r"/calendar/v3/calendars/[^/]+/events(?:/ph[a-f0-9]{32})?", parsed.path)
+            is None
+            or (method == "POST") != parsed.path.endswith("/events")
+        ):
+            raise ValueError("Only Google event insert and patch endpoints are allowed")
+        if set(payload).difference(
+            {"id", "summary", "description", "location", "start", "end", "extendedProperties"}
+        ):
+            raise ValueError("Unsupported calendar event fields")
+        safe_headers = self._headers(headers)
+        if method == "PATCH" and not safe_headers.get("If-Match"):
+            raise ValueError("Calendar patches require a version precondition")
+        encoded = json.dumps(dict(payload)).encode("utf-8")
+        if len(encoded) > 100_000:
+            raise ValueError("Calendar event request exceeds its size bound")
+        safe_headers["Content-Type"] = "application/json"
+        return await asyncio.to_thread(
+            self._write_calendar_sync, method, target, safe_headers, encoded
+        )
+
+    def _write_calendar_sync(
+        self, method: str, target: str, headers: dict[str, str], encoded: bytes
+    ) -> dict[str, object]:
+        request = urllib.request.Request(target, data=encoded, headers=headers, method=method)
+        try:
+            with self._calendar_opener(request, timeout=self.timeout_seconds) as response:
+                status = int(getattr(response, "status", 200))
+                if not 200 <= status < 300:
+                    return {"status_code": status, "body": b""}
+                body = self._read_bounded(response, self.max_response_bytes)
+        except urllib.error.HTTPError as error:
+            with error:
+                error.read(_MAX_ERROR_BYTES)
+            return {"status_code": int(error.code), "body": b""}
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
+            raise ProviderHttpError(0, "Calendar write failed safely") from error
+        try:
+            value = json.loads(body)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise ProviderHttpError(0, "Calendar returned malformed JSON") from error
+        if not isinstance(value, dict):
+            raise ProviderHttpError(0, "Calendar returned an invalid response")
+        return value
 
     def scoped_to_hosts(self, allowed_hosts: frozenset[str]) -> BoundedProviderTransport:
         """Return the same bounded transport policy scoped to another reviewed host set."""

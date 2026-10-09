@@ -10,12 +10,15 @@ For development:
 
 ```powershell
 python -m pip install -e ".[desktop,test]"
-python -m personal_hub.app
+powershell -ExecutionPolicy Bypass -File scripts/run_personal_hub.ps1
 ```
 
 Release candidates install per user to `%LOCALAPPDATA%\Programs\PersonalHub` and keep user
 data under `%LOCALAPPDATA%\PersonalHub`. Personal Hub can be installed and run beside Local
 Assistant. The optional installer task registers only the `PersonalHub` sign-in entry.
+
+The development launcher and test runner prefer this checkout's source when an older
+editable Hub checkout is also registered in the Python environment.
 
 The current planning-branch installer is an unsigned development candidate. Do not treat it
 as a public release until the signing and release-evidence gates in the runbook pass.
@@ -87,6 +90,23 @@ recreating the assignment as an open task. Open, future, and generic Canvas cale
 remain, and Canvas itself is never modified.
 
 ### Calendar
+
+Choose **Add item** to create a calendar item directly. Enter its title, start and end,
+timezone, and optional location and notes. All-day items use an exclusive end date (a
+one-day item ends the following day). Items save in the local **My calendar** calendar,
+work offline, survive restart, and appear in Home and every Calendar view. Select an item
+to **Edit item** or **Remove locally**. Local removal retains any Google copy.
+
+Google sync is optional. In **Sources → Google → Connect / Configure**, enable
+**Allow syncing selected local events to Google**, then sign in again to grant event
+access. In an item's editor, select a Google calendar under **Optional sync**; other items
+stay local. Choose **Sync Google** to send local changes and receive changes to those linked
+items. This is an explicit action, not a background write on ordinary refresh. An uncertain
+write can be retried without creating another copy. If both versions changed, sync reports
+a conflict; edit the local item, choose **Use Google changes** or **Send these local changes**,
+save, and sync again. If Google removes an item, its local copy is retained and will not be
+recreated remotely. Choose **Keep on this device** in the editor to stop syncing an item.
+Outlook and other calendar feeds continue to support incoming read-only display.
 
 Calendar supports Month, Day, Week, and Agenda views, selected calendars/accounts, timed and
 all-day events, freshness state, privacy masking, and provider deep links. Day and Week show
@@ -182,7 +202,7 @@ represented as release evidence.
 | Provider | Purpose | Approved scope(s) | Not available |
 | --- | --- | --- | --- |
 | Canvas Student | import calendar items as local due tasks | private iCalendar feed URL; no API scope | Canvas writes, submissions, grade/course API access |
-| Google Calendar | selected read-only calendars | `https://www.googleapis.com/auth/calendar.readonly` | Event writes or responses |
+| Google Calendar | selected calendar display; opt-in sync for local items | `https://www.googleapis.com/auth/calendar.readonly`; optional `https://www.googleapis.com/auth/calendar.events` after reauthorization | Responses, invitations, remote deletion, and changes to unlinked events |
 | Outlook Calendar | selected read-only calendars | `Calendars.Read` | Event writes or responses |
 | Gmail | selected unread folder/query summaries and explicit body | `https://www.googleapis.com/auth/gmail.readonly` | Send, reply, draft, labels, archive, trash, attachments |
 | Outlook Mail | selected unread folder summaries and explicit body | `Mail.Read` | Send, reply, draft, move, delete |
