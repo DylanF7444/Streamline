@@ -18,6 +18,18 @@ contain widget IDs and geometry only, not provider content.
 Ruff formatting, Ruff lint for the changed Python modules, and `git diff --check` passed.
 Automated tests and manual screen-reader review were not run for this change.
 
+## Workspace navigation customization — October 16, 2026
+
+Sources and Settings now sit in a fixed Management section. Workspace pages can be renamed,
+reordered, and hidden; calendar sources and local task lists appear as collection-specific
+shortcuts that filter the existing Calendar and Tasks pages. Tasks includes an explicit empty
+list creation action, and workspace choices persist in Hub settings. Privacy masking replaces
+collection names in the navigation and disables customization while content is masked or the
+Hub is locked. The full test lane completed with 312 passed and 6 failed: five dashboard layout
+tests expect the older version-1 size-preset model, while the window construction failure was
+fixed by avoiding unnecessary navigation show calls and then passed in isolation. The full lane
+was not rerun after that fix; manual UI review was not run.
+
 | Phase | Status | Evidence |
 | --- | --- | --- |
 | 0. Boundary proof and application skeleton | Complete | Independent package, entry point, data root, database, process/mutex/startup identities, Qt shell, coexistence tests, and measured import boundary. |

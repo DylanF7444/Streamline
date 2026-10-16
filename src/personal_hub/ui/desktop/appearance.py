@@ -316,7 +316,8 @@ QToolTip {{
 }}
 
 #pageSubtitle, #statusLabel, #settingsValue,
-#navigationLabel, #pageEyebrow, #todayDateLabel, #todayTimezoneLabel,
+#navigationLabel, #workspaceNavigationLabel, #managementNavigationLabel,
+#pageEyebrow, #todayDateLabel, #todayTimezoneLabel,
 #todayRefreshStatus, #todaySectionBody, #todaySectionMetadata,
 #calendarFreshnessLabel, #calendarStatusLabel, #calendarTimezoneLabel,
 #calendarSourcesTitle, #calendarSourcesEmpty, #calendarWeekdayLabel,

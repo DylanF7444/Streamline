@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog
 
 from personal_hub.calendar.contracts import CalendarQuery, CalendarResult
 from personal_hub.calendar.google_sync import CalendarSyncReport
@@ -672,9 +672,11 @@ class HubDesktopCoordinator(QObject):
         window.task_undo_requested.connect(self._task_undo)
         window.task_native_open_requested.connect(self._open_task_native)
         window.task_import_requested.connect(lambda: self._open_import_dialog("tasks"))
+        window.task_list_create_requested.connect(self._task_list_create_requested)
         window.today_section_order_changed.connect(self._save_today_order)
         window.today_section_visibility_changed.connect(self._save_today_visibility)
         window.dashboard_layout_changed.connect(self._save_dashboard_layout)
+        window.workspace_navigation_changed.connect(self._save_workspace_navigation)
         window.feed_subscription_create_requested.connect(self._feed_subscription_created)
         window.feed_subscription_update_requested.connect(self._feed_subscription_updated)
         window.feed_subscription_delete_requested.connect(self._feed_subscription_deleted)
@@ -743,6 +745,9 @@ class HubDesktopCoordinator(QObject):
         """Render the durable Phase 1 projections without performing provider I/O."""
 
         self.container.controller.remove_legacy_message_digests()
+        self.window.set_workspace_navigation_preferences(
+            self.container.settings_repository.get("workspace_navigation", None)
+        )
         settings = self.container.controller.settings
         self.window.render_settings(
             SettingsView(
@@ -794,10 +799,9 @@ class HubDesktopCoordinator(QObject):
         self.render_diagnostics()
 
     def render_task_surfaces(self) -> None:
-        lists = {
-            str(task_list.list_id): task_list.name
-            for task_list in self.container.controller.list_task_lists()
-        }
+        task_lists = self.container.controller.list_task_lists()
+        self.window.set_workspace_task_lists(task_lists)
+        lists = {str(task_list.list_id): task_list.name for task_list in task_lists}
         self.window.render_tasks(
             tuple(_task_view(task, lists=lists) for task in self.container.controller.list_tasks()),
             preserve_undo=True,
@@ -2052,7 +2056,7 @@ class HubDesktopCoordinator(QObject):
                 if view.timezone in {"", "local"}
                 else view.timezone
             ),
-            "list_id": self._resolve_task_list(view.list_id),
+            "list_id": self._resolve_task_list(view.list_key or view.list_id),
             "tags": view.tags,
             "recurrence": _recurrence(view.recurrence),
             "reminder_offsets_minutes": view.reminder_offsets_minutes,
@@ -2066,6 +2070,37 @@ class HubDesktopCoordinator(QObject):
                 }
             )
         return values
+
+    @Slot()
+    def _task_list_create_requested(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self.window,
+            "Create task list",
+            "Task list name:",
+        )
+        if not accepted:
+            return
+        try:
+            normalized = " ".join(name.split())
+            if not normalized:
+                raise ValueError("Task list name cannot be blank")
+            task_list = next(
+                (
+                    item
+                    for item in self.container.controller.list_task_lists()
+                    if item.name.casefold() == normalized.casefold()
+                ),
+                None,
+            )
+            if task_list is None:
+                task_list = self.container.controller.create_task_list(normalized)
+        except (TypeError, ValueError, RuntimeError):
+            self.window.task_status_label.setText(
+                "That task list could not be created. Choose a different name."
+            )
+            return
+        self.render_task_surfaces()
+        self.window.open_workspace_collection("task-list", str(task_list.list_id))
 
     def _resolve_task_list(self, value: str | None) -> UUID | None:
         if not value:
@@ -2256,6 +2291,12 @@ class HubDesktopCoordinator(QObject):
         self.container.settings = updated
         self.render_all()
         self.window.set_settings_status("Settings saved.")
+
+    @Slot(object)
+    def _save_workspace_navigation(self, value: object) -> None:
+        if not isinstance(value, Mapping):
+            return
+        self.container.settings_repository.set("workspace_navigation", dict(value))
 
     @Slot(str)
     def _sync_configure_requested(self, endpoint: str) -> None:
@@ -3694,6 +3735,7 @@ def _task_view(task: Any, *, lists: Mapping[str, str]) -> TaskView:
         due_is_all_day=task.due_is_all_day,
         timezone=task.timezone,
         list_id=lists.get(str(task.list_id)) if task.list_id is not None else None,
+        list_key=str(task.list_id) if task.list_id is not None else None,
         tags=task.tags,
         recurrence=recurrence,
         reminder_offsets_minutes=task.reminder_offsets_minutes,

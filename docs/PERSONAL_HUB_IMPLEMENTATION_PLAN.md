@@ -147,8 +147,14 @@ new cloud service.
 
 ## Information Architecture
 
-The main window uses a persistent left navigation rail and a content area. The initial
-navigation is:
+The main window uses a persistent left navigation rail and a content area. The **Workspace**
+group contains Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
+or hide these pages. Connected and imported calendars and local task lists also appear as
+individual shortcuts that open the existing Calendar or Tasks page scoped to that collection.
+Users can create an empty task list from Tasks; calendars are added through connected account
+selection or named local imports. Workspace navigation preferences are stored in Hub settings.
+The separate **Management** group contains fixed Sources and Settings pages; these controls
+do not participate in workspace customization. The initial navigation is:
 
 1. **Home** (the Today dashboard)
 2. **Calendar**

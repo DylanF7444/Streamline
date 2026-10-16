@@ -8,6 +8,7 @@ network, lifecycle, or conversational UI code is imported here.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from calendar import monthrange
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateTimeEdit,
+    QDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -63,6 +65,10 @@ from personal_hub.ui.desktop.dashboard import DashboardBoard
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
+from personal_hub.ui.desktop.workspace_navigation import (
+    WorkspaceNavigationEditor,
+    WorkspaceNavigationEntry,
+)
 
 APPLICATION_NAME: Final = "Personal Hub"
 HOME_DESTINATION: Final = "Home"
@@ -89,8 +95,16 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Sources": "sourcesButton",
     "Settings": "settingsButton",
 }
+_WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
+_MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[5:]
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
+
+
+def _workspace_collection_route_id(kind: str, collection_id: str) -> str:
+    identity = f"{kind}\x00{collection_id}".encode("utf-8", errors="replace")
+    digest = hashlib.sha256(identity).hexdigest()[:24]
+    return f"collection.{kind}.{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +250,7 @@ class TaskView:
     completed_at: datetime | None = None
     external_url: str = ""
     native_platform: str = ""
+    list_key: str | None = None
 
     @property
     def id(self) -> str:
@@ -1347,7 +1362,8 @@ def _coerce_task(value: object, index: int) -> TaskView:
             _field(value, "due_is_all_day", _field(value, "all_day", False))
         ),
         timezone=_safe_text(_field(value, "timezone", "local"), fallback="local", limit=128),
-        list_id=_safe_text(list_value, limit=128) or None,
+        list_id=_safe_text(list_value, limit=160) or None,
+        list_key=_safe_text(_field(value, "list_key", ""), limit=128) or None,
         tags=_coerce_text_tuple(_field(value, "tags", ())),
         recurrence=_safe_text(recurrence_value, limit=128) or None,
         reminder_offsets_minutes=_coerce_int_tuple(
@@ -2308,7 +2324,7 @@ QMainWindow, QWidget {
     color: #9aabc0;
 }
 
-#navigationLabel, #pageEyebrow {
+#navigationLabel, #workspaceNavigationLabel, #managementNavigationLabel, #pageEyebrow {
     color: #7792b3;
     font-size: 8pt;
     font-weight: 700;
@@ -3444,6 +3460,7 @@ class PersonalHubMainWindow(QMainWindow):
     task_native_open_requested = Signal(object)
     task_edit_requested = Signal(object)
     task_import_requested = Signal()
+    task_list_create_requested = Signal()
     task_filters_changed = Signal(object)
     today_changed = Signal(object)
     today_section_order_changed = Signal(object)
@@ -3496,6 +3513,7 @@ class PersonalHubMainWindow(QMainWindow):
     inbox_mode_changed = Signal(str)
     inbox_state_changed = Signal(object)
     settings_save_requested = Signal(object)
+    workspace_navigation_changed = Signal(object)
     backup_requested = Signal()
     restore_requested = Signal()
     export_requested = Signal()
@@ -3628,6 +3646,18 @@ class PersonalHubMainWindow(QMainWindow):
         self.destination_buttons = self.navigation_buttons
         self.nav_buttons = self.navigation_buttons
         self.page_widgets: dict[str, QWidget] = {}
+        self._workspace_page_title_labels: dict[str, QLabel] = {}
+        self._workspace_navigation_entries: dict[str, WorkspaceNavigationEntry] = {}
+        self._workspace_route_targets: dict[str, str] = {}
+        self._workspace_task_list_names: dict[str, str] = {}
+        self._workspace_saved_order: list[str] = list(_WORKSPACE_DESTINATIONS)
+        self._workspace_saved_labels: dict[str, str] = {}
+        self._workspace_hidden_routes: set[str] = set()
+        self._workspace_task_list_filter: str | None = None
+        self._workspace_task_list_filter_name: str | None = None
+        self._workspace_calendar_filter: str | None = None
+        self._workspace_task_lists: tuple[tuple[str, str], ...] = ()
+        self._workspace_calendar_sources: tuple[CalendarSourceView, ...] = ()
 
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
@@ -3759,37 +3789,370 @@ class PersonalHubMainWindow(QMainWindow):
         self.navigation_caption = navigation_label
         layout.addWidget(navigation_label)
 
+        workspace_header = QWidget(navigation)
+        workspace_header.setObjectName("workspaceNavigationHeader")
+        workspace_header_layout = QHBoxLayout(workspace_header)
+        workspace_header_layout.setContentsMargins(0, 8, 0, 0)
+        workspace_header_layout.setSpacing(6)
+        workspace_label = QLabel("WORKSPACE")
+        workspace_label.setObjectName("workspaceNavigationLabel")
+        workspace_label.setAccessibleName("Workspace pages")
+        workspace_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.workspace_navigation_label = workspace_label
+        workspace_header_layout.addWidget(workspace_label, 1)
+        self.workspace_customize_button = QPushButton("Customize")
+        self.workspace_customize_button.setObjectName("workspaceCustomizeButton")
+        self.workspace_customize_button.setAccessibleName("Customize workspace pages")
+        self.workspace_customize_button.setAccessibleDescription(
+            "Rename, reorder, show, or hide workspace pages."
+        )
+        self.workspace_customize_button.setAutoDefault(False)
+        self.workspace_customize_button.clicked.connect(self._edit_workspace_navigation)
+        workspace_header_layout.addWidget(self.workspace_customize_button)
+        layout.addWidget(workspace_header)
+
         self._navigation_group = QButtonGroup(navigation)
         self._navigation_group.setExclusive(True)
+        self._static_navigation_buttons: dict[str, QPushButton] = {}
         for destination in NAVIGATION_DESTINATIONS:
-            button = QPushButton(destination)
-            button.setObjectName(_NAVIGATION_OBJECT_NAMES[destination])
-            button.setProperty("hubNavigation", True)
-            button.setAccessibleName(destination)
-            button.setAccessibleDescription(f"Open the {destination} page.")
-            button.setCheckable(True)
-            button.setAutoDefault(False)
-            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            button.setMinimumHeight(38)
-            self._navigation_group.addButton(button)
+            button = self._create_navigation_button(
+                destination,
+                destination,
+                _NAVIGATION_OBJECT_NAMES[destination],
+            )
+            self._static_navigation_buttons[destination] = button
             self.navigation_buttons[destination] = button
             setattr(self, f"{destination.casefold().replace(' ', '_')}_button", button)
-            button.clicked.connect(
-                lambda _checked=False, value=destination: self._set_active_destination(value)
-            )
-            layout.addWidget(button)
+        self.today_button = self._static_navigation_buttons[HOME_DESTINATION]
 
-        self.today_button = self.navigation_buttons[HOME_DESTINATION]
+        self.workspace_navigation_scroll = QScrollArea(navigation)
+        self.workspace_navigation_scroll.setObjectName("workspaceNavigationScroll")
+        self.workspace_navigation_scroll.setAccessibleName("Workspace navigation pages")
+        self.workspace_navigation_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.workspace_navigation_scroll.setWidgetResizable(True)
+        self.workspace_navigation_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        workspace_contents = QWidget(self.workspace_navigation_scroll)
+        workspace_contents.setObjectName("workspaceNavigationContents")
+        workspace_contents_layout = QVBoxLayout(workspace_contents)
+        workspace_contents_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_contents_layout.setSpacing(6)
+        self.workspace_navigation_layout = workspace_contents_layout
+        self.workspace_navigation_scroll.setWidget(workspace_contents)
+        layout.addWidget(self.workspace_navigation_scroll, 1)
 
-        layout.addStretch(1)
+        separator = QFrame(navigation)
+        separator.setObjectName("managementNavigationSeparator")
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Plain)
+        self.management_navigation_separator = separator
+        layout.addWidget(separator)
 
-        for first, second in zip(
-            (self.navigation_buttons[destination] for destination in NAVIGATION_DESTINATIONS),
-            (self.navigation_buttons[destination] for destination in NAVIGATION_DESTINATIONS[1:]),
-            strict=False,
-        ):
+        management_label = QLabel("MANAGEMENT")
+        management_label.setObjectName("managementNavigationLabel")
+        management_label.setAccessibleName("Management pages")
+        management_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.management_navigation_label = management_label
+        layout.addWidget(management_label)
+        for destination in _MANAGEMENT_DESTINATIONS:
+            layout.addWidget(self._static_navigation_buttons[destination])
+
+        self._render_workspace_navigation()
+
+        ordered_buttons = [
+            self.navigation_buttons[route_id]
+            for route_id in self._workspace_navigation_entries
+            if route_id in self.navigation_buttons
+        ] + [self._static_navigation_buttons[item] for item in _MANAGEMENT_DESTINATIONS]
+        for first, second in zip(ordered_buttons, ordered_buttons[1:], strict=False):
             self.setTabOrder(first, second)
         return navigation
+
+    def _create_navigation_button(self, route_id: str, label: str, object_name: str) -> QPushButton:
+        button = QPushButton(label)
+        button.setObjectName(object_name)
+        button.setProperty("hubNavigation", True)
+        button.setAccessibleName(label)
+        button.setAccessibleDescription(f"Open the {label} page.")
+        button.setCheckable(True)
+        button.setAutoDefault(False)
+        button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        button.setMinimumHeight(38)
+        self._navigation_group.addButton(button)
+        button.clicked.connect(
+            lambda _checked=False, value=route_id: self._set_active_destination(value)
+        )
+        return button
+
+    def _default_workspace_entries(self) -> tuple[WorkspaceNavigationEntry, ...]:
+        entries: list[WorkspaceNavigationEntry] = [
+            WorkspaceNavigationEntry(destination, destination, destination)
+            for destination in _WORKSPACE_DESTINATIONS
+        ]
+        calendar_entries = [
+            WorkspaceNavigationEntry(
+                route_id=_workspace_collection_route_id("calendar", source.calendar_id),
+                label=source.display_name,
+                destination="Calendar",
+                collection_kind="calendar",
+                collection_id=source.calendar_id,
+            )
+            for source in self._workspace_calendar_sources
+        ]
+        task_entries = [
+            WorkspaceNavigationEntry(
+                route_id=_workspace_collection_route_id("task-list", list_id),
+                label=name,
+                destination="Tasks",
+                collection_kind="task_list",
+                collection_id=list_id,
+            )
+            for list_id, name in self._workspace_task_lists
+        ]
+        entries.extend(
+            self._unique_collection_labels(
+                [*calendar_entries, *task_entries],
+                reserved_labels={entry.label.casefold() for entry in entries},
+            )
+        )
+        return tuple(entries[:512])
+
+    @staticmethod
+    def _unique_collection_labels(
+        entries: list[WorkspaceNavigationEntry],
+        *,
+        reserved_labels: set[str] | None = None,
+    ) -> list[WorkspaceNavigationEntry]:
+        seen = set(reserved_labels or ())
+        unique: list[WorkspaceNavigationEntry] = []
+        for entry in entries:
+            label = _safe_text(entry.label, fallback="Collection", limit=64)
+            key = label.casefold()
+            if key in seen:
+                suffix = entry.route_id.rsplit(".", 1)[-1][:6]
+                label = _safe_text(f"{label} · {suffix}", fallback="Collection", limit=64)
+                key = label.casefold()
+            seen.add(key)
+            unique.append(replace(entry, label=label))
+        return unique
+
+    def _ordered_workspace_entries(self) -> tuple[WorkspaceNavigationEntry, ...]:
+        entries = {entry.route_id: entry for entry in self._default_workspace_entries()}
+        route_order = [route_id for route_id in self._workspace_saved_order if route_id in entries]
+        route_order.extend(route_id for route_id in entries if route_id not in route_order)
+        ordered: list[WorkspaceNavigationEntry] = []
+        seen_labels: set[str] = set()
+        for route_id in route_order:
+            entry = replace(
+                entries[route_id],
+                label=self._workspace_saved_labels.get(route_id, entries[route_id].label),
+            )
+            label = entry.label
+            if label.casefold() in seen_labels:
+                suffix = entry.route_id.rsplit(".", 1)[-1][:6]
+                label = _safe_text(f"{label} · {suffix}", fallback="Collection", limit=64)
+                entry = replace(entry, label=label)
+            seen_labels.add(label.casefold())
+            ordered.append(entry)
+        return tuple(ordered)
+
+    def _display_workspace_entries(self) -> tuple[WorkspaceNavigationEntry, ...]:
+        entries = self._ordered_workspace_entries()
+        if not (self._privacy_masked or self._locked):
+            return entries
+        counts = {"calendar": 0, "task_list": 0}
+        masked: list[WorkspaceNavigationEntry] = []
+        for entry in entries:
+            if entry.collection_kind not in counts:
+                if entry.route_id in _WORKSPACE_DESTINATIONS and entry.label != entry.route_id:
+                    masked.append(replace(entry, label=entry.route_id))
+                else:
+                    masked.append(entry)
+                continue
+            counts[entry.collection_kind] += 1
+            kind_label = "Calendar" if entry.collection_kind == "calendar" else "Task list"
+            masked.append(replace(entry, label=f"{kind_label} {counts[entry.collection_kind]}"))
+        return tuple(masked)
+
+    def _render_workspace_navigation(self) -> None:
+        if not hasattr(self, "workspace_navigation_layout"):
+            return
+        while self.workspace_navigation_layout.count():
+            item = self.workspace_navigation_layout.takeAt(0)
+            widget = item.widget()
+            if widget is None:
+                continue
+            route_id = widget.property("workspaceRouteId")
+            if isinstance(route_id, str):
+                self._navigation_group.removeButton(widget)
+                self.navigation_buttons.pop(route_id, None)
+                widget.deleteLater()
+
+        entries = self._display_workspace_entries()
+        self._workspace_navigation_entries = {entry.route_id: entry for entry in entries}
+        self._workspace_route_targets = {entry.route_id: entry.destination for entry in entries}
+        task_list_names = dict(self._workspace_task_lists)
+        self._workspace_task_list_names = {
+            entry.route_id: task_list_names[entry.collection_id]
+            for entry in entries
+            if entry.collection_kind == "task_list" and entry.collection_id in task_list_names
+        }
+
+        for entry in entries:
+            if entry.route_id in self._static_navigation_buttons:
+                button = self._static_navigation_buttons[entry.route_id]
+            else:
+                safe_object_name = re.sub(r"[^a-zA-Z0-9_]+", "_", entry.route_id)
+                button = self._create_navigation_button(
+                    entry.route_id,
+                    entry.label,
+                    f"workspace_{safe_object_name}_button",
+                )
+                button.setProperty("workspaceRouteId", entry.route_id)
+                self.navigation_buttons[entry.route_id] = button
+            button.setText(entry.label.replace("&", "&&"))
+            button.setAccessibleName(entry.label)
+            button.setAccessibleDescription(f"Open the {entry.label} page.")
+            if entry.route_id in self._workspace_hidden_routes:
+                button.hide()
+            elif button.isHidden():
+                button.show()
+            button.setChecked(entry.route_id == self._active_destination)
+            self.workspace_navigation_layout.addWidget(button)
+
+        self.workspace_navigation_layout.addStretch(1)
+        self.workspace_customize_button.setVisible(bool(entries))
+        self.workspace_customize_button.setEnabled(not (self._privacy_masked or self._locked))
+        if self._active_destination in self._workspace_route_targets:
+            entry = self._workspace_navigation_entries[self._active_destination]
+            if entry.collection_kind == "task_list":
+                self._workspace_task_list_filter = entry.collection_id
+                self._workspace_task_list_filter_name = self._workspace_task_list_names.get(
+                    entry.route_id
+                )
+            elif entry.collection_kind == "calendar":
+                self._workspace_calendar_filter = entry.collection_id
+        elif self._active_destination not in self.page_widgets:
+            self._set_active_destination(TODAY_DESTINATION, emit=False)
+        self._update_workspace_page_title(self._active_destination)
+        if hasattr(self, "status_label"):
+            self._update_status()
+
+    def _workspace_navigation_preferences(self) -> dict[str, object]:
+        entries = self._ordered_workspace_entries()
+        return {
+            "version": 1,
+            "order": [entry.route_id for entry in entries],
+            "labels": {entry.route_id: entry.label for entry in entries},
+            "hidden": [
+                entry.route_id
+                for entry in entries
+                if entry.route_id in self._workspace_hidden_routes
+            ],
+        }
+
+    def set_workspace_navigation_preferences(self, preferences: object) -> None:
+        """Load bounded local navigation preferences without emitting a save request."""
+
+        if (
+            not isinstance(preferences, Mapping)
+            or type(preferences.get("version", 1)) is not int
+            or preferences.get("version", 1) != 1
+        ):
+            self._workspace_saved_order = list(_WORKSPACE_DESTINATIONS)
+            self._workspace_saved_labels = {}
+            self._workspace_hidden_routes.clear()
+        else:
+            raw_order = preferences.get("order", [])
+            self._workspace_saved_order = (
+                list(_coerce_text_tuple(raw_order, limit=160, max_items=512))
+                if isinstance(raw_order, (tuple, list))
+                else list(_WORKSPACE_DESTINATIONS)
+            )
+            raw_labels = preferences.get("labels", {})
+            labels: dict[str, str] = {}
+            if isinstance(raw_labels, Mapping):
+                for index, (route_id, label) in enumerate(raw_labels.items()):
+                    if index >= 512:
+                        break
+                    if isinstance(route_id, str) and isinstance(label, str):
+                        normalized = _safe_text(" ".join(label.split()), limit=64)
+                        normalized_route_id = _safe_text(route_id, limit=96)
+                        if normalized and normalized_route_id:
+                            labels[normalized_route_id] = normalized
+            self._workspace_saved_labels = labels
+            raw_hidden = preferences.get("hidden", [])
+            self._workspace_hidden_routes = (
+                set(_coerce_text_tuple(raw_hidden, limit=160, max_items=512))
+                if isinstance(raw_hidden, (tuple, list))
+                else set()
+            )
+        self._render_workspace_navigation()
+        visible_entries = [
+            entry
+            for entry in self._workspace_navigation_entries.values()
+            if entry.route_id not in self._workspace_hidden_routes
+        ]
+        if not visible_entries and self._workspace_navigation_entries:
+            first_route = next(iter(self._workspace_navigation_entries))
+            self._workspace_hidden_routes.discard(first_route)
+            self._render_workspace_navigation()
+        if (
+            self._active_destination in self._workspace_hidden_routes
+            and self._active_destination in self._workspace_navigation_entries
+        ):
+            first_visible = next(
+                (
+                    entry.route_id
+                    for entry in self._ordered_workspace_entries()
+                    if entry.route_id not in self._workspace_hidden_routes
+                ),
+                TODAY_DESTINATION,
+            )
+            self._set_active_destination(first_visible, emit=False)
+            button = self.navigation_buttons.get(first_visible)
+            if button is not None:
+                button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def set_workspace_task_lists(self, task_lists: Iterable[object] | None) -> None:
+        """Expose local task lists as individual workspace routes."""
+
+        selected: list[tuple[str, str]] = []
+        for item in _iter_values(task_lists):
+            list_id = _safe_text(_field(item, "list_id", _field(item, "id", "")), limit=128)
+            name = _safe_text(_field(item, "name", _field(item, "display_name", "")), limit=160)
+            if list_id and name and not any(existing_id == list_id for existing_id, _ in selected):
+                selected.append((list_id, name))
+        self._workspace_task_lists = tuple(selected[:256])
+        self._render_workspace_navigation()
+
+    def _edit_workspace_navigation(self) -> None:
+        if self._privacy_masked or self._locked:
+            return
+        entries = self._ordered_workspace_entries()
+        editor = WorkspaceNavigationEditor(
+            entries,
+            visible_routes={
+                entry.route_id
+                for entry in entries
+                if entry.route_id not in self._workspace_hidden_routes
+            },
+            parent=self,
+        )
+        if editor.exec() != QDialog.DialogCode.Accepted:
+            return
+        preferences = editor.preferences
+        if preferences is None:
+            return
+        self.set_workspace_navigation_preferences(preferences)
+        self.workspace_navigation_changed.emit(self._workspace_navigation_preferences())
+
+    def open_workspace_collection(self, kind: str, collection_id: str) -> bool:
+        """Open the filtered Calendar or Tasks page for one local collection."""
+
+        route_id = _workspace_collection_route_id(kind, _safe_text(collection_id, limit=128))
+        return self._set_active_destination(route_id)
 
     @staticmethod
     def _new_page(
@@ -3872,6 +4235,7 @@ class PersonalHubMainWindow(QMainWindow):
             TODAY_DESTINATION,
             "Schedule, tasks, alerts, news, and source status.",
         )
+        self._workspace_page_title_labels[HOME_DESTINATION] = self.today_title
         layout.addSpacing(10)
 
         controls = QWidget()
@@ -4149,11 +4513,12 @@ class PersonalHubMainWindow(QMainWindow):
         page, layout = self._new_page("calendarPage", "Calendar page")
         self.calendar_page = page
         self._calendar_layout = layout
-        self._add_page_header(
+        _eyebrow, self.calendar_title, _subtitle = self._add_page_header(
             layout,
             "Calendar",
             "View selected calendars and event details.",
         )
+        self._workspace_page_title_labels["Calendar"] = self.calendar_title
 
         item_actions = QHBoxLayout()
         self.calendar_add_item_button = QPushButton("Add item")
@@ -4864,11 +5229,14 @@ class PersonalHubMainWindow(QMainWindow):
         return " · ".join(parts)
 
     def _calendar_events_for_selected(self) -> tuple[CalendarEventView, ...]:
-        if not getattr(self, "_calendar_selection_explicit", False):
+        if self._workspace_calendar_filter is not None:
+            selected = {self._workspace_calendar_filter}
+        elif not getattr(self, "_calendar_selection_explicit", False):
             return self._calendar_events
-        if not self._calendar_selected_ids:
-            return ()
-        selected = self._calendar_selected_ids
+        else:
+            if not self._calendar_selected_ids:
+                return ()
+            selected = self._calendar_selected_ids
         return tuple(
             event
             for event in self._calendar_events
@@ -5187,6 +5555,7 @@ class PersonalHubMainWindow(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        self.calendar_sources_panel.setVisible(self._workspace_calendar_filter is None)
         self.calendar_source_checkboxes.clear()
         if not self._calendar_sources:
             empty = QLabel("No calendars selected.")
@@ -5434,6 +5803,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._calendar_view = calendar_view
         self._calendar_events = calendar_view.events
         self._calendar_sources = calendar_view.calendars
+        self._workspace_calendar_sources = calendar_view.calendars
         self._calendar_ical_feeds = calendar_view.ical_feeds
         self._calendar_local_imports = calendar_view.local_imports
         self._calendar_selected_ids = set(calendar_view.selected_calendar_ids)
@@ -5449,6 +5819,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._render_ical_feeds()
         self._render_calendar_imports()
         self._render_calendar_views()
+        self._render_workspace_navigation()
         freshness_text = _CALENDAR_FRESHNESS_MESSAGES[calendar_view.freshness]
         self.calendar_freshness_label.setText(freshness_text)
         detail = calendar_view.detail
@@ -5472,6 +5843,8 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _render_calendar_from_state(self) -> None:
         if hasattr(self, "calendar_view_stack"):
+            self._workspace_calendar_sources = self._calendar_sources
+            self._render_workspace_navigation()
             self._render_calendar_sources()
             self._render_ical_feeds()
             self._render_calendar_imports()
@@ -5484,11 +5857,12 @@ class PersonalHubMainWindow(QMainWindow):
         page, layout = self._new_page("tasksPage", "Tasks page")
         self.tasks_page = page
         self._tasks_layout = layout
-        self._add_page_header(
+        _eyebrow, self.tasks_title, _subtitle = self._add_page_header(
             layout,
             "Tasks",
             "Add and manage local tasks.",
         )
+        self._workspace_page_title_labels["Tasks"] = self.tasks_title
 
         quick_add = QFrame()
         quick_add.setObjectName("taskQuickAdd")
@@ -5519,6 +5893,17 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_import_button.setAutoDefault(False)
         self.task_import_button.clicked.connect(lambda: self.task_import_requested.emit())
         quick_layout.addWidget(self.task_import_button)
+        self.task_list_create_button = QPushButton("New list")
+        self.task_list_create_button.setObjectName("taskListCreateButton")
+        self.task_list_create_button.setAccessibleName("Create a task list")
+        self.task_list_create_button.setAccessibleDescription(
+            "Create an empty task list and add it to workspace navigation."
+        )
+        self.task_list_create_button.setAutoDefault(False)
+        self.task_list_create_button.clicked.connect(
+            lambda _checked=False: self.task_list_create_requested.emit()
+        )
+        quick_layout.addWidget(self.task_list_create_button)
         layout.addWidget(quick_add)
         # Short aliases make the quick-add surface easy to discover in tests
         # and by composition code without adding another abstraction layer.
@@ -6075,6 +6460,12 @@ class PersonalHubMainWindow(QMainWindow):
         combo.setCurrentIndex(index if index >= 0 else combo.findData(fallback))
 
     def _task_matches(self, task: TaskView) -> bool:
+        if self._workspace_task_list_filter is not None and (
+            task.list_key != self._workspace_task_list_filter
+            if task.list_key is not None
+            else task.list_id != self._workspace_task_list_filter_name
+        ):
+            return False
         if self._task_state_filter_value != "all" and task.state != self._task_state_filter_value:
             return False
         due = _coerce_datetime(task.due_at)
@@ -6143,7 +6534,30 @@ class PersonalHubMainWindow(QMainWindow):
         self.tasks_list.clear()
         if hasattr(self, "task_undo_button"):
             self.task_undo_button.setVisible(bool(self._task_undo_stack))
-        if not self._tasks:
+        if self._workspace_task_list_filter is not None:
+            list_tasks = [
+                task
+                for task in self._tasks.values()
+                if (
+                    task.list_key == self._workspace_task_list_filter
+                    if task.list_key is not None
+                    else task.list_id == self._workspace_task_list_filter_name
+                )
+            ]
+            list_name = self._display_text(
+                self._workspace_task_list_filter_name or "this list",
+                sensitive=True,
+                fallback="this list",
+            )
+            if not list_tasks:
+                self.task_status_label.setText(f"No tasks in {list_name} yet.")
+            elif not visible_tasks:
+                self.task_status_label.setText("No tasks in this list match the selected filters.")
+            else:
+                self.task_status_label.setText(
+                    f"{len(visible_tasks)} of {len(list_tasks)} tasks in {list_name}"
+                )
+        elif not self._tasks:
             self.task_status_label.setText("No tasks yet.")
         elif not visible_tasks:
             self.task_status_label.setText("No tasks match the selected filters.")
@@ -6173,7 +6587,11 @@ class PersonalHubMainWindow(QMainWindow):
             self.task_status_label.setText("Enter a task title to add it.")
             self.task_quick_add_input.setFocus()
             return None
-        task = self.add_task(title)
+        task = self.add_task(
+            title,
+            list_id=self._workspace_task_list_filter_name or "",
+            list_key=self._workspace_task_list_filter or "",
+        )
         self.task_quick_add_input.clear()
         return task
 
@@ -6247,7 +6665,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_all_day_input.setChecked(bool(due_is_all_day))
         self.task_timezone_input.set_timezone(_safe_text(timezone, fallback="local", limit=128))
         self._set_combo_data(self.task_priority_input, "normal", fallback="normal")
-        self.task_list_input.clear()
+        self.task_list_input.setText(self._workspace_task_list_filter_name or "")
         self.task_tags_input.clear()
         self.task_recurrence_input.setCurrentText("")
         self.task_reminders_input.clear()
@@ -6315,6 +6733,7 @@ class PersonalHubMainWindow(QMainWindow):
             "timezone": self.task_timezone_input.timezone(),
             "priority": self.task_priority_input.currentData() or "normal",
             "list_id": self.task_list_input.text(),
+            "list_key": self._task_editor_list_key(self.task_list_input.text()),
             "tags": self.task_tags_input.text(),
             "recurrence": self.task_recurrence_input.currentText(),
             "reminder_offsets_minutes": self.task_reminders_input.text(),
@@ -6326,6 +6745,14 @@ class PersonalHubMainWindow(QMainWindow):
             self._editing_new_task = False
             self.task_editor_title_label.setText("Edit task")
         return updated
+
+    def _task_editor_list_key(self, list_name: str) -> str | None:
+        current = self._tasks.get(self._editing_task_id or "")
+        if current is not None and current.list_id == list_name:
+            return current.list_key
+        if self._editing_new_task and self._workspace_task_list_filter_name == list_name:
+            return self._workspace_task_list_filter
+        return None
 
     def _cancel_task_edit(self) -> None:
         self._editing_task_id = None
@@ -6360,6 +6787,7 @@ class PersonalHubMainWindow(QMainWindow):
             "due_is_all_day": current.due_is_all_day,
             "timezone": current.timezone,
             "list_id": current.list_id,
+            "list_key": current.list_key,
             "tags": current.tags,
             "recurrence": current.recurrence,
             "reminder_offsets_minutes": current.reminder_offsets_minutes,
@@ -6367,6 +6795,8 @@ class PersonalHubMainWindow(QMainWindow):
             "completed_at": current.completed_at,
         }
         data.update(changes)
+        if "list_id" in changes and "list_key" not in changes:
+            data["list_key"] = None
         data["updated_at"] = datetime.now().astimezone()
         updated = _coerce_task(data, 0)
         self._tasks[normalized_id] = updated
@@ -6469,11 +6899,12 @@ class PersonalHubMainWindow(QMainWindow):
         self.watchlists_page = page
         self.news_page = page
         self._watchlists_layout = layout
-        self._add_page_header(
+        _eyebrow, self.watchlists_title, _subtitle = self._add_page_header(
             layout,
             "Watchlists",
             "Manage webpage watches and RSS or Atom feeds.",
         )
+        self._workspace_page_title_labels["Watchlists"] = self.watchlists_title
         self._build_web_watch_panel(layout)
 
         toolbar = QFrame()
@@ -7978,11 +8409,12 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _build_inbox_page(self) -> QWidget:
         page, layout = self._new_page("inboxPage", "Inbox page")
-        self._add_page_header(
+        _eyebrow, self.inbox_title, _subtitle = self._add_page_header(
             layout,
             "Inbox",
             "Review alerts, reminders, and selected message summaries.",
         )
+        self._workspace_page_title_labels["Inbox"] = self.inbox_title
 
         self.inbox_mode_tabs = QTabWidget()
         self.inbox_mode_tabs.setObjectName("inboxModeTabs")
@@ -8506,6 +8938,10 @@ class PersonalHubMainWindow(QMainWindow):
         self._compact_navigation = compact
         self.brand_title.setText("Hub" if compact else APPLICATION_NAME)
         self.navigation_caption.setVisible(not compact)
+        self.workspace_navigation_label.setVisible(not compact)
+        self.management_navigation_label.setVisible(not compact)
+        self.management_navigation_separator.setVisible(not compact)
+        self.workspace_customize_button.setText("Edit" if compact else "Customize")
         if hasattr(self, "today_controls_layout"):
             controls = (
                 self.today_date_label,
@@ -8550,21 +8986,44 @@ class PersonalHubMainWindow(QMainWindow):
     def _set_active_destination(self, destination: str, *, emit: bool = True) -> bool:
         if destination == "Today":
             destination = HOME_DESTINATION
-        if destination not in self.page_widgets:
+        entry = self._workspace_navigation_entries.get(destination)
+        target_destination = entry.destination if entry is not None else destination
+        if target_destination not in self.page_widgets:
             return False
         changed = destination != self._active_destination
         self._active_destination = destination
-        self.pages.setCurrentWidget(self.page_widgets[destination])
+        self._workspace_calendar_filter = (
+            entry.collection_id
+            if entry is not None and entry.collection_kind == "calendar"
+            else None
+        )
+        self._workspace_task_list_filter = (
+            entry.collection_id
+            if entry is not None and entry.collection_kind == "task_list"
+            else None
+        )
+        self._workspace_task_list_filter_name = (
+            self._workspace_task_list_names.get(entry.route_id)
+            if entry is not None and entry.collection_kind == "task_list"
+            else None
+        )
+        self.pages.setCurrentWidget(self.page_widgets[target_destination])
+        if target_destination == "Calendar":
+            self._render_calendar_sources()
+            self._render_calendar_views()
+        elif target_destination == "Tasks":
+            self._render_task_list()
         if changed and hasattr(self, "page_transition"):
             self.page_transition.start()
         self.navigation_buttons[destination].setChecked(True)
+        self._update_workspace_page_title(destination)
         self._update_status()
         if emit:
             self.destination_changed.emit(destination)
         return True
 
     def show_destination(self, destination: str) -> bool:
-        """Select a visible primary destination without doing I/O."""
+        """Select a workspace or management route without doing I/O."""
 
         return self._set_active_destination(_safe_text(destination, limit=64))
 
@@ -8582,7 +9041,9 @@ class PersonalHubMainWindow(QMainWindow):
         return self._active_destination
 
     def _update_status(self) -> None:
-        modes: list[str] = [self._active_destination]
+        entry = self._workspace_navigation_entries.get(self._active_destination)
+        destination_label = entry.label if entry is not None else self._active_destination
+        modes: list[str] = [destination_label]
         if self._offline_mode:
             modes.append("offline")
         elif self._network_refresh_paused:
@@ -8590,6 +9051,20 @@ class PersonalHubMainWindow(QMainWindow):
         if self._locked:
             modes.append("locked")
         self.status_label.setText(" · ".join(modes))
+
+    def _update_workspace_page_title(self, route_id: str) -> None:
+        entry = self._workspace_navigation_entries.get(route_id)
+        destination = entry.destination if entry is not None else route_id
+        title = self._workspace_page_title_labels.get(destination)
+        if title is None:
+            return
+        label = (
+            entry.label
+            if entry is not None
+            else self._workspace_saved_labels.get(destination, destination)
+        )
+        title.setText(label.replace("&", "&&"))
+        title.setAccessibleName(f"{label} page title")
 
     def show_from_tray(self) -> None:
         self.show()

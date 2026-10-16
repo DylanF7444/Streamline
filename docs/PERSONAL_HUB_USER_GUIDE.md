@@ -25,6 +25,19 @@ as a public release until the signing and release-evidence gates in the runbook 
 
 ## Main screens
 
+### Navigation and collections
+
+The left rail keeps **Sources** and **Settings** together in the fixed **Management** group.
+The **Workspace** group contains Home, Calendar, Tasks, Watchlists, and Inbox. Choose
+**Customize** to rename, reorder, or hide workspace pages; drag pages or use the Move buttons
+to reorder them. Sources and Settings stay available in Management.
+
+Each available calendar and local task list also has a workspace shortcut. A calendar shortcut
+opens Calendar filtered to that calendar, and a task list shortcut opens Tasks filtered to that
+list. Add more calendars through connected calendar accounts or named CSV/text imports. Choose
+**New list** on Tasks to create an empty task list; assigning a name to a task also creates its
+list when needed. Navigation choices are saved with Hub preferences.
+
 ### Home
 
 Home (previously Today) is the default view. It offers calendar events, overdue/due/upcoming/unscheduled tasks,
