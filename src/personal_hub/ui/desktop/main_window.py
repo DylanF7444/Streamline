@@ -3737,14 +3737,13 @@ class PersonalHubMainWindow(QMainWindow):
         self.attention_notice_open_button = self.attention_notification_open_button
         self.attention_notice_dismiss_button = self.attention_notification_dismiss_button
         content_layout.addWidget(self.attention_notification_panel)
-        (
-            self.source_failure_panel,
-            self.source_failure_title,
-            self.source_failure_body,
-        ) = self._build_source_failure_panel()
+        # Source health and message attention share one notification bar. Keep
+        # the source-failure names as aliases for callers that inspect the UI.
+        self.source_failure_panel = self.attention_notification_panel
+        self.source_failure_title = self.attention_notification_title
+        self.source_failure_body = self.attention_notification_body
         self.source_failure_label = self.source_failure_body
         self.source_failure_message = self.source_failure_body
-        content_layout.addWidget(self.source_failure_panel)
         content_layout.addWidget(self.pages, 1)
         root_layout.addWidget(content, 1)
 
@@ -8343,7 +8342,7 @@ class PersonalHubMainWindow(QMainWindow):
     ) -> tuple[QFrame, QLabel, QLabel, QPushButton, QPushButton]:
         panel = QFrame()
         panel.setObjectName("attentionNotificationPanel")
-        panel.setAccessibleName("Attention message notification")
+        panel.setAccessibleName("Notification bar")
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         panel_layout = QHBoxLayout(panel)
         panel_layout.setContentsMargins(18, 12, 18, 12)
@@ -8353,14 +8352,14 @@ class PersonalHubMainWindow(QMainWindow):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(3)
-        title = QLabel("Attention messages", body)
+        title = QLabel("Attention", body)
         title.setObjectName("attentionNotificationTitle")
-        title.setAccessibleName("Attention message notification heading")
+        title.setAccessibleName("Notification heading")
         title.setTextFormat(Qt.TextFormat.PlainText)
         body_layout.addWidget(title)
         summary = QLabel(body)
         summary.setObjectName("attentionNotificationBody")
-        summary.setAccessibleName("Attention message notification details")
+        summary.setAccessibleName("Notification details")
         summary.setTextFormat(Qt.TextFormat.PlainText)
         summary.setWordWrap(True)
         body_layout.addWidget(summary)
@@ -8373,39 +8372,21 @@ class PersonalHubMainWindow(QMainWindow):
         open_button.setObjectName("attentionNotificationOpenButton")
         open_button.setAccessibleName("Review attention messages")
         open_button.setAutoDefault(False)
+        open_button.setEnabled(False)
+        open_button.hide()
         open_button.clicked.connect(self._open_attention_notification)
         actions.addWidget(open_button)
         dismiss_button = QPushButton("Dismiss", panel)
         dismiss_button.setObjectName("attentionNotificationDismissButton")
-        dismiss_button.setAccessibleName("Dismiss attention message notification")
+        dismiss_button.setAccessibleName("Dismiss message notification")
         dismiss_button.setAutoDefault(False)
+        dismiss_button.setEnabled(False)
+        dismiss_button.hide()
         dismiss_button.clicked.connect(self._dismiss_attention_notification)
         actions.addWidget(dismiss_button)
         panel_layout.addLayout(actions)
         panel.hide()
         return panel, title, summary, open_button, dismiss_button
-
-    @staticmethod
-    def _build_source_failure_panel() -> tuple[QFrame, QLabel, QLabel]:
-        panel = QFrame()
-        panel.setObjectName("sourceFailurePanel")
-        panel.setAccessibleName("Source failures")
-        failure_layout = QVBoxLayout(panel)
-        failure_layout.setContentsMargins(18, 16, 18, 16)
-        failure_layout.setSpacing(6)
-        title = QLabel("Source attention")
-        title.setObjectName("sourceFailureTitle")
-        title.setAccessibleName("Source failure heading")
-        title.setTextFormat(Qt.TextFormat.PlainText)
-        failure_layout.addWidget(title)
-        body = QLabel()
-        body.setObjectName("sourceFailureBody")
-        body.setAccessibleName("Source failure details")
-        body.setTextFormat(Qt.TextFormat.PlainText)
-        body.setWordWrap(True)
-        failure_layout.addWidget(body)
-        panel.hide()
-        return panel, title, body
 
     def _build_inbox_page(self) -> QWidget:
         page, layout = self._new_page("inboxPage", "Inbox page")
@@ -9230,23 +9211,7 @@ class PersonalHubMainWindow(QMainWindow):
             return
         notice = _coerce_attention_notification(value)
         self._attention_notification = notice
-        self.attention_notification_title.setText(
-            self._display_text(notice.title, fallback="Attention messages")
-        )
-        self.attention_notification_body.setText(
-            self._display_text(
-                notice.summary,
-                sensitive=notice.sensitive,
-                fallback="Unread attention messages are ready to review.",
-            )
-        )
-        self.attention_notification_open_button.setText(
-            _safe_text(notice.action_label, fallback="Review messages", limit=64)
-        )
-        enabled = not self._locked
-        self.attention_notification_open_button.setEnabled(enabled)
-        self.attention_notification_dismiss_button.setEnabled(enabled)
-        self.attention_notification_panel.show()
+        self._render_notification_bar()
 
     show_attention_notification = render_attention_notification
     render_attention_notice = render_attention_notification
@@ -9254,10 +9219,7 @@ class PersonalHubMainWindow(QMainWindow):
 
     def clear_attention_notification(self) -> None:
         self._attention_notification = None
-        self.attention_notification_panel.hide()
-        self.attention_notification_body.clear()
-        self.attention_notification_open_button.setEnabled(False)
-        self.attention_notification_dismiss_button.setEnabled(False)
+        self._render_notification_bar()
 
     clear_attention_notice = clear_attention_notification
 
@@ -9852,11 +9814,13 @@ class PersonalHubMainWindow(QMainWindow):
         return self._diagnostics_view
 
     def _render_source_failures(self) -> None:
-        if not self._source_failures:
-            self.source_failure_panel.hide()
-            self.source_failure_body.clear()
-            return
-        lines: list[str] = []
+        self._render_notification_bar()
+
+    def _render_notification_bar(self) -> None:
+        """Render message and source attention in the single shared banner."""
+
+        notice = self._attention_notification
+        source_lines: list[str] = []
         for failure in self._source_failures.values():
             name = failure.display_name or failure.source_id
             line = f"{_safe_text(name, limit=180)}: {_safe_text(failure.message)}"
@@ -9864,9 +9828,52 @@ class PersonalHubMainWindow(QMainWindow):
                 line += f" (last success: {_safe_text(failure.last_success_at, limit=120)})"
             if failure.retryable:
                 line += " · retry available"
-            lines.append(line)
-        self.source_failure_body.setText("\n".join(lines))
-        self.source_failure_panel.show()
+            source_lines.append(line)
+
+        if notice is None and not source_lines:
+            self.attention_notification_title.setText("Attention")
+            self.attention_notification_body.clear()
+            self.attention_notification_open_button.setEnabled(False)
+            self.attention_notification_dismiss_button.setEnabled(False)
+            self.attention_notification_open_button.hide()
+            self.attention_notification_dismiss_button.hide()
+            self.attention_notification_panel.hide()
+            return
+
+        if notice is not None:
+            message_summary = self._display_text(
+                notice.summary,
+                sensitive=notice.sensitive,
+                fallback="Unread attention messages are ready to review.",
+            )
+            if source_lines:
+                self.attention_notification_title.setText("Messages and source attention")
+                self.attention_notification_body.setText(
+                    f"Messages: {message_summary}\nSource attention:\n"
+                    + "\n".join(source_lines)
+                )
+            else:
+                self.attention_notification_title.setText(
+                    self._display_text(notice.title, fallback="Attention messages")
+                )
+                self.attention_notification_body.setText(message_summary)
+            self.attention_notification_open_button.setText(
+                _safe_text(notice.action_label, fallback="Review messages", limit=64)
+            )
+            enabled = not self._locked
+            self.attention_notification_open_button.setEnabled(enabled)
+            self.attention_notification_dismiss_button.setEnabled(enabled)
+            self.attention_notification_open_button.show()
+            self.attention_notification_dismiss_button.show()
+        else:
+            self.attention_notification_title.setText("Source attention")
+            self.attention_notification_body.setText("\n".join(source_lines))
+            self.attention_notification_open_button.setEnabled(False)
+            self.attention_notification_dismiss_button.setEnabled(False)
+            self.attention_notification_open_button.hide()
+            self.attention_notification_dismiss_button.hide()
+
+        self.attention_notification_panel.show()
 
     def _receive_source_failure(self, failure: SourceFailureView) -> None:
         self._source_failures[failure.source_id] = failure
