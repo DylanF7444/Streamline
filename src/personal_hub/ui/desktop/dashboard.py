@@ -567,11 +567,24 @@ class DashboardBoard(QWidget):
         toolbar_layout.addStretch(1)
         outer.addWidget(toolbar)
 
-        self._grid_host = _GridHost(self)
+        self._grid_panel = QFrame(self)
+        self._grid_panel.setObjectName("dashboardGridPanel")
+        self._grid_panel.setAccessibleName("Dashboard widget panel")
+        self._grid_panel.setAccessibleDescription(
+            "The outlined panel contains the available dashboard widget space."
+        )
+        self._grid_panel.setFrameShape(QFrame.Shape.NoFrame)
+        self._grid_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        panel_layout = QVBoxLayout(self._grid_panel)
+        panel_layout.setContentsMargins(8, 8, 8, 8)
+        panel_layout.setSpacing(0)
+
+        self._grid_host = _GridHost(self._grid_panel)
         self._grid_host.setObjectName("dashboardGrid")
         self._grid_host.setAccessibleName("Dashboard widget grid")
         self._grid_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        outer.addWidget(self._grid_host, 1)
+        panel_layout.addWidget(self._grid_host, 1)
+        outer.addWidget(self._grid_panel, 1)
         self._grid_host.resized.connect(self._grid_resized)
 
         self._gesture_preview = QFrame(self._grid_host)
@@ -762,6 +775,10 @@ class DashboardBoard(QWidget):
         self.edit_button.setChecked(enabled)
         self.edit_button.blockSignals(False)
         self.edit_button.setText("Done editing" if enabled else "Edit layout")
+        self._grid_panel.setProperty("dashboardEditing", enabled)
+        self._grid_panel.style().unpolish(self._grid_panel)
+        self._grid_panel.style().polish(self._grid_panel)
+        self._grid_panel.update()
         for card in self._cards.values():
             card.set_editing(enabled)
         self.refresh_geometry()

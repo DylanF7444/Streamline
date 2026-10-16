@@ -178,11 +178,12 @@ metrics:
 Today provides a responsive widget dashboard. Users can add or hide available widgets,
 place them directly on a bounded 48-unit horizontal grid by dragging the visible move handle
 in a heading, and resize from any edge or corner when the multi-column layout is available.
-Vertical positions and sizes snap in 6-pixel increments. Focused headings and resize handles
-support arrow-key movement and resizing. Narrow windows stack widgets at full width and
-retain vertical resizing. Layouts persist locally, restore their wide-window positions when
-space returns, and can be reset. Older saved layouts migrate automatically. The dashboard
-projects existing Hub data; layout settings contain no provider content.
+The main widget panel has a visible outline that becomes an accent dashed boundary in edit
+mode. Vertical positions and sizes snap in 6-pixel increments. Focused headings and resize
+handles support arrow-key movement and resizing. Narrow windows stack widgets at full width
+and retain vertical resizing. Layouts persist locally, restore their wide-window positions
+when space returns, and can be reset. Older saved layouts migrate automatically. The
+dashboard projects existing Hub data; layout settings contain no provider content.
 Theme presets, custom accent/background/surface colors, and optional page and layout
 animations are Hub-owned preferences. Reduced motion disables all Hub transitions.
 

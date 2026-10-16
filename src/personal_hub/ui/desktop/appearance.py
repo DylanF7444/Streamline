@@ -459,6 +459,16 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
     color: {surface_text};
 }}
 
+#dashboardGridPanel {{
+    background: {input_background};
+    border: 1px solid {border};
+    border-radius: 14px;
+}}
+
+#dashboardGridPanel[dashboardEditing="true"] {{
+    border: 2px dashed {accent};
+}}
+
 #dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
 #dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
 #dashboardResizeGripNW, #dashboardResizeGripSW {{
@@ -734,6 +744,7 @@ QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {{
 #personalHubNavigation, #todayPage, #calendarPage, #tasksPage,
 #watchlistsPage, #inboxPage, #sourcesPage, #settingsPage,
 #dashboardPage, #dashboardBoard, #todayCard, #todaySection, #taskQuickAdd,
+#dashboardGridPanel,
 #taskEditorPanel, #taskRow, #calendarMonthCell, #calendarWeekColumn,
 #calendarSourcesPanel, #calendarEventDetailsPanel, #sourceFailurePanel,
 #attentionNotificationPanel,
@@ -751,6 +762,10 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
 #dashboardGrid, #dashboardWidgetCard #todaySection {{
     background: transparent;
     border: 0;
+}}
+
+#dashboardGridPanel[dashboardEditing="true"] {{
+    border: 3px dashed #ffff00;
 }}
 
 #dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,

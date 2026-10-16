@@ -43,13 +43,14 @@ markers reflect available data. The separate **Agenda** widget retains the event
 
 Use **Edit layout** to arrange your space. Drag the visible move handle in a widget heading
 to place it on the 48-step horizontal grid. Vertical positions and heights snap in 6-pixel
-increments. In wider layouts, drag any edge to change one dimension or a corner to change
-both. The dashed outline previews the size and position until you release the mouse. For
-keyboard control, focus a widget heading and use the arrow keys to move it; focus a resize
-handle and use the arrow keys to resize it. In a narrow one-column window, widgets fill the
-available width and can still be resized vertically. **Remove** hides a widget; **Add widget**
-brings it back without changing any underlying data. **Reset layout** restores the initial
-arrangement.
+increments. The main widget panel has a visible border, which changes to an accent dashed
+outline while editing to show the available bounds. In wider layouts, drag any edge to
+change one dimension or a corner to change both. A dashed preview shows the size and
+position until you release the mouse. For keyboard control, focus a widget heading and use
+the arrow keys to move it; focus a resize handle and use the arrow keys to resize it. In a
+narrow one-column window, widgets fill the available width and can still be resized
+vertically. **Remove** hides a widget; **Add widget** brings it back without changing any
+underlying data. **Reset layout** restores the initial arrangement.
 Layout changes are saved locally as you make them. A wider window restores the saved grid
 positions and widths. Existing saved layouts are converted automatically the first time the
 dashboard opens.
