@@ -185,11 +185,15 @@ animation toggle. High contrast overrides the custom palette. Page fades and das
 geometry transitions stop immediately when reduced motion is enabled.
 
 Today is a responsive widget board with Calendar, tasks, durable Inbox, Watchlist status,
-attention messages, news, and watch alerts. Add/remove, keyboard ordering, header dragging,
-an insertion indicator, size presets, and a resize grip are implemented. Layout configuration
-contains only allowlisted widget IDs, order, hidden state, and size names; it persists in
-Hub settings and retains its sizes when a narrow window uses one column. Existing section
-order/visibility preferences are read when no dashboard layout has been saved.
+attention messages, news, and watch alerts. Add/remove, keyboard access, a visible drag
+handle, direct placement, and edge/corner resizing are implemented. Layout version 3 uses
+48 horizontal units and 6-pixel vertical increments; version 1 and 2 layouts migrate while
+preserving their prior geometry. Layout configuration contains only allowlisted widget IDs,
+order, hidden state, and geometry. Existing section order/visibility preferences are read
+when no dashboard layout has been saved.
+
+The October 16, 2026 drag and grid-granularity follow-up has not been run through the Qt UI
+or test suite.
 
 Verification includes offline settings reopen, real Qt mouse-event drag tests, refresh and
 restart persistence, privacy masking after layout changes, reduced-motion cancellation,

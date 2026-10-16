@@ -51,6 +51,7 @@ from personal_hub.sync import SyncError
 from personal_hub.tasks import Recurrence
 from personal_hub.ui.desktop.calendar_item_dialog import CalendarItemDialog
 from personal_hub.ui.desktop.connection_dialog import ExternalPlatformDialog
+from personal_hub.ui.desktop.dashboard import LAYOUT_VERSION
 from personal_hub.ui.desktop.ical_dialog import IcalFeedDialog
 from personal_hub.ui.desktop.import_dialog import ImportDialog
 from personal_hub.ui.desktop.main_window import (
@@ -869,9 +870,16 @@ class HubDesktopCoordinator(QObject):
             )
         )
         saved_dashboard = self.container.settings_repository.get("today_dashboard_layout", None)
-        if isinstance(saved_dashboard, dict) and saved_dashboard.get("version") in {1, 2}:
+        saved_layout_version = (
+            saved_dashboard.get("version") if isinstance(saved_dashboard, dict) else None
+        )
+        if (
+            isinstance(saved_layout_version, int)
+            and not isinstance(saved_layout_version, bool)
+            and saved_layout_version in {1, 2, LAYOUT_VERSION}
+        ):
             self.window.restore_dashboard_layout(saved_dashboard)
-            if saved_dashboard.get("version") == 1:
+            if saved_layout_version < LAYOUT_VERSION:
                 self._save_dashboard_layout(self.window.dashboard.export_layout())
             return
         saved_order = self.container.settings_repository.get("today_section_order", [])

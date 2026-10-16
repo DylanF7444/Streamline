@@ -21,15 +21,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-LAYOUT_VERSION: Final[int] = 2
-GRID_COLUMNS: Final[int] = 12
+LAYOUT_VERSION: Final[int] = 3
+GRID_COLUMNS: Final[int] = 48
 GRID_BREAKPOINT: Final[int] = 760
 GRID_GAP: Final[int] = 12
-GRID_SNAP: Final[int] = 24
+GRID_SNAP: Final[int] = 6
 MIN_CARD_WIDTH: Final[int] = 240
 MAX_CARD_HEIGHT: Final[int] = 1800
 MAX_CARD_TOP: Final[int] = 24000
 _LEGACY_LAYOUT_VERSION: Final[int] = 1
+_PREVIOUS_LAYOUT_VERSION: Final[int] = 2
+_PREVIOUS_GRID_COLUMNS: Final[int] = 12
+_PREVIOUS_GRID_SNAP: Final[int] = 24
 _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _MAX_TITLE_LENGTH: Final[int] = 180
 
@@ -135,10 +138,18 @@ class _CardHeader(QWidget):
         )
         self._drag_origin: QPoint | None = None
         self._dragging = False
+        self._drag_enabled = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        self.drag_indicator = QLabel("⠿", self)
+        self.drag_indicator.setToolTip("Drag to move this widget")
+        self.drag_indicator.setAccessibleName("Move widget")
+        self.drag_indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.drag_indicator.hide()
+        layout.addWidget(self.drag_indicator)
 
         self.title_label = QLabel(title, self)
         self.title_label.setObjectName("dashboardCardTitle")
@@ -148,13 +159,9 @@ class _CardHeader(QWidget):
         layout.addWidget(self.title_label, 1)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self.cursor().shape() == Qt.CursorShape.OpenHandCursor
-        ):
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_enabled:
             self._drag_origin = _global_point(event)
             self._dragging = False
-            self.grabMouse()
             self.drag_started.emit(self._drag_origin)
             event.accept()
             return
@@ -165,27 +172,42 @@ class _CardHeader(QWidget):
             point = _global_point(event)
             if not self._dragging and (point - self._drag_origin).manhattanLength() >= 4:
                 self._dragging = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
             if self._dragging:
                 self.drag_moved.emit(point)
+            event.accept()
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
         if event.button() == Qt.MouseButton.LeftButton and self._drag_origin is not None:
-            self.releaseMouse()
-            self.drag_finished.emit(_global_point(event) if self._dragging else None)
+            point = _global_point(event) if self._dragging else None
             self._drag_origin = None
             self._dragging = False
+            self.setCursor(
+                Qt.CursorShape.OpenHandCursor if self._drag_enabled else Qt.CursorShape.ArrowCursor
+            )
+            self.drag_finished.emit(point)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
         if (
-            self.cursor().shape() == Qt.CursorShape.OpenHandCursor
+            self._drag_enabled
             and _key_direction(event.key()) is not None
         ):
             self.keyboard_move_requested.emit(event.key())
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def set_drag_enabled(self, enabled: bool) -> None:
+        self._drag_enabled = bool(enabled)
+        self.drag_indicator.setVisible(self._drag_enabled)
+        self.setCursor(
+            Qt.CursorShape.OpenHandCursor if self._drag_enabled else Qt.CursorShape.ArrowCursor
+        )
 
 
 class _ResizeGrip(QFrame):
@@ -244,7 +266,6 @@ class _ResizeGrip(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
             self.drag_started.emit(self.mode, _global_point(event))
-            self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -259,7 +280,6 @@ class _ResizeGrip(QFrame):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             self._dragging = False
-            self.releaseMouse()
             self.drag_finished.emit(self.mode, _global_point(event))
             event.accept()
             return
@@ -446,9 +466,7 @@ class _DashboardCard(QFrame):
         self.edit_controls.setVisible(enabled)
         for grip in self.resize_grips.values():
             grip.setVisible(enabled)
-        self.header.setCursor(
-            Qt.CursorShape.OpenHandCursor if enabled else Qt.CursorShape.ArrowCursor
-        )
+        self.header.set_drag_enabled(enabled)
         self.setProperty("dashboardEditing", enabled)
 
     def stop_geometry_animation(self) -> None:
@@ -824,7 +842,10 @@ class DashboardBoard(QWidget):
         x = 0
         row_height = 0
         for section_id in requested:
-            original = old_geometry.get(section_id, {"x": 0, "y": 0, "w": 6, "h": 0})
+            original = old_geometry.get(
+                section_id,
+                {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0},
+            )
             span = max(1, min(GRID_COLUMNS, original["w"]))
             height = max(self._natural_height(self._cards[section_id]), original["h"])
             if x + span > GRID_COLUMNS:
@@ -864,10 +885,10 @@ class DashboardBoard(QWidget):
         if section_id not in self._cards:
             return False
         presets = {
-            "compact": {"x": 0, "y": 0, "w": 6, "h": 240},
-            "comfortable": {"x": 0, "y": 0, "w": 6, "h": 0},
+            "compact": {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 240},
+            "comfortable": {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0},
             "wide": {"x": 0, "y": 0, "w": GRID_COLUMNS, "h": 0},
-            "tall": {"x": 0, "y": 0, "w": 6, "h": 360},
+            "tall": {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 360},
         }
         rectangle = presets.get(str(preset).casefold())
         if rectangle is None or self._geometry.get(section_id) == rectangle:
@@ -904,7 +925,11 @@ class DashboardBoard(QWidget):
         version = payload.get("version", payload.get("layout_version", _LEGACY_LAYOUT_VERSION))
         if isinstance(version, bool) or not isinstance(version, int):
             return None
-        if version not in {_LEGACY_LAYOUT_VERSION, LAYOUT_VERSION}:
+        if version not in {
+            _LEGACY_LAYOUT_VERSION,
+            _PREVIOUS_LAYOUT_VERSION,
+            LAYOUT_VERSION,
+        }:
             return None
 
         raw_order = payload.get("order", list(self._order))
@@ -934,7 +959,24 @@ class DashboardBoard(QWidget):
             raw_sizes = payload.get("sizes", {})
             if not isinstance(raw_sizes, Mapping):
                 return None
-            geometry = self._legacy_geometry(order, raw_sizes)
+            previous_geometry = self._legacy_geometry(order, raw_sizes)
+            geometry = {
+                section_id: self._migrate_previous_rectangle(previous_geometry[section_id])
+                for section_id in order
+            }
+        elif version == _PREVIOUS_LAYOUT_VERSION:
+            raw_geometry = payload.get("geometry", {})
+            if not isinstance(raw_geometry, Mapping):
+                return None
+            defaults = self._default_geometry_for_order(order)
+            geometry = {
+                section_id: (
+                    self._migrate_previous_rectangle(raw_geometry[section_id])
+                    if section_id in raw_geometry
+                    else defaults[section_id]
+                )
+                for section_id in order
+            }
         else:
             raw_geometry = payload.get("geometry", {})
             if not isinstance(raw_geometry, Mapping):
@@ -942,7 +984,7 @@ class DashboardBoard(QWidget):
             defaults = self._default_geometry_for_order(order)
             geometry = {
                 section_id: self._normalized_rectangle(
-                    raw_geometry.get(section_id, defaults.get(section_id))
+                    raw_geometry.get(section_id, defaults[section_id])
                 )
                 for section_id in order
             }
@@ -965,14 +1007,14 @@ class DashboardBoard(QWidget):
         column = 0
         for section_id in order:
             preset = str(sizes.get(section_id, "comfortable")).casefold()
-            width = GRID_COLUMNS if preset == "wide" else 6
+            width = _PREVIOUS_GRID_COLUMNS if preset == "wide" else 6
             height = {"compact": 240, "tall": 360}.get(preset, 0)
             estimated_height = height or self._natural_height(self._cards[section_id])
-            if width == GRID_COLUMNS and column:
+            if width == _PREVIOUS_GRID_COLUMNS and column:
                 y += row_height + GRID_GAP
                 row_height = 0
                 column = 0
-            if width == GRID_COLUMNS:
+            if width == _PREVIOUS_GRID_COLUMNS:
                 geometry[section_id] = {"x": 0, "y": y, "w": width, "h": height}
                 y += estimated_height + GRID_GAP
                 continue
@@ -985,23 +1027,53 @@ class DashboardBoard(QWidget):
                 y += row_height + GRID_GAP
                 row_height = 0
                 column = 0
-        return {key: self._normalized_rectangle(value) for key, value in geometry.items()}
+        return geometry
 
-    def _normalized_rectangle(self, value: object) -> DashboardRectangle:
+    def _migrate_previous_rectangle(self, value: object) -> DashboardRectangle:
+        """Expand one v1/v2 rectangle into the finer v3 grid."""
+
         if not isinstance(value, Mapping):
-            return {"x": 0, "y": 0, "w": 6, "h": 0}
+            return {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0}
         x, y, width, height = (
             value.get(key, default)
             for key, default in (
                 ("x", 0),
                 ("y", 0),
-                ("w", 6),
+                ("w", _PREVIOUS_GRID_COLUMNS // 2),
                 ("h", 0),
             )
         )
         numbers = (x, y, width, height)
         if any(isinstance(number, bool) or not isinstance(number, int) for number in numbers):
-            return {"x": 0, "y": 0, "w": 6, "h": 0}
+            return {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0}
+        width = max(1, min(_PREVIOUS_GRID_COLUMNS, width))
+        x = max(0, min(_PREVIOUS_GRID_COLUMNS - width, x))
+        y = _snapped(max(0, min(MAX_CARD_TOP, y)), _PREVIOUS_GRID_SNAP)
+        height = (
+            0
+            if height <= 0
+            else _snapped(
+                max(_PREVIOUS_GRID_SNAP, min(MAX_CARD_HEIGHT, height)),
+                _PREVIOUS_GRID_SNAP,
+            )
+        )
+        return self._normalized_rectangle({"x": x * 4, "y": y, "w": width * 4, "h": height})
+
+    def _normalized_rectangle(self, value: object) -> DashboardRectangle:
+        if not isinstance(value, Mapping):
+            return {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0}
+        x, y, width, height = (
+            value.get(key, default)
+            for key, default in (
+                ("x", 0),
+                ("y", 0),
+                ("w", GRID_COLUMNS // 2),
+                ("h", 0),
+            )
+        )
+        numbers = (x, y, width, height)
+        if any(isinstance(number, bool) or not isinstance(number, int) for number in numbers):
+            return {"x": 0, "y": 0, "w": GRID_COLUMNS // 2, "h": 0}
         width = max(1, min(GRID_COLUMNS, width))
         x = max(0, min(GRID_COLUMNS - width, x))
         y = _snapped(max(0, min(MAX_CARD_TOP, y)), GRID_SNAP)
@@ -1032,9 +1104,15 @@ class DashboardBoard(QWidget):
         y = _snapped(bottom + GRID_GAP, GRID_SNAP)
         row_height = 0
         column = 0
+        half_columns = GRID_COLUMNS // 2
         for section_id in missing:
             height = self._natural_height(self._cards[section_id])
-            self._geometry[section_id] = {"x": 6 if column else 0, "y": y, "w": 6, "h": 0}
+            self._geometry[section_id] = {
+                "x": half_columns if column else 0,
+                "y": y,
+                "w": half_columns,
+                "h": 0,
+            }
             row_height = max(row_height, height)
             if column:
                 y += row_height + GRID_GAP
@@ -1048,10 +1126,16 @@ class DashboardBoard(QWidget):
         y = 0
         row_height = 0
         column = 0
+        half_columns = GRID_COLUMNS // 2
         for section_id in order:
             card = self._cards.get(section_id)
             height = self._natural_height(card) if card is not None else 240
-            geometry[section_id] = {"x": 0 if column == 0 else 6, "y": y, "w": 6, "h": 0}
+            geometry[section_id] = {
+                "x": 0 if column == 0 else half_columns,
+                "y": y,
+                "w": half_columns,
+                "h": 0,
+            }
             row_height = max(row_height, height)
             if column == 0:
                 column = 1
