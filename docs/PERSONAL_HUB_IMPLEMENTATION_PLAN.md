@@ -176,9 +176,12 @@ metrics:
 - source problems that require attention.
 
 Today provides a responsive widget dashboard. Users can add or hide available widgets,
-reorder them with drag handles or keyboard controls, and resize them with bounded grid sizes.
-Layouts persist locally, reflow into one column in narrow windows, and can be reset.
-The dashboard projects existing Hub data; layout settings contain no provider content.
+place them directly on a bounded 12-column grid by dragging their headings, and resize from
+any edge or corner while the multi-column grid is available. Focused headings and resize
+handles support arrow-key movement and resizing. Narrow windows stack widgets at full width
+and retain vertical resizing. Layouts persist locally, restore their wide-window positions
+when space returns, and can be reset. Older saved layouts migrate automatically. The
+dashboard projects existing Hub data; layout settings contain no provider content.
 Theme presets, custom accent/background/surface colors, and optional page and layout
 animations are Hub-owned preferences. Reduced motion disables all Hub transitions.
 

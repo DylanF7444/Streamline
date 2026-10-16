@@ -869,8 +869,10 @@ class HubDesktopCoordinator(QObject):
             )
         )
         saved_dashboard = self.container.settings_repository.get("today_dashboard_layout", None)
-        if isinstance(saved_dashboard, dict) and saved_dashboard.get("version") == 1:
+        if isinstance(saved_dashboard, dict) and saved_dashboard.get("version") in {1, 2}:
             self.window.restore_dashboard_layout(saved_dashboard)
+            if saved_dashboard.get("version") == 1:
+                self._save_dashboard_layout(self.window.dashboard.export_layout())
             return
         saved_order = self.container.settings_repository.get("today_section_order", [])
         if (

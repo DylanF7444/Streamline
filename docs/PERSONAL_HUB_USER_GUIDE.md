@@ -41,12 +41,16 @@ or **Today** to return to the current date. Select a date (or press Enter on a s
 to open its full Calendar day view. The widget shows calendar freshness and offline status;
 markers reflect available data. The separate **Agenda** widget retains the event list.
 
-Use **Edit layout** to arrange your space. Drag a widget by its heading to move it, or use
-its earlier/later controls with the keyboard. Drag the bottom-right resize grip or choose
-a size preset to change its width and height. **Remove** hides a widget; **Add widget**
+Use **Edit layout** to arrange your space. Drag any widget heading to place it on the grid.
+When the dashboard has room for its grid, drag any edge to change one dimension or a corner
+to change both. The dashed outline shows the size and position before you release the mouse.
+For keyboard control, focus a widget heading and use the arrow keys to move it; focus a resize
+handle and use the arrow keys to resize it. In a narrow one-column window, widgets fill the
+available width and can still be resized vertically. **Remove** hides a widget; **Add widget**
 brings it back without changing any underlying data. **Reset layout** restores the initial
-arrangement. Layout changes are saved locally as you make them. Narrow windows use one
-column and retain your wide-screen size preferences.
+arrangement. Layout changes are saved locally as you make them. A wider window restores the
+saved grid positions and widths. Existing saved layouts are converted automatically the
+first time the dashboard opens.
 
 In **Settings → Appearance**, choose a theme preset or customize the accent, background,
 and surface colors with a color picker or `#RRGGBB` value. Choose **Apply appearance** to

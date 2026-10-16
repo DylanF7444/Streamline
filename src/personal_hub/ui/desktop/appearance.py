@@ -459,6 +459,20 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
     color: {surface_text};
 }}
 
+#dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
+#dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
+#dashboardResizeGripNW, #dashboardResizeGripSW {{
+    background: {accent};
+    border: 0;
+    border-radius: 3px;
+}}
+
+#dashboardDropPreview {{
+    background: transparent;
+    border: 2px dashed {accent};
+    border-radius: 12px;
+}}
+
 #dashboardCardHeader, #dashboardEditControls, #dashboardToolbar,
 #dashboardGrid {{
     background: transparent;
@@ -524,6 +538,18 @@ QPushButton:focus, QToolButton:focus, QLineEdit:focus,
 QPlainTextEdit:focus, QComboBox:focus, QDateTimeEdit:focus,
 QSpinBox:focus, QDoubleSpinBox:focus, QCheckBox:focus,
 QListWidget:focus, QTableView:focus, QTabBar:focus {{
+    border: 2px solid {focus};
+}}
+
+#dashboardCardHeader:focus {{
+    border: 2px solid {focus};
+    border-radius: 4px;
+}}
+
+#dashboardResizeGrip:focus, #dashboardResizeGripN:focus,
+#dashboardResizeGripS:focus, #dashboardResizeGripE:focus,
+#dashboardResizeGripW:focus, #dashboardResizeGripNE:focus,
+#dashboardResizeGripNW:focus, #dashboardResizeGripSW:focus {{
     border: 2px solid {focus};
 }}
 
@@ -727,6 +753,18 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
     border: 0;
 }}
 
+#dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
+#dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
+#dashboardResizeGripNW, #dashboardResizeGripSW {{
+    background: #ffffff;
+    border: 1px solid #000000;
+}}
+
+#dashboardDropPreview {{
+    background: transparent;
+    border: 2px dashed #ffffff;
+}}
+
 #miniCalendarGrid, #miniCalendarGrid QAbstractItemView {{
     background: #000000;
     color: #ffffff;
@@ -797,6 +835,17 @@ QPushButton:focus, QToolButton:focus, QLineEdit:focus,
 QPlainTextEdit:focus, QComboBox:focus, QDateTimeEdit:focus,
 QSpinBox:focus, QDoubleSpinBox:focus, QCheckBox:focus,
 QListWidget:focus, QTableView:focus, QTabBar:focus {{
+    border: 3px solid #ffff00;
+}}
+
+#dashboardCardHeader:focus {{
+    border: 3px solid #ffff00;
+}}
+
+#dashboardResizeGrip:focus, #dashboardResizeGripN:focus,
+#dashboardResizeGripS:focus, #dashboardResizeGripE:focus,
+#dashboardResizeGripW:focus, #dashboardResizeGripNE:focus,
+#dashboardResizeGripNW:focus, #dashboardResizeGripSW:focus {{
     border: 3px solid #ffff00;
 }}
 

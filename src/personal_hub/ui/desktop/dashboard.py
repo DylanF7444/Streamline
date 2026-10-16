@@ -1,32 +1,14 @@
-"""A small, reusable, directly-manipulable Personal Hub dashboard board.
-
-The board deliberately owns presentation state only.  Callers provide the
-already-rendered content for each section and receive a versioned layout
-mapping when the user changes visibility, order, or size.  The content widgets
-are never inspected or mutated beyond being reparented into their card shell.
-
-The implementation uses a hand-laid-out grid instead of a ``QGridLayout`` so
-that the same card wrappers can support responsive columns, animated geometry,
-and a resize grip without creating a second source of truth for card bounds.
-The parent page remains responsible for scrolling the board.
-"""
+"""Responsive Home widget board with direct placement and free resizing."""
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypedDict
 
-from PySide6.QtCore import (
-    QEasingCurve,
-    QPoint,
-    QPointF,
-    QPropertyAnimation,
-    QRect,
-    Qt,
-    Signal,
-)
-from PySide6.QtGui import QAction, QCursor, QMouseEvent
+from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, Qt, Signal
+from PySide6.QtGui import QCursor, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -39,31 +21,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-LAYOUT_VERSION: Final[int] = 1
-"""Current persisted dashboard layout version."""
-
+LAYOUT_VERSION: Final[int] = 2
+GRID_COLUMNS: Final[int] = 12
 GRID_BREAKPOINT: Final[int] = 760
-"""Board width at which the second card column becomes available."""
-
 GRID_GAP: Final[int] = 12
-"""Gap between cards in pixels."""
-
 GRID_SNAP: Final[int] = 24
-"""Resize-grip snap increment in pixels."""
-
-SIZE_PRESETS: Final[tuple[str, ...]] = (
-    "compact",
-    "comfortable",
-    "wide",
-    "tall",
-)
-
-SIZE_LABELS: Final[dict[str, str]] = {
-    "compact": "Compact",
-    "comfortable": "Comfortable",
-    "wide": "Wide",
-    "tall": "Tall",
-}
+MIN_CARD_WIDTH: Final[int] = 240
+MAX_CARD_HEIGHT: Final[int] = 1800
+MAX_CARD_TOP: Final[int] = 24000
+_LEGACY_LAYOUT_VERSION: Final[int] = 1
+_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_MAX_TITLE_LENGTH: Final[int] = 180
 
 SECTION_DESTINATIONS: Final[dict[str, str]] = {
     "mini_calendar": "Calendar",
@@ -74,7 +42,6 @@ SECTION_DESTINATIONS: Final[dict[str, str]] = {
     "upcoming": "Tasks",
     "unscheduled": "Tasks",
     "tasks": "Tasks",
-    # ``inbox`` is retained for the existing Attention messages section.
     "inbox": "Inbox",
     "attention": "Inbox",
     "watch_alerts": "Watchlists",
@@ -84,19 +51,24 @@ SECTION_DESTINATIONS: Final[dict[str, str]] = {
     "source_problems": "Sources",
     "sources": "Sources",
 }
-"""Stable Today section IDs and their detail destinations."""
 
-_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-_MAX_TITLE_LENGTH: Final[int] = 180
+
+class DashboardRectangle(TypedDict):
+    """Logical grid rectangle stored for one widget."""
+
+    x: int
+    y: int
+    w: int
+    h: int
 
 
 class DashboardLayout(TypedDict):
-    """The JSON-safe persisted shape emitted by :meth:`DashboardBoard.export_layout`."""
+    """JSON-safe saved dashboard layout."""
 
     version: int
     order: list[str]
     hidden: list[str]
-    sizes: dict[str, str]
+    geometry: dict[str, DashboardRectangle]
 
 
 def _section_id(value: object) -> str | None:
@@ -115,15 +87,8 @@ def _title(value: object) -> str:
     return value[:_MAX_TITLE_LENGTH] or "Widget"
 
 
-def _size_preset(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    value = value.strip().casefold()
-    return value if value in SIZE_PRESETS else None
-
-
-def _global_point(event: QMouseEvent) -> QPoint:
-    """Return a Qt 6 mouse position while retaining compatibility with test doubles."""
+def _global_point(event: QMouseEvent | QKeyEvent) -> QPoint:
+    """Return the Qt 6 pointer position with compatibility for test doubles."""
 
     position = getattr(event, "globalPosition", None)
     if callable(position):
@@ -138,17 +103,36 @@ def _global_point(event: QMouseEvent) -> QPoint:
     return QCursor.pos()
 
 
+def _key_direction(key: int) -> tuple[int, int] | None:
+    return {
+        Qt.Key.Key_Left: (-1, 0),
+        Qt.Key.Key_Right: (1, 0),
+        Qt.Key.Key_Up: (0, -1),
+        Qt.Key.Key_Down: (0, 1),
+    }.get(key)
+
+
+def _snapped(value: int, step: int) -> int:
+    step = max(1, step)
+    return max(0, round(value / step) * step)
+
+
 class _CardHeader(QWidget):
-    """Header that emits drag gestures while leaving its buttons clickable."""
+    """Keyboard and pointer handle for moving one dashboard widget."""
 
     drag_started = Signal(object)
     drag_moved = Signal(object)
     drag_finished = Signal(object)
+    keyboard_move_requested = Signal(int)
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("dashboardCardHeader")
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleDescription(
+            "Drag this heading to move the widget. When focused, use the arrow keys to move it."
+        )
         self._drag_origin: QPoint | None = None
         self._dragging = False
 
@@ -193,28 +177,73 @@ class _CardHeader(QWidget):
             self._dragging = False
         super().mouseReleaseEvent(event)
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        if (
+            self.cursor().shape() == Qt.CursorShape.OpenHandCursor
+            and _key_direction(event.key()) is not None
+        ):
+            self.keyboard_move_requested.emit(event.key())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 class _ResizeGrip(QFrame):
-    """Bottom-right grip with a short, bounded drag gesture."""
+    """Focusable pointer and keyboard resize handle for one edge or corner."""
 
-    drag_started = Signal(object)
-    drag_moved = Signal(object)
-    drag_finished = Signal(object)
+    drag_started = Signal(str, object)
+    drag_moved = Signal(str, object)
+    drag_finished = Signal(str, object)
+    keyboard_resize_requested = Signal(str, int)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    _CURSORS: Final[dict[str, Qt.CursorShape]] = {
+        "n": Qt.CursorShape.SizeVerCursor,
+        "s": Qt.CursorShape.SizeVerCursor,
+        "e": Qt.CursorShape.SizeHorCursor,
+        "w": Qt.CursorShape.SizeHorCursor,
+        "ne": Qt.CursorShape.SizeBDiagCursor,
+        "sw": Qt.CursorShape.SizeBDiagCursor,
+        "nw": Qt.CursorShape.SizeFDiagCursor,
+        "se": Qt.CursorShape.SizeFDiagCursor,
+    }
+    _DESCRIPTIONS: Final[dict[str, str]] = {
+        "n": "top edge",
+        "s": "bottom edge",
+        "e": "right edge",
+        "w": "left edge",
+        "ne": "top right corner",
+        "nw": "top left corner",
+        "se": "bottom right corner",
+        "sw": "bottom left corner",
+    }
+
+    def __init__(self, mode: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("dashboardResizeGrip")
-        self.setFixedSize(16, 16)
-        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        self.setToolTip("Resize widget")
-        self.setAccessibleName("Resize widget")
+        self.mode = mode
+        object_name = (
+            "dashboardResizeGrip" if mode == "se" else f"dashboardResizeGrip{mode.upper()}"
+        )
+        self.setObjectName(object_name)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setCursor(self._CURSORS[mode])
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setToolTip(f"Resize from the {self._DESCRIPTIONS[mode]}")
+        self.setAccessibleName(f"Resize widget from {self._DESCRIPTIONS[mode]}")
+        self.setAccessibleDescription(
+            "Drag this handle or use the arrow keys to resize the widget."
+        )
+        if mode in {"n", "s"}:
+            self.setFixedSize(28, 7)
+        elif mode in {"e", "w"}:
+            self.setFixedSize(7, 28)
+        else:
+            self.setFixedSize(14, 14)
         self._dragging = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
-            point = _global_point(event)
-            self.drag_started.emit(point)
+            self.drag_started.emit(self.mode, _global_point(event))
             self.grabMouse()
             event.accept()
             return
@@ -222,7 +251,7 @@ class _ResizeGrip(QFrame):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
         if self._dragging:
-            self.drag_moved.emit(_global_point(event))
+            self.drag_moved.emit(self.mode, _global_point(event))
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -231,26 +260,34 @@ class _ResizeGrip(QFrame):
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             self._dragging = False
             self.releaseMouse()
-            self.drag_finished.emit(_global_point(event))
+            self.drag_finished.emit(self.mode, _global_point(event))
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        if _key_direction(event.key()) is not None:
+            self.keyboard_resize_requested.emit(self.mode, event.key())
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class _DashboardCard(QFrame):
     """Presentation shell around one caller-provided content widget."""
 
     remove_requested = Signal(str)
-    move_earlier_requested = Signal(str)
-    move_later_requested = Signal(str)
-    size_requested = Signal(str, str)
     drag_started = Signal(str, object)
     drag_moved = Signal(str, object)
     drag_finished = Signal(str, object)
-    resize_started = Signal(str, object)
-    resize_moved = Signal(str, object)
-    resize_finished = Signal(str, object)
+    keyboard_move_requested = Signal(str, int)
+    resize_started = Signal(str, str, object)
+    resize_moved = Signal(str, str, object)
+    resize_finished = Signal(str, str, object)
+    keyboard_resize_requested = Signal(str, str, int)
     open_requested = Signal(str)
+
+    _GRIP_MODES: Final[tuple[str, ...]] = ("n", "s", "e", "w", "ne", "nw", "se", "sw")
 
     def __init__(
         self,
@@ -263,7 +300,6 @@ class _DashboardCard(QFrame):
         self.section_id = section_id
         self.title = title
         self.content = content
-        self._size_preset = "comfortable"
         self.setObjectName("dashboardWidgetCard")
         self.setProperty("dashboardWidgetId", section_id)
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -275,13 +311,16 @@ class _DashboardCard(QFrame):
         outer.setSpacing(8)
 
         self.header = _CardHeader(title, self)
-        self.header.setAccessibleName(f"{title} widget header")
+        self.header.setAccessibleName(f"Move {title} widget")
         self.header.drag_started.connect(
             lambda point: self.drag_started.emit(self.section_id, point)
         )
         self.header.drag_moved.connect(lambda point: self.drag_moved.emit(self.section_id, point))
         self.header.drag_finished.connect(
             lambda point: self.drag_finished.emit(self.section_id, point)
+        )
+        self.header.keyboard_move_requested.connect(
+            lambda key: self.keyboard_move_requested.emit(self.section_id, key)
         )
         outer.addWidget(self.header)
 
@@ -305,52 +344,6 @@ class _DashboardCard(QFrame):
         edit_layout = QHBoxLayout(self.edit_controls)
         edit_layout.setContentsMargins(0, 0, 0, 0)
         edit_layout.setSpacing(3)
-
-        self.move_earlier_button = QToolButton(self.edit_controls)
-        self.move_earlier_button.setObjectName("dashboardMoveEarlierButton")
-        self.move_earlier_button.setText("↑")
-        self.move_earlier_button.setToolTip("Move earlier")
-        self.move_earlier_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.move_earlier_button.setAccessibleName(f"Move {title} earlier")
-        self.move_earlier_button.clicked.connect(
-            lambda: self.move_earlier_requested.emit(self.section_id)
-        )
-        edit_layout.addWidget(self.move_earlier_button)
-
-        self.move_later_button = QToolButton(self.edit_controls)
-        self.move_later_button.setObjectName("dashboardMoveLaterButton")
-        self.move_later_button.setText("↓")
-        self.move_later_button.setToolTip("Move later")
-        self.move_later_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.move_later_button.setAccessibleName(f"Move {title} later")
-        self.move_later_button.clicked.connect(
-            lambda: self.move_later_requested.emit(self.section_id)
-        )
-        edit_layout.addWidget(self.move_later_button)
-
-        self.size_button = QToolButton(self.edit_controls)
-        self.size_button.setObjectName("dashboardSizeButton")
-        self.size_button.setText("Size")
-        self.size_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.size_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.size_button.setAccessibleName(f"Resize {title}")
-        self.size_menu = QMenu(self.size_button)
-        self.size_menu.setObjectName("dashboardSizeMenu")
-        self.size_actions: dict[str, QAction] = {}
-        for preset in SIZE_PRESETS:
-            action = self.size_menu.addAction(SIZE_LABELS[preset])
-            action.setCheckable(True)
-            action.setData(preset)
-            action.setToolTip(f"Use the {SIZE_LABELS[preset].lower()} size.")
-            action.triggered.connect(
-                lambda _checked=False, value=preset: self.size_requested.emit(
-                    self.section_id, value
-                )
-            )
-            self.size_actions[preset] = action
-        self.size_button.setMenu(self.size_menu)
-        edit_layout.addWidget(self.size_button)
-
         self.remove_button = QPushButton("Remove", self.edit_controls)
         self.remove_button.setObjectName("dashboardRemoveButton")
         self.remove_button.setAutoDefault(False)
@@ -362,46 +355,59 @@ class _DashboardCard(QFrame):
         outer.addLayout(footer)
         self._outer_layout = outer
 
-        self.resize_grip = _ResizeGrip(self)
-        self.resize_grip.setVisible(False)
-        self.resize_grip.drag_started.connect(
-            lambda point: self.resize_started.emit(self.section_id, point)
-        )
-        self.resize_grip.drag_moved.connect(
-            lambda point: self.resize_moved.emit(self.section_id, point)
-        )
-        self.resize_grip.drag_finished.connect(
-            lambda point: self.resize_finished.emit(self.section_id, point)
-        )
+        self.resize_grips: dict[str, _ResizeGrip] = {}
+        for mode in self._GRIP_MODES:
+            grip = _ResizeGrip(mode, self)
+            grip.setVisible(False)
+            grip.drag_started.connect(
+                lambda grip_mode, point: self.resize_started.emit(self.section_id, grip_mode, point)
+            )
+            grip.drag_moved.connect(
+                lambda grip_mode, point: self.resize_moved.emit(self.section_id, grip_mode, point)
+            )
+            grip.drag_finished.connect(
+                lambda grip_mode, point: self.resize_finished.emit(
+                    self.section_id, grip_mode, point
+                )
+            )
+            grip.keyboard_resize_requested.connect(
+                lambda grip_mode, key: self.keyboard_resize_requested.emit(
+                    self.section_id, grip_mode, key
+                )
+            )
+            self.resize_grips[mode] = grip
+        self.resize_grip = self.resize_grips["se"]
 
         self._geometry_animation = QPropertyAnimation(self, b"geometry", self)
         self._geometry_animation.setDuration(160)
         self._geometry_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
         self.set_editing(False)
 
     def resizeEvent(self, event: Any) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
-        if not hasattr(self, "resize_grip"):
+        if not hasattr(self, "resize_grips"):
             return
-        self.resize_grip.move(
-            max(0, self.width() - self.resize_grip.width() - 4),
-            max(0, self.height() - self.resize_grip.height() - 4),
-        )
-        self.resize_grip.raise_()
-
-    @property
-    def size_preset(self) -> str:
-        return self._size_preset
+        w, h = self.width(), self.height()
+        positions = {
+            "n": ((w - 28) // 2, 0),
+            "s": ((w - 28) // 2, max(0, h - 7)),
+            "e": (max(0, w - 7), (h - 28) // 2),
+            "w": (0, (h - 28) // 2),
+            "ne": (max(0, w - 14), 0),
+            "nw": (0, 0),
+            "se": (max(0, w - 14), max(0, h - 14)),
+            "sw": (0, max(0, h - 14)),
+        }
+        for mode, grip in self.resize_grips.items():
+            grip.move(*positions[mode])
+            grip.raise_()
 
     def set_title(self, title: str) -> None:
         self.title = title
         self.header.title_label.setText(title)
+        self.header.setAccessibleName(f"Move {title} widget")
         self.setAccessibleName(f"{title} widget")
         self.open_button.setAccessibleName(f"Open {title}")
-        self.move_earlier_button.setAccessibleName(f"Move {title} earlier")
-        self.move_later_button.setAccessibleName(f"Move {title} later")
-        self.size_button.setAccessibleName(f"Resize {title}")
         self.remove_button.setAccessibleName(f"Remove {title} widget")
 
     def replace_content(
@@ -435,17 +441,11 @@ class _DashboardCard(QFrame):
             self._outer_layout.removeWidget(old_content)
         old_content.setParent(None)
 
-    def set_size_preset(self, preset: str) -> None:
-        preset = _size_preset(preset) or "comfortable"
-        self._size_preset = preset
-        self.setProperty("dashboardSize", preset)
-        for name, action in self.size_actions.items():
-            action.setChecked(name == preset)
-
     def set_editing(self, enabled: bool) -> None:
         enabled = bool(enabled)
         self.edit_controls.setVisible(enabled)
-        self.resize_grip.setVisible(enabled)
+        for grip in self.resize_grips.values():
+            grip.setVisible(enabled)
         self.header.setCursor(
             Qt.CursorShape.OpenHandCursor if enabled else Qt.CursorShape.ArrowCursor
         )
@@ -479,13 +479,7 @@ class _GridHost(QWidget):
 
 
 class DashboardBoard(QWidget):
-    """Responsive, customizable board for caller-owned Hub section widgets.
-
-    ``set_sections`` accepts tuples of ``(section_id, title, content,
-    visible)``.  A section ID is the allowlist for its persisted layout entry;
-    unknown IDs in a restored payload are ignored.  Existing IDs retain their
-    saved order, hidden state, and size when fresh content is supplied.
-    """
+    """Responsive Home widget board with direct placement and free resizing."""
 
     layout_changed = Signal(object)
     open_requested = Signal(str)
@@ -502,15 +496,14 @@ class DashboardBoard(QWidget):
         self._order: list[str] = []
         self._hidden: set[str] = set()
         self._default_visibility: dict[str, bool] = {}
-        self._sizes: dict[str, str] = {}
+        self._geometry: dict[str, DashboardRectangle] = {}
         self._editing = False
         self._reduced_motion = False
         self._has_laid_out = False
         self._layouting = False
         self._target_geometries: dict[str, QRect] = {}
-        self._dragging_id: str | None = None
+        self._drag_state: dict[str, Any] | None = None
         self._resize_state: dict[str, Any] | None = None
-        self._last_resize_size: str | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -541,7 +534,8 @@ class DashboardBoard(QWidget):
         self.edit_button.setAutoDefault(False)
         self.edit_button.setAccessibleName("Edit dashboard layout")
         self.edit_button.setAccessibleDescription(
-            "Toggle controls for moving, resizing, and removing dashboard widgets."
+            "Drag widget headings to move them and drag any edge or corner to resize. "
+            "Focused headings and resize handles also work with the arrow keys."
         )
         self.edit_button.toggled.connect(self.set_editing)
         toolbar_layout.addWidget(self.edit_button)
@@ -561,15 +555,13 @@ class DashboardBoard(QWidget):
         self._grid_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         outer.addWidget(self._grid_host, 1)
         self._grid_host.resized.connect(self._grid_resized)
-        self._drag_indicator = QFrame(self._grid_host)
-        self._drag_indicator.setObjectName("dashboardDragIndicator")
-        self._drag_indicator.setFixedHeight(4)
-        self._drag_indicator.setStyleSheet(
-            "background-color: palette(highlight); border-radius: 2px;"
-        )
-        self._drag_indicator.hide()
 
-        # Public aliases make integration and test discovery straightforward.
+        self._gesture_preview = QFrame(self._grid_host)
+        self._gesture_preview.setObjectName("dashboardDropPreview")
+        self._gesture_preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._gesture_preview.hide()
+        self._drag_indicator = self._gesture_preview
+
         self.toolbar = toolbar
         self.grid = self._grid_host
         self.widgets = self._cards
@@ -582,14 +574,6 @@ class DashboardBoard(QWidget):
     @property
     def editing(self) -> bool:
         return self._editing
-
-    def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt API
-        super().showEvent(event)
-        self._layout_cards(animate=False)
-
-    def resizeEvent(self, event: Any) -> None:  # noqa: N802 - Qt API
-        super().resizeEvent(event)
-        self._layout_cards(animate=not self._reduced_motion)
 
     @property
     def reduced_motion(self) -> bool:
@@ -619,13 +603,16 @@ class DashboardBoard(QWidget):
             return None
         return SECTION_DESTINATIONS.get(section_id.casefold())
 
-    def set_sections(self, sections: Sequence[tuple[str, str, QWidget, bool]]) -> None:
-        """Replace section content while retaining layout state for known IDs.
+    def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._layout_cards(animate=False)
 
-        Existing IDs retain the board's current order, hidden state, and size.
-        New IDs use the supplied ``visible`` flag and append after existing
-        IDs.  Removed IDs are dropped from the allowlist and persisted state.
-        """
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._layout_cards(animate=not self._reduced_motion)
+
+    def set_sections(self, sections: Sequence[tuple[str, str, QWidget, bool]]) -> None:
+        """Replace content while retaining geometry, order, and hidden state."""
 
         normalized: list[tuple[str, str, QWidget, bool]] = []
         seen: set[str] = set()
@@ -648,7 +635,7 @@ class DashboardBoard(QWidget):
 
         old_order = list(self._order)
         old_hidden = set(self._hidden)
-        old_sizes = dict(self._sizes)
+        old_geometry = {key: dict(value) for key, value in self._geometry.items()}
         self._default_visibility = {
             section_id: self._default_visibility.get(section_id, visible)
             for section_id, _, _, visible in normalized
@@ -656,10 +643,6 @@ class DashboardBoard(QWidget):
         new_content_ids = {id(content) for _, _, content, _ in normalized}
         desired_content = {section_id: content for section_id, _, content, _ in normalized}
 
-        # Detach reused content first.  This handles both a same-ID refresh
-        # and an intentional swap of two existing body widgets without
-        # allowing an old wrapper's deferred deletion to take the new body
-        # with it.
         for section_id, card in tuple(self._cards.items()):
             if (
                 id(card.content) in new_content_ids
@@ -673,42 +656,41 @@ class DashboardBoard(QWidget):
                 card.setParent(None)
                 card.deleteLater()
                 self._cards.pop(section_id, None)
+
         self._order = [section_id for section_id in old_order if section_id in seen]
         self._order.extend(
             section_id for section_id, *_ in normalized if section_id not in self._order
         )
         self._hidden = {section_id for section_id in old_hidden if section_id in seen}
-        self._sizes = {
-            section_id: old_sizes.get(section_id, "comfortable")
+        self._geometry = {
+            section_id: self._normalized_rectangle(old_geometry[section_id])
             for section_id in seen
-            if old_sizes.get(section_id, "comfortable") in SIZE_PRESETS
+            if section_id in old_geometry
         }
 
         for section_id, title, content, visible in normalized:
             if section_id not in old_order and not visible:
                 self._hidden.add(section_id)
-            self._sizes.setdefault(section_id, "comfortable")
             card = self._cards.get(section_id)
             if card is None:
                 card = _DashboardCard(section_id, title, content, self._grid_host)
                 card.remove_requested.connect(self.remove_widget)
-                card.move_earlier_requested.connect(self.move_widget_earlier)
-                card.move_later_requested.connect(self.move_widget_later)
-                card.size_requested.connect(self.set_widget_size)
                 card.open_requested.connect(self._open_card)
                 card.drag_started.connect(self._begin_drag)
                 card.drag_moved.connect(self._move_drag)
                 card.drag_finished.connect(self._finish_drag)
+                card.keyboard_move_requested.connect(self._keyboard_move)
                 card.resize_started.connect(self._begin_resize)
                 card.resize_moved.connect(self._preview_resize)
                 card.resize_finished.connect(self._finish_resize)
+                card.keyboard_resize_requested.connect(self._keyboard_resize)
                 self._cards[section_id] = card
             else:
                 card.set_title(title)
                 card.replace_content(content, preserve_old_ids=new_content_ids)
-            card.set_size_preset(self._sizes[section_id])
             card.set_editing(self._editing)
 
+        self._seed_missing_geometry()
         self._refresh_add_menu()
         self._layout_cards(animate=False)
 
@@ -720,25 +702,20 @@ class DashboardBoard(QWidget):
             "version": LAYOUT_VERSION,
             "order": order,
             "hidden": [section_id for section_id in order if section_id in self._hidden],
-            "sizes": {
-                section_id: self._sizes.get(section_id, "comfortable") for section_id in order
+            "geometry": {
+                section_id: dict(self._geometry[section_id])
+                for section_id in order
+                if section_id in self._geometry
             },
         }
 
     def validate_layout(self, payload: object) -> DashboardLayout | None:
-        """Validate and normalize a saved payload against the current ID allowlist."""
+        """Validate and normalize a saved layout against the current ID allowlist."""
 
-        normalized = self._normalized_layout(payload)
-        return normalized
+        return self._normalized_layout(payload)
 
     def restore_layout(self, payload: Mapping[str, object]) -> bool:
-        """Restore a validated layout, ignoring unknown section IDs.
-
-        A malformed top-level payload leaves the current layout untouched and
-        returns ``False``.  Unknown IDs are expected when a newer saved layout
-        is opened with an older or partially loaded section catalog, so those
-        entries are filtered while known entries continue to restore safely.
-        """
+        """Restore a v2 layout or migrate a previously saved v1 preset layout."""
 
         normalized = self._normalized_layout(payload)
         if normalized is None:
@@ -746,9 +723,7 @@ class DashboardBoard(QWidget):
         changed = normalized != self.export_layout()
         self._order = list(normalized["order"])
         self._hidden = set(normalized["hidden"])
-        self._sizes = dict(normalized["sizes"])
-        for section_id, card in self._cards.items():
-            card.set_size_preset(self._sizes[section_id])
+        self._geometry = {key: dict(value) for key, value in normalized["geometry"].items()}
         self._refresh_add_menu()
         self._layout_cards(animate=changed)
         if changed:
@@ -760,7 +735,6 @@ class DashboardBoard(QWidget):
 
         enabled = bool(enabled)
         if self._editing == enabled:
-            # Keep a programmatically toggled toolbar button in sync.
             self.edit_button.blockSignals(True)
             self.edit_button.setChecked(enabled)
             self.edit_button.blockSignals(False)
@@ -778,9 +752,8 @@ class DashboardBoard(QWidget):
     def set_reduced_motion(self, enabled: bool) -> None:
         """Stop active animations and settle immediately when motion is reduced."""
 
-        enabled = bool(enabled)
-        self._reduced_motion = enabled
-        if enabled:
+        self._reduced_motion = bool(enabled)
+        if self._reduced_motion:
             for card in self._cards.values():
                 card.stop_geometry_animation()
             self._layout_cards(animate=False)
@@ -791,7 +764,7 @@ class DashboardBoard(QWidget):
         self._layout_cards(animate=False)
 
     def reset_layout(self) -> None:
-        """Restore the current section catalog to its predictable default."""
+        """Restore the current section catalog to a predictable default grid."""
 
         if not self._cards:
             return
@@ -801,9 +774,7 @@ class DashboardBoard(QWidget):
             for section_id in self._order
             if not self._default_visibility.get(section_id, True)
         }
-        self._sizes = {section_id: "comfortable" for section_id in self._order}
-        for card in self._cards.values():
-            card.set_size_preset("comfortable")
+        self._geometry = self._default_geometry_for_order(self._order)
         self._refresh_add_menu()
         self._layout_cards(animate=not self._reduced_motion)
         self._emit_layout_changed()
@@ -835,42 +806,94 @@ class DashboardBoard(QWidget):
     def set_widget_visible(self, section_id: str, visible: bool) -> bool:
         return self.add_widget(section_id) if visible else self.remove_widget(section_id)
 
+    def set_widget_order(self, order: Sequence[str]) -> bool:
+        """Apply an explicit order while preserving each widget's saved size."""
+
+        requested: list[str] = []
+        for value in order:
+            section_id = _section_id(value)
+            if section_id in self._cards and section_id not in requested:
+                requested.append(section_id)
+        requested.extend(section_id for section_id in self._order if section_id not in requested)
+        if requested == self._order:
+            return False
+
+        old_geometry = self._geometry
+        reordered: dict[str, DashboardRectangle] = {}
+        y = 0
+        x = 0
+        row_height = 0
+        for section_id in requested:
+            original = old_geometry.get(section_id, {"x": 0, "y": 0, "w": 6, "h": 0})
+            span = max(1, min(GRID_COLUMNS, original["w"]))
+            height = max(self._natural_height(self._cards[section_id]), original["h"])
+            if x + span > GRID_COLUMNS:
+                y += row_height + GRID_GAP
+                x = 0
+                row_height = 0
+            reordered[section_id] = {"x": x, "y": y, "w": span, "h": original["h"]}
+            x += span
+            row_height = max(row_height, height)
+            if x >= GRID_COLUMNS:
+                y += row_height + GRID_GAP
+                x = 0
+                row_height = 0
+
+        self._order = requested
+        self._geometry = reordered
+        self._layout_cards(animate=not self._reduced_motion)
+        self._emit_layout_changed()
+        return True
+
     def move_widget_earlier(self, section_id: str) -> bool:
-        return self._move_widget(section_id, -1)
+        """Compatibility operation for callers with a legacy order-only control."""
+
+        return self._move_widget_by_order(section_id, -1)
 
     def move_widget_later(self, section_id: str) -> bool:
-        return self._move_widget(section_id, 1)
+        """Compatibility operation for callers with a legacy order-only control."""
+
+        return self._move_widget_by_order(section_id, 1)
 
     move_earlier = move_widget_earlier
     move_later = move_widget_later
 
     def set_widget_size(self, section_id: str, preset: str) -> bool:
-        """Apply one of the four bounded size presets to a known widget."""
+        """Compatibility adapter that converts a legacy preset into grid geometry."""
 
-        preset = _size_preset(preset)
-        if section_id not in self._cards or preset is None:
+        if section_id not in self._cards:
             return False
-        if self._sizes.get(section_id) == preset:
+        presets = {
+            "compact": {"x": 0, "y": 0, "w": 6, "h": 240},
+            "comfortable": {"x": 0, "y": 0, "w": 6, "h": 0},
+            "wide": {"x": 0, "y": 0, "w": GRID_COLUMNS, "h": 0},
+            "tall": {"x": 0, "y": 0, "w": 6, "h": 360},
+        }
+        rectangle = presets.get(str(preset).casefold())
+        if rectangle is None or self._geometry.get(section_id) == rectangle:
             return False
-        self._sizes[section_id] = preset
-        self._cards[section_id].set_size_preset(preset)
+        self._geometry[section_id] = self._normalized_rectangle(rectangle)
         self._layout_cards(animate=not self._reduced_motion)
         self._emit_layout_changed()
         return True
 
     resize_widget = set_widget_size
 
-    def _move_widget(self, section_id: str, direction: int) -> bool:
+    def _move_widget_by_order(self, section_id: str, direction: int) -> bool:
         visible = [value for value in self._order if value not in self._hidden]
         if section_id not in self._cards or section_id not in visible:
             return False
-        visible_index = visible.index(section_id)
-        target_visible_index = visible_index + direction
-        if target_visible_index < 0 or target_visible_index >= len(visible):
+        current_index = visible.index(section_id)
+        target_index = current_index + direction
+        if target_index < 0 or target_index >= len(visible):
             return False
-        index = self._order.index(section_id)
-        target = self._order.index(visible[target_visible_index])
-        self._order[index], self._order[target] = self._order[target], self._order[index]
+        visible[current_index], visible[target_index] = (
+            visible[target_index],
+            visible[current_index],
+        )
+        hidden = [value for value in self._order if value in self._hidden]
+        self._order = visible + hidden
+        self._geometry = self._default_geometry_for_order(self._order)
         self._layout_cards(animate=not self._reduced_motion)
         self._emit_layout_changed()
         return True
@@ -878,18 +901,17 @@ class DashboardBoard(QWidget):
     def _normalized_layout(self, payload: object) -> DashboardLayout | None:
         if not isinstance(payload, Mapping):
             return None
-        version = payload.get("version", payload.get("layout_version", LAYOUT_VERSION))
-        if isinstance(version, bool) or not isinstance(version, int) or version != LAYOUT_VERSION:
+        version = payload.get("version", payload.get("layout_version", _LEGACY_LAYOUT_VERSION))
+        if isinstance(version, bool) or not isinstance(version, int):
+            return None
+        if version not in {_LEGACY_LAYOUT_VERSION, LAYOUT_VERSION}:
             return None
 
         raw_order = payload.get("order", list(self._order))
         raw_hidden = payload.get("hidden", [])
-        raw_sizes = payload.get("sizes", {})
         if not isinstance(raw_order, (list, tuple)):
             return None
         if not isinstance(raw_hidden, (list, tuple, set, frozenset)):
-            return None
-        if not isinstance(raw_sizes, Mapping):
             return None
 
         known = set(self._cards)
@@ -908,95 +930,240 @@ class DashboardBoard(QWidget):
                 hidden.append(section_id)
         hidden = [section_id for section_id in order if section_id in hidden]
 
-        sizes: dict[str, str] = {}
-        for section_id in order:
-            value = raw_sizes.get(section_id, self._sizes.get(section_id, "comfortable"))
-            sizes[section_id] = _size_preset(value) or "comfortable"
+        if version == _LEGACY_LAYOUT_VERSION:
+            raw_sizes = payload.get("sizes", {})
+            if not isinstance(raw_sizes, Mapping):
+                return None
+            geometry = self._legacy_geometry(order, raw_sizes)
+        else:
+            raw_geometry = payload.get("geometry", {})
+            if not isinstance(raw_geometry, Mapping):
+                return None
+            defaults = self._default_geometry_for_order(order)
+            geometry = {
+                section_id: self._normalized_rectangle(
+                    raw_geometry.get(section_id, defaults.get(section_id))
+                )
+                for section_id in order
+            }
 
         return {
             "version": LAYOUT_VERSION,
             "order": order,
             "hidden": hidden,
-            "sizes": sizes,
+            "geometry": geometry,
         }
 
-    def _column_count(self) -> int:
-        minimum_card_width = max(
-            (card.minimumSizeHint().width() for card in self._cards.values()), default=0
-        )
-        threshold = max(GRID_BREAKPOINT, 2 * minimum_card_width + GRID_GAP)
-        return 2 if self._grid_host.width() >= threshold else 1
+    def _legacy_geometry(
+        self,
+        order: list[str],
+        sizes: Mapping[str, object],
+    ) -> dict[str, DashboardRectangle]:
+        geometry: dict[str, DashboardRectangle] = {}
+        y = 0
+        row_height = 0
+        column = 0
+        for section_id in order:
+            preset = str(sizes.get(section_id, "comfortable")).casefold()
+            width = GRID_COLUMNS if preset == "wide" else 6
+            height = {"compact": 240, "tall": 360}.get(preset, 0)
+            estimated_height = height or self._natural_height(self._cards[section_id])
+            if width == GRID_COLUMNS and column:
+                y += row_height + GRID_GAP
+                row_height = 0
+                column = 0
+            if width == GRID_COLUMNS:
+                geometry[section_id] = {"x": 0, "y": y, "w": width, "h": height}
+                y += estimated_height + GRID_GAP
+                continue
+            x = 0 if column == 0 else 6
+            geometry[section_id] = {"x": x, "y": y, "w": width, "h": height}
+            row_height = max(row_height, estimated_height)
+            if column == 0:
+                column = 1
+            else:
+                y += row_height + GRID_GAP
+                row_height = 0
+                column = 0
+        return {key: self._normalized_rectangle(value) for key, value in geometry.items()}
 
-    def _base_height(self, card: _DashboardCard, width: int) -> int:
-        content_hint = max(
+    def _normalized_rectangle(self, value: object) -> DashboardRectangle:
+        if not isinstance(value, Mapping):
+            return {"x": 0, "y": 0, "w": 6, "h": 0}
+        x, y, width, height = (
+            value.get(key, default)
+            for key, default in (
+                ("x", 0),
+                ("y", 0),
+                ("w", 6),
+                ("h", 0),
+            )
+        )
+        numbers = (x, y, width, height)
+        if any(isinstance(number, bool) or not isinstance(number, int) for number in numbers):
+            return {"x": 0, "y": 0, "w": 6, "h": 0}
+        width = max(1, min(GRID_COLUMNS, width))
+        x = max(0, min(GRID_COLUMNS - width, x))
+        y = _snapped(max(0, min(MAX_CARD_TOP, y)), GRID_SNAP)
+        height = (
+            0 if height <= 0 else _snapped(max(GRID_SNAP, min(MAX_CARD_HEIGHT, height)), GRID_SNAP)
+        )
+        return {"x": x, "y": y, "w": width, "h": height}
+
+    def _seed_missing_geometry(self) -> None:
+        missing = [section_id for section_id in self._order if section_id not in self._geometry]
+        if not missing:
+            return
+        if not self._geometry:
+            self._geometry.update(self._default_geometry_for_order(self._order))
+            return
+        bottom = max(
+            (
+                self._geometry[section_id]["y"]
+                + max(
+                    self._natural_height(self._cards[section_id]),
+                    self._geometry[section_id]["h"],
+                )
+                for section_id in self._geometry
+                if section_id in self._cards
+            ),
+            default=0,
+        )
+        y = _snapped(bottom + GRID_GAP, GRID_SNAP)
+        row_height = 0
+        column = 0
+        for section_id in missing:
+            height = self._natural_height(self._cards[section_id])
+            self._geometry[section_id] = {"x": 6 if column else 0, "y": y, "w": 6, "h": 0}
+            row_height = max(row_height, height)
+            if column:
+                y += row_height + GRID_GAP
+                row_height = 0
+                column = 0
+            else:
+                column = 1
+
+    def _default_geometry_for_order(self, order: Sequence[str]) -> dict[str, DashboardRectangle]:
+        geometry: dict[str, DashboardRectangle] = {}
+        y = 0
+        row_height = 0
+        column = 0
+        for section_id in order:
+            card = self._cards.get(section_id)
+            height = self._natural_height(card) if card is not None else 240
+            geometry[section_id] = {"x": 0 if column == 0 else 6, "y": y, "w": 6, "h": 0}
+            row_height = max(row_height, height)
+            if column == 0:
+                column = 1
+            else:
+                y += row_height + GRID_GAP
+                row_height = 0
+                column = 0
+        return geometry
+
+    def _natural_height(self, card: _DashboardCard) -> int:
+        content_height = max(
             0,
             card.content.minimumSizeHint().height(),
             card.content.minimumHeight(),
         )
-        # Content is allowed to request a larger card; presets only add a
-        # bounded amount of breathing room around that natural size.
-        chrome_hint = max(
+        chrome_height = max(
             96,
             card.header.sizeHint().height()
-            + max(card.open_button.sizeHint().height(), card.edit_controls.sizeHint().height())
+            + max(card.open_button.sizeHint().height(), card.remove_button.sizeHint().height())
             + 38,
         )
-        natural = max(200, content_hint + chrome_hint)
-        if card.size_preset == "compact":
-            if content_hint + chrome_hint <= 220:
-                return max(188, min(natural, 220))
-            return natural
-        if card.size_preset == "tall":
-            return max(300, natural + 100)
-        # A flexible Qt list or view often reports a generous default
-        # ``sizeHint`` even when it has only a couple of rows.  The minimum
-        # height above is the useful content bound; cap ordinary cards only
-        # while the content itself remains small, and always honor a large
-        # explicitly requested minimum.
-        return max(220, natural)
+        return min(MAX_CARD_HEIGHT, max(210, content_height + chrome_height))
+
+    def _height_for(self, section_id: str) -> int:
+        card = self._cards[section_id]
+        configured = self._geometry[section_id]["h"]
+        return min(MAX_CARD_HEIGHT, max(self._natural_height(card), configured or 0))
+
+    def _column_count(self) -> int:
+        minimum_card_width = max(
+            (card.minimumSizeHint().width() for card in self._cards.values()),
+            default=MIN_CARD_WIDTH,
+        )
+        threshold = max(GRID_BREAKPOINT, 2 * max(MIN_CARD_WIDTH, minimum_card_width) + GRID_GAP)
+        return 2 if self._grid_host.width() >= threshold else 1
+
+    def _grid_metrics(self) -> tuple[float, float]:
+        width = max(1, self._grid_host.width())
+        unit_width = max(1.0, (width - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS)
+        return unit_width, unit_width + GRID_GAP
+
+    def _minimum_width_units(self, card: _DashboardCard) -> int:
+        _unit_width, step = self._grid_metrics()
+        minimum = max(MIN_CARD_WIDTH, card.minimumSizeHint().width())
+        return max(1, min(GRID_COLUMNS, math.ceil((minimum + GRID_GAP) / step)))
+
+    def _display_rectangle(self, section_id: str, rectangle: DashboardRectangle) -> QRect:
+        card = self._cards[section_id]
+        width = max(1, self._grid_host.width())
+        height = max(self._natural_height(card), rectangle["h"] or 0)
+        if self._column_count() == 1:
+            return QRect(0, rectangle["y"], width, height)
+        unit_width, step = self._grid_metrics()
+        span = min(GRID_COLUMNS, max(rectangle["w"], self._minimum_width_units(card)))
+        x_cell = min(rectangle["x"], GRID_COLUMNS - span)
+        x = round(x_cell * step)
+        card_width = (
+            width if span == GRID_COLUMNS else round(span * unit_width + (span - 1) * GRID_GAP)
+        )
+        return QRect(x, rectangle["y"], max(1, card_width), height)
 
     def _layout_cards(self, *, animate: bool) -> None:
         if self._layouting:
             return
         self._layouting = True
         try:
-            columns = self._column_count()
-            width = max(1, self._grid_host.width())
-            cell_width = max(1, (width - GRID_GAP * (columns - 1)) // columns)
+            if self._column_count() == 1:
+                self._order.sort(
+                    key=lambda section_id: (
+                        self._geometry[section_id]["y"],
+                        self._geometry[section_id]["x"],
+                    )
+                )
             visible = [
                 section_id
                 for section_id in self._order
                 if section_id in self._cards and section_id not in self._hidden
             ]
             targets: dict[str, QRect] = {}
-            row_y = 0
-            column = 0
-            row_height = 0
+            width = max(1, self._grid_host.width())
+            if self._column_count() == 1:
+                y = 0
+                for section_id in visible:
+                    height = self._height_for(section_id)
+                    targets[section_id] = QRect(0, y, width, height)
+                    y += height + GRID_GAP
+            else:
+                preferred = sorted(
+                    visible,
+                    key=lambda section_id: (
+                        self._geometry[section_id]["y"],
+                        self._geometry[section_id]["x"],
+                        self._order.index(section_id),
+                    ),
+                )
+                for section_id in preferred:
+                    rectangle = self._geometry[section_id]
+                    card = self._cards[section_id]
+                    minimum_units = self._minimum_width_units(card)
+                    span = min(GRID_COLUMNS, max(minimum_units, rectangle["w"]))
+                    x_cell = min(rectangle["x"], GRID_COLUMNS - span)
+                    if x_cell != rectangle["x"] or span != rectangle["w"]:
+                        rectangle["x"] = x_cell
+                        rectangle["w"] = span
+                    target = self._display_rectangle(section_id, rectangle)
+                    while any(target.intersects(placed) for placed in targets.values()):
+                        target.translate(0, GRID_SNAP)
+                    rectangle["y"] = target.top()
+                    targets[section_id] = target
 
-            for section_id in visible:
-                card = self._cards[section_id]
-                span = 2 if card.size_preset == "wide" and columns == 2 else 1
-                if span == 2 and column != 0:
-                    row_y += row_height + GRID_GAP
-                    column = 0
-                    row_height = 0
-                if column >= columns or (span == 2 and column + span > columns):
-                    row_y += row_height + GRID_GAP
-                    column = 0
-                    row_height = 0
-                x = column * (cell_width + GRID_GAP)
-                card_width = cell_width * span + GRID_GAP * (span - 1)
-                height = self._base_height(card, card_width)
-                targets[section_id] = QRect(x, row_y, card_width, height)
-                row_height = max(row_height, height)
-                column += span
-                if column >= columns:
-                    row_y += row_height + GRID_GAP
-                    column = 0
-                    row_height = 0
-
-            total_height = max(1, row_y + row_height)
             self._target_geometries = targets
+            total_height = max((target.bottom() + 1 for target in targets.values()), default=1)
             self._grid_host.setMinimumHeight(total_height)
             self._grid_host.setMaximumHeight(16777215)
             animation_enabled = bool(animate and self._has_laid_out and not self._reduced_motion)
@@ -1007,13 +1174,36 @@ class DashboardBoard(QWidget):
                     card.stop_geometry_animation()
                     card.hide()
                     continue
+                card.setMinimumWidth(min(target.width(), self._minimum_card_width(section_id)))
+                card.setMaximumWidth(16777215)
+                card.setMinimumHeight(self._natural_height(card))
+                card.setMaximumHeight(MAX_CARD_HEIGHT)
+                for mode, grip in card.resize_grips.items():
+                    horizontal_only = mode in {"e", "w"}
+                    grip.setVisible(
+                        self._editing and not (self._column_count() == 1 and horizontal_only)
+                    )
                 card.show()
-                card.setMinimumHeight(target.height())
-                card.setMaximumHeight(target.height())
                 card.animate_geometry(target, enabled=animation_enabled)
+
+            self._order.sort(
+                key=lambda section_id: (
+                    self._target_geometries.get(
+                        section_id,
+                        QRect(0, self._geometry[section_id]["y"], 0, 0),
+                    ).top(),
+                    self._target_geometries.get(
+                        section_id,
+                        QRect(0, self._geometry[section_id]["y"], 0, 0),
+                    ).left(),
+                )
+            )
             self._has_laid_out = True
         finally:
             self._layouting = False
+
+    def _minimum_card_width(self, section_id: str) -> int:
+        return max(MIN_CARD_WIDTH, self._cards[section_id].minimumSizeHint().width())
 
     def _grid_resized(self) -> None:
         if not self._layouting:
@@ -1047,88 +1237,62 @@ class DashboardBoard(QWidget):
     def _begin_drag(self, section_id: str, point: object) -> None:
         if not self._editing or not isinstance(point, QPoint):
             return
-        self._dragging_id = section_id
+        card = self._cards.get(section_id)
+        if card is None:
+            return
+        top_left = card.mapToGlobal(QPoint(0, 0))
+        self._drag_state = {
+            "section_id": section_id,
+            "offset": point - top_left,
+            "rectangle": dict(self._geometry[section_id]),
+            "candidate": dict(self._geometry[section_id]),
+        }
+        card.raise_()
 
     def _move_drag(self, section_id: str, point: object) -> None:
-        # Layout is committed on release so a drag cannot emit a stream of
-        # partially-written payloads while the pointer crosses a card.  The
-        # marker gives a clear target while the order is still staged.
-        if self._dragging_id != section_id or not isinstance(point, QPoint):
+        state = self._drag_state
+        if state is None or state["section_id"] != section_id or not isinstance(point, QPoint):
             return
-        target_index, target_rect, before = self._drop_details(
-            self._grid_host.mapFromGlobal(point), section_id
-        )
-        _ = target_index
-        if target_rect is None:
-            self._drag_indicator.hide()
-            return
-        y = target_rect.top() - 2 if before else target_rect.bottom() - 1
-        self._drag_indicator.setGeometry(target_rect.left(), max(0, y), target_rect.width(), 4)
-        self._drag_indicator.raise_()
-        self._drag_indicator.show()
+        local_top_left = self._grid_host.mapFromGlobal(point - state["offset"])
+        _unit_width, step = self._grid_metrics()
+        rectangle = dict(state["rectangle"])
+        if self._column_count() > 1:
+            rectangle["w"] = min(
+                GRID_COLUMNS,
+                max(rectangle["w"], self._minimum_width_units(self._cards[section_id])),
+            )
+            rectangle["x"] = max(
+                0,
+                min(GRID_COLUMNS - rectangle["w"], round(local_top_left.x() / step)),
+            )
+        rectangle["y"] = _snapped(local_top_left.y(), GRID_SNAP)
+        state["candidate"] = rectangle
+        self._gesture_preview.setGeometry(self._display_rectangle(section_id, rectangle))
+        self._gesture_preview.raise_()
+        self._gesture_preview.show()
 
     def _finish_drag(self, section_id: str, point: object) -> None:
-        if self._dragging_id != section_id:
+        state = self._drag_state
+        if state is None or state["section_id"] != section_id:
             return
-        self._dragging_id = None
-        self._drag_indicator.hide()
-        if not isinstance(point, QPoint) or section_id not in self._order:
+        self._drag_state = None
+        self._gesture_preview.hide()
+        if not isinstance(point, QPoint):
             return
-        local = self._grid_host.mapFromGlobal(point)
-        target_index = self._drop_index(local, section_id)
-        current_index = self._order.index(section_id)
-        remaining = [value for value in self._order if value != section_id]
-        if target_index == current_index and target_index < len(remaining):
-            return
-        self._order = remaining
-        self._order.insert(max(0, min(target_index, len(self._order))), section_id)
+        local_top_left = self._grid_host.mapFromGlobal(point - state["offset"])
+        _unit_width, step = self._grid_metrics()
+        rectangle = dict(state["candidate"])
+        if self._column_count() > 1:
+            rectangle["x"] = max(
+                0,
+                min(GRID_COLUMNS - rectangle["w"], round(local_top_left.x() / step)),
+            )
+        rectangle["y"] = _snapped(local_top_left.y(), GRID_SNAP)
+        self._geometry[section_id] = self._normalized_rectangle(rectangle)
         self._layout_cards(animate=not self._reduced_motion)
         self._emit_layout_changed()
 
-    def _drop_index(self, point: QPoint, dragged_id: str) -> int:
-        index, _rect, _before = self._drop_details(point, dragged_id)
-        return index
-
-    def _drop_details(self, point: QPoint, dragged_id: str) -> tuple[int, QRect | None, bool]:
-        """Return insertion index and marker geometry for a pointer position."""
-
-        remaining = [section_id for section_id in self._order if section_id != dragged_id]
-        visible = [
-            section_id
-            for section_id in remaining
-            if section_id in self._cards and section_id not in self._hidden
-        ]
-        for section_id in visible:
-            geometry = self._target_geometries.get(section_id)
-            if geometry is None or not geometry.contains(point):
-                continue
-            # In a two-column row, the horizontal half is the natural choice;
-            # on a tall card the vertical half remains easier to predict.
-            before = (
-                point.x() < geometry.center().x()
-                if geometry.width() <= self._grid_host.width() // 2
-                else point.y() < geometry.center().y()
-            )
-            index = remaining.index(section_id)
-            return (index if before else index + 1), geometry, before
-
-        ordered_geometry = [
-            (section_id, self._target_geometries[section_id])
-            for section_id in visible
-            if section_id in self._target_geometries
-        ]
-        ordered_geometry.sort(key=lambda item: (item[1].top(), item[1].left()))
-        for section_id, geometry in ordered_geometry:
-            if point.y() < geometry.center().y() or (
-                point.y() <= geometry.bottom() and point.x() < geometry.left()
-            ):
-                return remaining.index(section_id), geometry, True
-        if ordered_geometry:
-            section_id, geometry = ordered_geometry[-1]
-            return len(remaining), geometry, False
-        return len(remaining), None, True
-
-    def _begin_resize(self, section_id: str, point: object) -> None:
+    def _begin_resize(self, section_id: str, mode: str, point: object) -> None:
         if not self._editing or not isinstance(point, QPoint):
             return
         card = self._cards.get(section_id)
@@ -1136,62 +1300,153 @@ class DashboardBoard(QWidget):
             return
         self._resize_state = {
             "section_id": section_id,
+            "mode": mode,
             "origin": point,
-            "geometry": QRect(card.geometry()),
-            "initial_size": self._sizes.get(section_id, "comfortable"),
+            "screen": QRect(card.geometry()),
+            "candidate": QRect(card.geometry()),
+            "rectangle": dict(self._geometry[section_id]),
         }
-        self._last_resize_size = self._resize_state["initial_size"]
 
-    def _preview_resize(self, section_id: str, point: object) -> None:
+    def _preview_resize(self, section_id: str, mode: str, point: object) -> None:
         state = self._resize_state
-        if state is None or state.get("section_id") != section_id or not isinstance(point, QPoint):
+        if (
+            state is None
+            or state["section_id"] != section_id
+            or state["mode"] != mode
+            or not isinstance(point, QPoint)
+        ):
             return
         origin = state["origin"]
-        initial = state["geometry"]
-        dx = round((point.x() - origin.x()) / GRID_SNAP) * GRID_SNAP
-        dy = round((point.y() - origin.y()) / GRID_SNAP) * GRID_SNAP
-        desired_width = max(112, initial.width() + dx)
-        desired_height = max(112, initial.height() + dy)
-        preset = self._preset_for_drag(section_id, desired_width, desired_height)
-        if preset == self._last_resize_size:
-            return
-        self._last_resize_size = preset
-        self._sizes[section_id] = preset
-        self._cards[section_id].set_size_preset(preset)
-        self._layout_cards(animate=False)
+        candidate = self._resized_screen_rectangle(
+            section_id,
+            mode,
+            state["screen"],
+            point.x() - origin.x(),
+            point.y() - origin.y(),
+        )
+        state["candidate"] = candidate
+        self._gesture_preview.setGeometry(candidate)
+        self._gesture_preview.raise_()
+        self._gesture_preview.show()
 
-    def _finish_resize(self, section_id: str, point: object) -> None:
-        if self._resize_state is None or self._resize_state.get("section_id") != section_id:
+    def _finish_resize(self, section_id: str, mode: str, point: object) -> None:
+        state = self._resize_state
+        if state is None or state["section_id"] != section_id or state["mode"] != mode:
             return
+        if isinstance(point, QPoint):
+            origin = state["origin"]
+            state["candidate"] = self._resized_screen_rectangle(
+                section_id,
+                mode,
+                state["screen"],
+                point.x() - origin.x(),
+                point.y() - origin.y(),
+            )
         self._resize_state = None
-        self._last_resize_size = None
+        self._gesture_preview.hide()
+        rectangle = self._logical_rectangle(state["candidate"])
+        if self._column_count() == 1:
+            rectangle["x"] = state["rectangle"]["x"]
+            rectangle["w"] = state["rectangle"]["w"]
+        self._geometry[section_id] = self._normalized_rectangle(rectangle)
         self._layout_cards(animate=not self._reduced_motion)
         self._emit_layout_changed()
 
-    def _preset_for_drag(self, section_id: str, width: int, height: int) -> str:
-        card = self._cards[section_id]
-        base = max(
-            132,
-            card.content.minimumSizeHint().height(),
-            card.content.minimumHeight(),
+    def _resized_screen_rectangle(
+        self,
+        section_id: str,
+        mode: str,
+        start: QRect,
+        dx: int,
+        dy: int,
+    ) -> QRect:
+        _unit_width, step = self._grid_metrics()
+        left, right = start.left(), start.right() + 1
+        top, bottom = start.top(), start.bottom() + 1
+        if self._column_count() == 1:
+            dx = 0
+        minimum_width = self._minimum_card_width(section_id)
+        minimum_height = self._natural_height(self._cards[section_id])
+        if "w" in mode:
+            left = min(_snapped(max(0, left + dx), round(step)), right - minimum_width)
+        elif "e" in mode:
+            desired = _snapped(max(0, right + dx), round(step))
+            right = max(left + minimum_width, min(self._grid_host.width(), desired))
+        if "n" in mode:
+            top = min(_snapped(max(0, top + dy), GRID_SNAP), bottom - minimum_height)
+        elif "s" in mode:
+            desired = _snapped(max(0, bottom + dy), GRID_SNAP)
+            bottom = max(top + minimum_height, min(MAX_CARD_HEIGHT + top, desired))
+        right = max(left + minimum_width, right)
+        bottom = max(top + minimum_height, bottom)
+        return QRect(left, top, right - left, bottom - top)
+
+    def _logical_rectangle(self, screen: QRect) -> DashboardRectangle:
+        _unit_width, step = self._grid_metrics()
+        span = max(1, min(GRID_COLUMNS, round((screen.width() + GRID_GAP) / step)))
+        x = max(0, min(GRID_COLUMNS - span, round(screen.left() / step)))
+        return {
+            "x": x,
+            "y": _snapped(screen.top(), GRID_SNAP),
+            "w": span,
+            "h": _snapped(screen.height(), GRID_SNAP),
+        }
+
+    def _keyboard_move(self, section_id: str, key: int) -> None:
+        if not self._editing or section_id not in self._geometry:
+            return
+        direction = _key_direction(key)
+        if direction is None:
+            return
+        dx, dy = direction
+        if self._column_count() == 1:
+            dx = 0
+        rectangle = dict(self._geometry[section_id])
+        rectangle["x"] = max(0, min(GRID_COLUMNS - rectangle["w"], rectangle["x"] + dx))
+        rectangle["y"] = max(0, min(MAX_CARD_TOP, rectangle["y"] + dy * GRID_SNAP))
+        self._geometry[section_id] = self._normalized_rectangle(rectangle)
+        self._layout_cards(animate=not self._reduced_motion)
+        self._emit_layout_changed()
+
+    def _keyboard_resize(self, section_id: str, mode: str, key: int) -> None:
+        if not self._editing or section_id not in self._cards:
+            return
+        direction = _key_direction(key)
+        if direction is None:
+            return
+        dx, dy = direction
+        if not any(edge in mode for edge in ("e", "w")):
+            dx = 0
+        if not any(edge in mode for edge in ("n", "s")):
+            dy = 0
+        if not dx and not dy:
+            return
+        start = QRect(self._cards[section_id].geometry())
+        _unit_width, step = self._grid_metrics()
+        candidate = self._resized_screen_rectangle(
+            section_id,
+            mode,
+            start,
+            int(round(step)) * dx,
+            GRID_SNAP * dy,
         )
-        if self._column_count() == 2 and width >= self._grid_host.width() * 0.70:
-            return "wide"
-        if height >= max(280, base + 70):
-            return "tall"
-        if height <= min(156, base + 10):
-            return "compact"
-        return "comfortable"
+        rectangle = self._logical_rectangle(candidate)
+        if self._column_count() == 1:
+            rectangle["x"] = self._geometry[section_id]["x"]
+            rectangle["w"] = self._geometry[section_id]["w"]
+        self._geometry[section_id] = self._normalized_rectangle(rectangle)
+        self._layout_cards(animate=not self._reduced_motion)
+        self._emit_layout_changed()
 
 
 __all__ = [
     "DashboardBoard",
     "DashboardLayout",
+    "DashboardRectangle",
     "GRID_BREAKPOINT",
+    "GRID_COLUMNS",
     "GRID_GAP",
     "GRID_SNAP",
     "LAYOUT_VERSION",
     "SECTION_DESTINATIONS",
-    "SIZE_LABELS",
-    "SIZE_PRESETS",
 ]

@@ -5914,7 +5914,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._today_section_order = tuple(ordered)
         self._sync_today_view()
         self._render_today_sections()
-        self.restore_dashboard_layout({**self.dashboard.export_layout(), "order": ordered})
+        self.dashboard.set_widget_order(ordered)
         self.today_section_order_changed.emit(self._today_section_order)
         self.today_changed.emit(self._today_view)
         return self._today_section_order

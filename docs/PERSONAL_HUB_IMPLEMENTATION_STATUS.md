@@ -1,9 +1,22 @@
 # Personal Hub implementation status
 
-Updated October 9, 2026. The authoritative product and technical specification is
+Updated October 16, 2026. The authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
+
+## Direct dashboard positioning and resizing — October 16, 2026
+
+Home widgets now use persisted grid rectangles instead of move arrows and size presets.
+In **Edit layout**, users can drag a heading to place a widget and resize from any edge or
+corner while the multi-column grid is available. Keyboard users can focus a heading or resize
+handle and use the arrow keys. Narrow windows stack widgets at full width, with vertical
+resizing retained; the wide-window layout returns when the window grows. Saved version 1
+dashboard layouts are migrated to the new geometry model on load. Layout preferences still
+contain widget IDs and geometry only, not provider content.
+
+Ruff formatting, Ruff lint for the changed Python modules, and `git diff --check` passed.
+Automated tests and manual screen-reader review were not run for this change.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
