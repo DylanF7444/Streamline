@@ -21,14 +21,18 @@ Automated tests and manual screen-reader review were not run for this change.
 ## Workspace navigation customization — October 16, 2026
 
 Sources and Settings now sit in a fixed Management section. Workspace pages can be renamed,
-reordered, and hidden; calendar sources and local task lists appear as collection-specific
-shortcuts that filter the existing Calendar and Tasks pages. Tasks includes an explicit empty
-list creation action, and workspace choices persist in Hub settings. Privacy masking replaces
-collection names in the navigation and disables customization while content is masked or the
-Hub is locked. The full test lane completed with 312 passed and 6 failed: five dashboard layout
-tests expect the older version-1 size-preset model, while the window construction failure was
-fixed by avoiding unnecessary navigation show calls and then passed in isolation. The full lane
-was not rerun after that fix; manual UI review was not run.
+reordered, and hidden; local task lists appear as shortcuts to filtered Tasks pages. The main
+Calendar includes all available calendars by default. Users can add, edit, and remove named
+calendar views that include selected calendars, and those views do not change the main calendar
+selection. Tasks includes an explicit empty list creation action. Workspace navigation and
+calendar view choices persist in Hub settings. Privacy masking replaces collection names in the
+navigation and disables customization while content is masked or the Hub is locked. The focused
+calendar and application test files completed with 23 passed; a window construction check passed
+after a navigation initialization fix. A direct smoke check confirmed that a named view filters
+to its chosen calendar and the main Calendar still shows all selected calendars. Ruff and syntax
+checks passed; manual UI review was not run. The earlier full test lane reported 312 passed and
+6 failed (five dashboard layout expectation failures and the now-fixed navigation initialization
+failure); that full lane was not rerun after the fix.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |

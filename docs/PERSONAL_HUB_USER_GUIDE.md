@@ -32,11 +32,13 @@ The **Workspace** group contains Home, Calendar, Tasks, Watchlists, and Inbox. C
 **Customize** to rename, reorder, or hide workspace pages; drag pages or use the Move buttons
 to reorder them. Sources and Settings stay available in Management.
 
-Each available calendar and local task list also has a workspace shortcut. A calendar shortcut
-opens Calendar filtered to that calendar, and a task list shortcut opens Tasks filtered to that
-list. Add more calendars through connected calendar accounts or named CSV/text imports. Choose
-**New list** on Tasks to create an empty task list; assigning a name to a task also creates its
-list when needed. Navigation choices are saved with Hub preferences.
+The main Calendar includes all available calendars by default. Choose **Views** in Calendar to
+add, edit, or remove named calendar views. Each view can include one or more calendars and gets
+its own workspace shortcut; these views do not change the main Calendar selection. Add more
+calendars through connected calendar accounts or named CSV/text imports. Each local task list
+also has a workspace shortcut. Choose **New list** on Tasks to create an empty task list;
+assigning a name to a task also creates its list when needed. Navigation and calendar view
+choices are saved with Hub preferences.
 
 ### Home
 

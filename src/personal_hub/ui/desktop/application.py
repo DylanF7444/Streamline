@@ -677,6 +677,7 @@ class HubDesktopCoordinator(QObject):
         window.today_section_visibility_changed.connect(self._save_today_visibility)
         window.dashboard_layout_changed.connect(self._save_dashboard_layout)
         window.workspace_navigation_changed.connect(self._save_workspace_navigation)
+        window.workspace_calendar_views_changed.connect(self._save_workspace_calendar_views)
         window.feed_subscription_create_requested.connect(self._feed_subscription_created)
         window.feed_subscription_update_requested.connect(self._feed_subscription_updated)
         window.feed_subscription_delete_requested.connect(self._feed_subscription_deleted)
@@ -747,6 +748,9 @@ class HubDesktopCoordinator(QObject):
         self.container.controller.remove_legacy_message_digests()
         self.window.set_workspace_navigation_preferences(
             self.container.settings_repository.get("workspace_navigation", None)
+        )
+        self.window.set_workspace_calendar_views(
+            self.container.settings_repository.get("workspace_calendar_views", None)
         )
         settings = self.container.controller.settings
         self.window.render_settings(
@@ -2297,6 +2301,12 @@ class HubDesktopCoordinator(QObject):
         if not isinstance(value, Mapping):
             return
         self.container.settings_repository.set("workspace_navigation", dict(value))
+
+    @Slot(object)
+    def _save_workspace_calendar_views(self, value: object) -> None:
+        if not isinstance(value, Mapping):
+            return
+        self.container.settings_repository.set("workspace_calendar_views", dict(value))
 
     @Slot(str)
     def _sync_configure_requested(self, endpoint: str) -> None:

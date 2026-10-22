@@ -149,12 +149,14 @@ new cloud service.
 
 The main window uses a persistent left navigation rail and a content area. The **Workspace**
 group contains Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
-or hide these pages. Connected and imported calendars and local task lists also appear as
-individual shortcuts that open the existing Calendar or Tasks page scoped to that collection.
-Users can create an empty task list from Tasks; calendars are added through connected account
-selection or named local imports. Workspace navigation preferences are stored in Hub settings.
-The separate **Management** group contains fixed Sources and Settings pages; these controls
-do not participate in workspace customization. The initial navigation is:
+or hide these pages. The main Calendar includes all available calendars by default. Users can
+create named calendar views that include chosen combinations of calendars; each view opens the
+existing Calendar page scoped to its chosen set. Local task lists appear as individual shortcuts
+that open Tasks scoped to that list. Users can create an empty task list from Tasks; calendars
+are added through connected account selection or named local imports. Workspace navigation and
+calendar view definitions are stored in Hub settings. The separate **Management** group
+contains fixed Sources and Settings pages; these controls do not participate in workspace
+customization. The initial navigation is:
 
 1. **Home** (the Today dashboard)
 2. **Calendar**

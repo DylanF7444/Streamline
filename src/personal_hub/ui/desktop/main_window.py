@@ -66,6 +66,8 @@ from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
 from personal_hub.ui.desktop.workspace_navigation import (
+    CalendarViewGroupsDialog,
+    WorkspaceCalendarView,
     WorkspaceNavigationEditor,
     WorkspaceNavigationEntry,
 )
@@ -3514,6 +3516,7 @@ class PersonalHubMainWindow(QMainWindow):
     inbox_state_changed = Signal(object)
     settings_save_requested = Signal(object)
     workspace_navigation_changed = Signal(object)
+    workspace_calendar_views_changed = Signal(object)
     backup_requested = Signal()
     restore_requested = Signal()
     export_requested = Signal()
@@ -3655,7 +3658,9 @@ class PersonalHubMainWindow(QMainWindow):
         self._workspace_hidden_routes: set[str] = set()
         self._workspace_task_list_filter: str | None = None
         self._workspace_task_list_filter_name: str | None = None
-        self._workspace_calendar_filter: str | None = None
+        self._workspace_calendar_filter: tuple[str, ...] | None = None
+        self._workspace_calendar_views: tuple[WorkspaceCalendarView, ...] = ()
+        self._workspace_calendar_view_members: dict[str, tuple[str, ...]] = {}
         self._workspace_task_lists: tuple[tuple[str, str], ...] = ()
         self._workspace_calendar_sources: tuple[CalendarSourceView, ...] = ()
 
@@ -3889,15 +3894,15 @@ class PersonalHubMainWindow(QMainWindow):
             WorkspaceNavigationEntry(destination, destination, destination)
             for destination in _WORKSPACE_DESTINATIONS
         ]
-        calendar_entries = [
+        calendar_view_entries = [
             WorkspaceNavigationEntry(
-                route_id=_workspace_collection_route_id("calendar", source.calendar_id),
-                label=source.display_name,
+                route_id=_workspace_collection_route_id("calendar-view", view.view_id),
+                label=view.name,
                 destination="Calendar",
-                collection_kind="calendar",
-                collection_id=source.calendar_id,
+                collection_kind="calendar_view",
+                collection_id=view.view_id,
             )
-            for source in self._workspace_calendar_sources
+            for view in self._workspace_calendar_views
         ]
         task_entries = [
             WorkspaceNavigationEntry(
@@ -3911,7 +3916,7 @@ class PersonalHubMainWindow(QMainWindow):
         ]
         entries.extend(
             self._unique_collection_labels(
-                [*calendar_entries, *task_entries],
+                [*calendar_view_entries, *task_entries],
                 reserved_labels={entry.label.casefold() for entry in entries},
             )
         )
@@ -3960,7 +3965,7 @@ class PersonalHubMainWindow(QMainWindow):
         entries = self._ordered_workspace_entries()
         if not (self._privacy_masked or self._locked):
             return entries
-        counts = {"calendar": 0, "task_list": 0}
+        counts = {"calendar_view": 0, "task_list": 0}
         masked: list[WorkspaceNavigationEntry] = []
         for entry in entries:
             if entry.collection_kind not in counts:
@@ -3970,7 +3975,9 @@ class PersonalHubMainWindow(QMainWindow):
                     masked.append(entry)
                 continue
             counts[entry.collection_kind] += 1
-            kind_label = "Calendar" if entry.collection_kind == "calendar" else "Task list"
+            kind_label = (
+                "Calendar view" if entry.collection_kind == "calendar_view" else "Task list"
+            )
             masked.append(replace(entry, label=f"{kind_label} {counts[entry.collection_kind]}"))
         return tuple(masked)
 
@@ -4013,27 +4020,45 @@ class PersonalHubMainWindow(QMainWindow):
             button.setText(entry.label.replace("&", "&&"))
             button.setAccessibleName(entry.label)
             button.setAccessibleDescription(f"Open the {entry.label} page.")
-            if entry.route_id in self._workspace_hidden_routes:
+            should_hide = entry.route_id in self._workspace_hidden_routes
+            was_hidden = bool(button.property("workspaceNavigationHidden"))
+            if should_hide:
                 button.hide()
-            elif button.isHidden():
+            elif was_hidden:
                 button.show()
+            button.setProperty("workspaceNavigationHidden", should_hide)
             button.setChecked(entry.route_id == self._active_destination)
             self.workspace_navigation_layout.addWidget(button)
 
         self.workspace_navigation_layout.addStretch(1)
         self.workspace_customize_button.setVisible(bool(entries))
         self.workspace_customize_button.setEnabled(not (self._privacy_masked or self._locked))
+        if hasattr(self, "calendar_view_groups_button"):
+            self.calendar_view_groups_button.setEnabled(not (self._privacy_masked or self._locked))
         if self._active_destination in self._workspace_route_targets:
             entry = self._workspace_navigation_entries[self._active_destination]
-            if entry.collection_kind == "task_list":
-                self._workspace_task_list_filter = entry.collection_id
-                self._workspace_task_list_filter_name = self._workspace_task_list_names.get(
-                    entry.route_id
-                )
-            elif entry.collection_kind == "calendar":
-                self._workspace_calendar_filter = entry.collection_id
+            self._workspace_calendar_filter = (
+                self._workspace_calendar_view_members.get(entry.collection_id)
+                if entry.collection_kind == "calendar_view"
+                else None
+            )
+            self._workspace_task_list_filter = (
+                entry.collection_id if entry.collection_kind == "task_list" else None
+            )
+            self._workspace_task_list_filter_name = (
+                self._workspace_task_list_names.get(entry.route_id)
+                if entry.collection_kind == "task_list"
+                else None
+            )
         elif self._active_destination not in self.page_widgets:
-            self._set_active_destination(TODAY_DESTINATION, emit=False)
+            fallback = (
+                "Calendar"
+                if self._active_destination.startswith("collection.calendar-view.")
+                else "Tasks"
+                if self._active_destination.startswith("collection.task-list.")
+                else TODAY_DESTINATION
+            )
+            self._set_active_destination(fallback, emit=False)
         self._update_workspace_page_title(self._active_destination)
         if hasattr(self, "status_label"):
             self._update_status()
@@ -4126,6 +4151,96 @@ class PersonalHubMainWindow(QMainWindow):
         self._workspace_task_lists = tuple(selected[:256])
         self._render_workspace_navigation()
 
+    def set_workspace_calendar_views(self, preferences: object) -> None:
+        """Load bounded named calendar views without changing the main selection."""
+
+        if isinstance(preferences, Mapping):
+            version = preferences.get("version", 1)
+            raw_views = preferences.get("views", [])
+        else:
+            version = 1
+            raw_views = []
+        if type(version) is not int or version != 1 or not isinstance(raw_views, (tuple, list)):
+            raw_views = []
+
+        views: list[WorkspaceCalendarView] = []
+        seen_ids: set[str] = set()
+        seen_names: set[str] = set()
+        for raw_view in raw_views[:128]:
+            view_id = _safe_text(_field(raw_view, "view_id", ""), limit=96)
+            raw_name = _safe_text(_field(raw_view, "name", ""), limit=128)
+            name = _safe_text(" ".join(raw_name.split()), limit=64)
+            calendar_ids = tuple(
+                dict.fromkeys(
+                    _coerce_text_tuple(
+                        _field(raw_view, "calendar_ids", ()),
+                        limit=385,
+                        max_items=512,
+                    )
+                )
+            )
+            if (
+                not view_id
+                or not name
+                or not calendar_ids
+                or view_id in seen_ids
+                or name.casefold() in seen_names
+            ):
+                continue
+            seen_ids.add(view_id)
+            seen_names.add(name.casefold())
+            views.append(WorkspaceCalendarView(view_id, name, calendar_ids))
+
+        self._workspace_calendar_views = tuple(views)
+        self._workspace_calendar_view_members = {view.view_id: view.calendar_ids for view in views}
+        self._render_workspace_navigation()
+        self._render_calendar_views()
+
+    def workspace_calendar_views_preferences(self) -> dict[str, object]:
+        """Return bounded calendar-view definitions for local persistence."""
+
+        return {
+            "version": 1,
+            "views": [
+                {
+                    "view_id": view.view_id,
+                    "name": view.name,
+                    "calendar_ids": list(view.calendar_ids),
+                }
+                for view in self._workspace_calendar_views
+            ],
+        }
+
+    def _manage_workspace_calendar_views(self) -> None:
+        if self._privacy_masked or self._locked:
+            return
+        calendars = tuple(
+            (source.calendar_id, source.display_name) for source in self._workspace_calendar_sources
+        )
+        editor = CalendarViewGroupsDialog(
+            self._workspace_calendar_views,
+            calendars,
+            parent=self,
+        )
+        if editor.exec() != QDialog.DialogCode.Accepted or editor.calendar_views is None:
+            return
+        self.set_workspace_calendar_views(
+            {
+                "version": 1,
+                "views": [
+                    {
+                        "view_id": view.view_id,
+                        "name": view.name,
+                        "calendar_ids": list(view.calendar_ids),
+                    }
+                    for view in editor.calendar_views
+                ],
+            }
+        )
+        self.workspace_calendar_views_changed.emit(self.workspace_calendar_views_preferences())
+        if editor.selected_view_id is not None:
+            self.open_workspace_collection("calendar-view", editor.selected_view_id)
+
     def _edit_workspace_navigation(self) -> None:
         if self._privacy_masked or self._locked:
             return
@@ -4148,7 +4263,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.workspace_navigation_changed.emit(self._workspace_navigation_preferences())
 
     def open_workspace_collection(self, kind: str, collection_id: str) -> bool:
-        """Open the filtered Calendar or Tasks page for one local collection."""
+        """Open a calendar view or task list workspace route."""
 
         route_id = _workspace_collection_route_id(kind, _safe_text(collection_id, limit=128))
         return self._set_active_destination(route_id)
@@ -4593,6 +4708,16 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_settings_button.setAutoRaise(True)
         self.calendar_settings_button.toggled.connect(self._toggle_calendar_settings)
         toolbar_layout.addWidget(self.calendar_settings_button)
+        self.calendar_view_groups_button = QToolButton()
+        self.calendar_view_groups_button.setObjectName("calendarViewGroupsButton")
+        self.calendar_view_groups_button.setText("Views")
+        self.calendar_view_groups_button.setAccessibleName("Manage calendar views")
+        self.calendar_view_groups_button.setToolTip(
+            "Add named views that contain selected calendars"
+        )
+        self.calendar_view_groups_button.setAutoRaise(True)
+        self.calendar_view_groups_button.clicked.connect(self._manage_workspace_calendar_views)
+        toolbar_layout.addWidget(self.calendar_view_groups_button)
         layout.addWidget(toolbar)
         self.calendar_mode = self.calendar_mode_combo
         self.calendar_previous = self.calendar_previous_button
@@ -5229,7 +5354,7 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _calendar_events_for_selected(self) -> tuple[CalendarEventView, ...]:
         if self._workspace_calendar_filter is not None:
-            selected = {self._workspace_calendar_filter}
+            selected = set(self._workspace_calendar_filter)
         elif not getattr(self, "_calendar_selection_explicit", False):
             return self._calendar_events
         else:
@@ -5239,7 +5364,7 @@ class PersonalHubMainWindow(QMainWindow):
         return tuple(
             event
             for event in self._calendar_events
-            if not event.calendar_id
+            if (self._workspace_calendar_filter is None and not event.calendar_id)
             or event.calendar_id in selected
             or (event.source_id and event.source_id in selected)
             or (event.source_id and f"{event.source_id}/*" in selected)
@@ -8974,8 +9099,8 @@ class PersonalHubMainWindow(QMainWindow):
         changed = destination != self._active_destination
         self._active_destination = destination
         self._workspace_calendar_filter = (
-            entry.collection_id
-            if entry is not None and entry.collection_kind == "calendar"
+            self._workspace_calendar_view_members.get(entry.collection_id)
+            if entry is not None and entry.collection_kind == "calendar_view"
             else None
         )
         self._workspace_task_list_filter = (
@@ -9849,8 +9974,7 @@ class PersonalHubMainWindow(QMainWindow):
             if source_lines:
                 self.attention_notification_title.setText("Messages and source attention")
                 self.attention_notification_body.setText(
-                    f"Messages: {message_summary}\nSource attention:\n"
-                    + "\n".join(source_lines)
+                    f"Messages: {message_summary}\nSource attention:\n" + "\n".join(source_lines)
                 )
             else:
                 self.attention_notification_title.setText(
