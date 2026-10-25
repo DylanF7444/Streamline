@@ -12,8 +12,13 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from personal_hub.sync.contracts import SyncSnapshot
+from personal_hub.sync.relay_contracts import (
+    PROVIDER_RELAY_MAX_BYTES,
+    ProviderRelaySnapshot,
+)
 
 SYNC_BUNDLE_FORMAT: Final[str] = "personal-hub-sync-bundle-v1"
+PROVIDER_RELAY_BUNDLE_FORMAT: Final[str] = "personal-hub-provider-relay-bundle-v1"
 SYNC_BUNDLE_MAX_BYTES: Final[int] = 20 * 1024 * 1024
 MIN_PASSPHRASE_LENGTH: Final[int] = 12
 _AAD: Final[bytes] = SYNC_BUNDLE_FORMAT.encode("ascii")
@@ -152,12 +157,91 @@ def decrypt_snapshot(bundle: bytes, passphrase: str) -> SyncSnapshot:
         raise SyncBundleError("Decrypted sync snapshot is invalid.") from error
 
 
+def encrypt_provider_relay(snapshot: ProviderRelaySnapshot, passphrase: str) -> bytes:
+    """Encrypt a validated provider relay snapshot with separate format binding."""
+    if not isinstance(snapshot, ProviderRelaySnapshot):
+        raise TypeError("encrypt_provider_relay expects a ProviderRelaySnapshot")
+    payload = json.dumps(
+        snapshot.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(payload) > min(PROVIDER_RELAY_MAX_BYTES, SYNC_BUNDLE_MAX_BYTES):
+        raise SyncBundleError("Provider relay snapshot is too large to publish.")
+    salt = os.urandom(_SALT_BYTES)
+    nonce = os.urandom(_NONCE_BYTES)
+    aad = PROVIDER_RELAY_BUNDLE_FORMAT.encode("ascii")
+    key = _derive_key(passphrase, salt)
+    ciphertext = AESGCM(key).encrypt(nonce, payload, aad)
+    envelope = {
+        "format": PROVIDER_RELAY_BUNDLE_FORMAT,
+        "kdf": "scrypt",
+        "cipher": "aes-256-gcm",
+        "salt": _encode(salt),
+        "nonce": _encode(nonce),
+        "ciphertext": _encode(ciphertext),
+    }
+    encoded = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("ascii")
+    if len(encoded) > SYNC_BUNDLE_MAX_BYTES:
+        raise SyncBundleError("Encrypted provider relay snapshot is too large.")
+    return encoded
+
+
+def decrypt_provider_relay(bundle: bytes, passphrase: str) -> ProviderRelaySnapshot:
+    """Authenticate and decode one provider relay envelope."""
+    if not isinstance(bundle, bytes) or not 1 <= len(bundle) <= SYNC_BUNDLE_MAX_BYTES:
+        raise SyncBundleError("Provider relay bundle size is invalid.")
+    try:
+        envelope = json.loads(bundle.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncBundleError("Provider relay bundle is not valid.") from error
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "format",
+        "kdf",
+        "cipher",
+        "salt",
+        "nonce",
+        "ciphertext",
+    }:
+        raise SyncBundleError("Provider relay bundle envelope is invalid.")
+    if (
+        envelope.get("format") != PROVIDER_RELAY_BUNDLE_FORMAT
+        or envelope.get("kdf") != "scrypt"
+        or envelope.get("cipher") != "aes-256-gcm"
+    ):
+        raise SyncBundleError("Provider relay bundle version is not supported.")
+    salt = _decode(envelope["salt"], name="salt", length=_SALT_BYTES)
+    nonce = _decode(envelope["nonce"], name="nonce", length=_NONCE_BYTES)
+    ciphertext = _decode(envelope["ciphertext"], name="ciphertext")
+    try:
+        key = _derive_key(passphrase, salt)
+        plaintext = AESGCM(key).decrypt(
+            nonce,
+            ciphertext,
+            PROVIDER_RELAY_BUNDLE_FORMAT.encode("ascii"),
+        )
+    except (InvalidTag, SyncPassphraseError) as error:
+        raise SyncPassphraseError(
+            "Sync passphrase was rejected or the provider relay bundle was changed."
+        ) from error
+    if len(plaintext) > min(PROVIDER_RELAY_MAX_BYTES, SYNC_BUNDLE_MAX_BYTES):
+        raise SyncBundleError("Decrypted provider relay snapshot is too large.")
+    try:
+        return ProviderRelaySnapshot.model_validate_json(plaintext)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+        raise SyncBundleError("Decrypted provider relay snapshot is invalid.") from error
+
+
 __all__ = [
     "MIN_PASSPHRASE_LENGTH",
+    "PROVIDER_RELAY_BUNDLE_FORMAT",
     "SYNC_BUNDLE_FORMAT",
     "SYNC_BUNDLE_MAX_BYTES",
     "SyncBundleError",
     "SyncPassphraseError",
     "decrypt_snapshot",
+    "decrypt_provider_relay",
     "encrypt_snapshot",
+    "encrypt_provider_relay",
 ]

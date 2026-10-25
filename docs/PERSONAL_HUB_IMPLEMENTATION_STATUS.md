@@ -119,6 +119,22 @@ pairing, conflict tie-breaking, deletion propagation, encrypted shard contents, 
 of wrong passphrases or mismatched profiles. No provider or cloud account was contacted by these
 tests.
 
+## Optional provider collector relay — October 22, 2026
+
+Settings now supports three device roles: local-only (default), provider collector, and offline
+consumer. The collector publishes one separate encrypted relay shard alongside local-state sync.
+The allowlist covers bounded calendar snapshots, selected message summaries, retained feed
+entries, and bounded watch observations and alerts. A consumer receives those records into the
+existing Hub display repositories and caches the calendar snapshot locally for up to 30 days.
+Message bodies, provider credentials and connection metadata, private iCalendar URLs, and Google
+write bindings are excluded. Consumer mode forces provider networking off, including explicit
+Google event sync, and keeps the last received content available when the collector is offline.
+
+The collector is not an always-on server: it must be online only when it refreshes providers and
+publishes the encrypted shard. Shared-folder reachability and a cloud folder's own sync client are
+required to deliver updates. Source implementation and documentation are complete. Automated
+regression and two-device release acceptance remain unrun for this extension.
+
 ## Local CSV and text-list imports — September 14, 2026
 
 Personal Hub now accepts bounded UTF-8 CSV files or pasted text lists for both local tasks

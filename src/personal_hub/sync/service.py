@@ -17,6 +17,7 @@ from personal_hub.sync.contracts import (
     SYNC_SNAPSHOT_FORMAT,
     SyncRecord,
     SyncResult,
+    SyncRole,
     SyncSnapshot,
     SyncStatus,
     SyncTombstone,
@@ -25,8 +26,15 @@ from personal_hub.sync.crypto import (
     SYNC_BUNDLE_MAX_BYTES,
     SyncBundleError,
     SyncPassphraseError,
+    decrypt_provider_relay,
     decrypt_snapshot,
+    encrypt_provider_relay,
     encrypt_snapshot,
+)
+from personal_hub.sync.relay_contracts import (
+    RELAY_CATEGORIES,
+    ProviderRelaySnapshot,
+    RelayCategory,
 )
 
 SYNC_ENDPOINT_DIRECTORY: Final[str] = ".personal-hub-sync"
@@ -40,7 +48,12 @@ _SYNC_LAST_SYNC_KEY: Final[str] = "sync.last_sync_at"
 _SYNC_LAST_ERROR_KEY: Final[str] = "sync.last_error"
 _SYNC_RECORD_COUNT_KEY: Final[str] = "sync.record_count"
 _SYNC_REMOTE_DEVICE_COUNT_KEY: Final[str] = "sync.remote_device_count"
+_RELAY_ROLE_KEY: Final[str] = "sync.provider_relay_role"
+_RELAY_CATEGORIES_KEY: Final[str] = "sync.provider_relay_categories"
+_RELAY_LAST_SYNC_KEY: Final[str] = "sync.provider_relay_last_sync_at"
+_RELAY_ITEM_COUNT_KEY: Final[str] = "sync.provider_relay_item_count"
 _SAFE_ERROR: Final[str] = "Sync could not be completed safely."
+_RELAY_FILE_RE: Final[re.Pattern[str]] = re.compile(r"collector-([a-f0-9]{32})\.relay\Z")
 
 
 class SyncError(RuntimeError):
@@ -371,6 +384,135 @@ class SyncService:
         self.settings_repository.set(_SYNC_ENABLED_KEY, False)
         return self.status()
 
+    def provider_relay_role(self) -> SyncRole:
+        value = self.settings_repository.get(_RELAY_ROLE_KEY, "local")
+        if isinstance(value, str) and value in {"local", "collector", "consumer"}:
+            return value
+        return "local"
+
+    def set_provider_relay_role(self, role: SyncRole) -> SyncStatus:
+        if role not in {"local", "collector", "consumer"}:
+            raise SyncConfigurationError("Provider relay device role is invalid.")
+        self.settings_repository.set(_RELAY_ROLE_KEY, role)
+        self.settings_repository.delete(_SYNC_LAST_ERROR_KEY)
+        return self.status()
+
+    def provider_relay_categories(self) -> tuple[RelayCategory, ...]:
+        value = self.settings_repository.get(_RELAY_CATEGORIES_KEY)
+        if not isinstance(value, list):
+            return RELAY_CATEGORIES
+        selected = {item for item in value if isinstance(item, str) and item in RELAY_CATEGORIES}
+        return tuple(item for item in RELAY_CATEGORIES if item in selected)
+
+    def set_provider_relay_categories(self, categories: Iterable[str]) -> SyncStatus:
+        selected = tuple(dict.fromkeys(categories))
+        if any(item not in RELAY_CATEGORIES for item in selected):
+            raise SyncConfigurationError("Provider relay content selection is invalid.")
+        normalized = [item for item in RELAY_CATEGORIES if item in selected]
+        self.settings_repository.set(_RELAY_CATEGORIES_KEY, normalized)
+        return self.status()
+
+    def publish_provider_relay(
+        self,
+        snapshot: ProviderRelaySnapshot,
+        passphrase: str,
+    ) -> ProviderRelaySnapshot:
+        endpoint = self.endpoint()
+        enabled = self.settings_repository.get(_SYNC_ENABLED_KEY, False) is True
+        if not enabled or endpoint is None:
+            raise SyncConfigurationError("Configure a shared sync folder before publishing.")
+        device_id = self._device_id()
+        if snapshot.collector_device_id != device_id:
+            raise SyncConfigurationError(
+                "Provider relay snapshot has the wrong collector identity."
+            )
+        directory = self._provider_relay_directory(endpoint, create=True)
+        path = directory / f"collector-{device_id}.relay"
+        candidates = self._provider_relay_candidates(directory)
+        if any(candidate != path for candidate in candidates):
+            raise SyncConfigurationError(
+                "The shared folder already has a different provider collector."
+            )
+        bundle = encrypt_provider_relay(snapshot, passphrase)
+        if len(bundle) > SYNC_BUNDLE_MAX_BYTES:
+            raise SyncBundleError("Encrypted provider relay snapshot is too large.")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".collector-{device_id}.",
+            suffix=".tmp",
+            dir=directory,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(bundle)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        return snapshot
+
+    def read_provider_relay(self, passphrase: str) -> ProviderRelaySnapshot | None:
+        endpoint = self.endpoint()
+        enabled = self.settings_repository.get(_SYNC_ENABLED_KEY, False) is True
+        if not enabled or endpoint is None:
+            raise SyncConfigurationError("Configure a shared sync folder before receiving.")
+        directory = self._provider_relay_directory(endpoint, create=False)
+        candidates = self._provider_relay_candidates(directory)
+        if not candidates:
+            return None
+        if len(candidates) != 1:
+            raise SyncConfigurationError("The shared folder has more than one provider collector.")
+        path = candidates[0]
+        if path.is_symlink() or not path.is_file():
+            raise SyncBundleError("Provider relay folder contains an invalid collector shard.")
+        try:
+            bundle = path.read_bytes()
+        except OSError as error:
+            raise SyncConfigurationError("Provider relay shard could not be read.") from error
+        if len(bundle) > SYNC_BUNDLE_MAX_BYTES:
+            raise SyncBundleError("Provider relay shard is too large.")
+        snapshot = decrypt_provider_relay(bundle, passphrase)
+        match = _RELAY_FILE_RE.fullmatch(path.name)
+        if match is None or snapshot.collector_device_id != match.group(1):
+            raise SyncBundleError("Provider relay shard identity is invalid.")
+        return snapshot
+
+    @staticmethod
+    def _provider_relay_directory(endpoint: Path, *, create: bool) -> Path:
+        engine = FileSyncEngine(endpoint, device_id="0" * 32)
+        return engine._directory(create=create)
+
+    @staticmethod
+    def _provider_relay_candidates(directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        try:
+            return sorted(
+                path
+                for path in directory.iterdir()
+                if _RELAY_FILE_RE.fullmatch(path.name) is not None
+            )
+        except OSError as error:
+            raise SyncConfigurationError("Provider relay folder could not be listed.") from error
+
+    def record_provider_relay_sync(
+        self,
+        *,
+        at: datetime,
+        item_count: int,
+    ) -> None:
+        timestamp = _utc(at)
+        if not 0 <= item_count <= 50_000:
+            raise SyncConfigurationError("Provider relay item count is invalid.")
+        self.settings_repository.set(_RELAY_LAST_SYNC_KEY, timestamp.isoformat())
+        self.settings_repository.set(_RELAY_ITEM_COUNT_KEY, item_count)
+        self.settings_repository.delete(_SYNC_LAST_ERROR_KEY)
+
+    def record_provider_relay_error(self, message: str = _SAFE_ERROR) -> None:
+        self.settings_repository.set(_SYNC_LAST_ERROR_KEY, " ".join(message.split())[:240])
+
     def record_error(self, message: str = _SAFE_ERROR) -> None:
         self.settings_repository.set(_SYNC_LAST_ERROR_KEY, " ".join(message.split())[:240])
 
@@ -403,6 +545,18 @@ class SyncService:
             record_count = 0
         if type(remote_device_count) is not int or not 0 <= remote_device_count <= 1_000:
             remote_device_count = 0
+        relay_role = self.provider_relay_role()
+        relay_categories = self.provider_relay_categories()
+        relay_last_value = self.settings_repository.get(_RELAY_LAST_SYNC_KEY)
+        relay_last_sync: datetime | None = None
+        if isinstance(relay_last_value, str):
+            try:
+                relay_last_sync = _utc(datetime.fromisoformat(relay_last_value))
+            except ValueError:
+                relay_last_sync = None
+        relay_item_count = self.settings_repository.get(_RELAY_ITEM_COUNT_KEY, 0)
+        if type(relay_item_count) is not int or not 0 <= relay_item_count <= 50_000:
+            relay_item_count = 0
         state = "not_configured"
         if enabled and (endpoint is not None or configuration_error):
             state = "error" if last_error or configuration_error else "ready"
@@ -418,6 +572,10 @@ class SyncService:
             last_error=last_error,
             remote_device_count=remote_device_count,
             record_count=record_count,
+            relay_role=relay_role,
+            relay_categories=tuple(relay_categories),
+            relay_last_sync_at=relay_last_sync,
+            relay_item_count=relay_item_count,
         )
 
     def synchronize(

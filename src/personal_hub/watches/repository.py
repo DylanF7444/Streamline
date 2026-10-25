@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
 
-from personal_hub.contracts import InboxItem
+from personal_hub.contracts import InboxItem, SourceRef
 from personal_hub.storage.database import (
     HubDatabase,
     HubWatchAlertRow,
@@ -28,6 +28,9 @@ from personal_hub.watches.contracts import (
     WatchSyncState,
     WatchValue,
 )
+
+if TYPE_CHECKING:
+    from personal_hub.sync.relay_contracts import ProviderRelayWatchSnapshot
 
 
 def _db_time(value: datetime | None) -> datetime | None:
@@ -347,6 +350,107 @@ class WatchRepository:
                     session.add(InboxRepository._row(inbox_item))
             self._prune_session(session, observation.watch_id, now=observation.checked_at)
         return persisted_alert
+
+    def import_relay_snapshot(self, relay: ProviderRelayWatchSnapshot) -> tuple[int, int]:
+        """Merge a collector's bounded watch history without triggering a fetch."""
+
+        from personal_hub.sync.relay_contracts import ProviderRelayWatchSnapshot
+
+        if not isinstance(relay, ProviderRelayWatchSnapshot):
+            raise TypeError("watch relay import expects ProviderRelayWatchSnapshot")
+        inserted_observations = 0
+        imported_alerts: list[AlertEvent] = []
+        latest_observation = max(
+            relay.observations,
+            key=lambda item: item.checked_at,
+            default=None,
+        )
+        baseline = None if latest_observation is None else latest_observation.normalized_value
+        state = WatchSyncState(
+            watch_id=relay.watch_id,
+            state="stale",
+            last_checked_at=relay.checked_at,
+            last_success_at=relay.checked_at,
+            failure_count=0,
+            safe_error="Showing the last collector snapshot; refresh on the collector device.",
+            baseline_fingerprint=(
+                None if latest_observation is None else latest_observation.fingerprint
+            ),
+            baseline_value=baseline,
+        )
+        with self.database.session() as session:
+            definition = session.get(HubWatchDefinitionRow, str(relay.watch_id))
+            if definition is None:
+                return 0, 0
+            for observation in relay.observations:
+                identifier = str(observation.observation_id)
+                existing = session.get(HubWatchObservationRow, identifier)
+                if existing is not None:
+                    continue
+                session.add(
+                    HubWatchObservationRow(
+                        observation_id=identifier,
+                        watch_id=str(observation.watch_id),
+                        checked_at=_db_time(observation.checked_at),
+                        fingerprint=observation.fingerprint,
+                        normalized_value_json=_json(observation.normalized_value),
+                        metadata_json=_json(observation.metadata),
+                    )
+                )
+                inserted_observations += 1
+            for alert in relay.alerts:
+                existing = session.scalar(
+                    select(HubWatchAlertRow).where(
+                        HubWatchAlertRow.deduplication_key == alert.deduplication_key
+                    )
+                )
+                if existing is None:
+                    existing = session.get(HubWatchAlertRow, str(alert.alert_id))
+                if existing is None:
+                    inbox_item_id = f"watch.{alert.alert_id}"
+                    session.add(
+                        HubWatchAlertRow(
+                            alert_id=str(alert.alert_id),
+                            watch_id=str(alert.watch_id),
+                            reason_code=alert.reason_code,
+                            title=alert.title,
+                            safe_summary=alert.safe_summary,
+                            previous_value_json=_json(alert.previous_value),
+                            current_value_json=_json(alert.current_value),
+                            observed_at=_db_time(alert.observed_at),
+                            deduplication_key=alert.deduplication_key,
+                            inbox_item_id=inbox_item_id,
+                        )
+                    )
+                imported_alerts.append(alert)
+            self._apply_sync(definition, state)
+
+        inbox = InboxRepository(self.database)
+        for alert in imported_alerts:
+            inbox.add(
+                InboxItem(
+                    item_id=f"watch.{alert.alert_id}",
+                    kind="watch_alert",
+                    title=alert.title,
+                    safe_summary=alert.safe_summary,
+                    reason=alert.reason_code.replace("_", " ").capitalize(),
+                    source=SourceRef(
+                        provider_id="web-watch",
+                        connection_id=str(alert.watch_id),
+                        display_name="Web watch",
+                    ),
+                    created_at=alert.observed_at,
+                    severity="attention",
+                    navigation_target=f"hub://watchlists/{alert.watch_id}",
+                    deduplication_key=alert.deduplication_key,
+                    metadata={
+                        "watch_id": str(alert.watch_id),
+                        "reason_code": alert.reason_code,
+                        "relayed": True,
+                    },
+                )
+            )
+        return inserted_observations, len(imported_alerts)
 
     def _prune_session(self, session, watch_id: UUID, *, now: datetime) -> None:
         cutoff = _db_time(now - self.observation_retention)

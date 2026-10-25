@@ -15,7 +15,7 @@ if (-not $hubVerificationRoot.StartsWith($hubTempRoot, [System.StringComparison]
     throw "Installer verification root is outside the system temporary directory"
 }
 $hubInstallDir = Join-Path $hubVerificationRoot "install"
-$hubDataDir = Join-Path $hubVerificationRoot "data"
+$hubDataDir = Join-Path $hubVerificationRoot "PersonalHub"
 New-Item -ItemType Directory -Path $hubDataDir -Force | Out-Null
 
 function Get-HubOptionalHash([string]$PathValue) {

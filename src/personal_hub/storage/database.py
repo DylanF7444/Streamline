@@ -547,6 +547,20 @@ class HubImportedCalendarEventRow(HubBase):
     )
 
 
+class HubProviderRelayCacheRow(HubBase):
+    """Last validated provider relay snapshot cached for offline consumer use."""
+
+    __tablename__ = "hub_provider_relay_cache"
+
+    cache_id: Mapped[str] = mapped_column(String(32), primary_key=True, default="active")
+    profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    collector_device_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class HubDatabase:
     """Small, explicit database boundary used by the Hub composition root."""
 
@@ -563,9 +577,10 @@ class HubDatabase:
     # open their source platform without storing a private feed URL. Version
     # 11 adds explicitly local CSV/text calendar import batches and events.
     # Version 12 adds durable local deletion markers for external tasks.
+    # Version 13 adds the locally cached, validated provider relay snapshot.
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 12
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 13
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -591,6 +606,7 @@ class HubDatabase:
             "hub_calendar_event_states",
             "hub_calendar_imports",
             "hub_imported_calendar_events",
+            "hub_provider_relay_cache",
         }
     )
     PHASE0_REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset({"hub_schema_migrations"})
@@ -630,6 +646,7 @@ class HubDatabase:
                 "hub_message_summaries",
                 "hub_calendar_event_states",
                 "hub_task_deletion_markers",
+                "hub_provider_relay_cache",
             }
         )
     )
@@ -640,6 +657,7 @@ class HubDatabase:
                 "hub_message_summaries",
                 "hub_calendar_event_states",
                 "hub_task_deletion_markers",
+                "hub_provider_relay_cache",
             }
         )
     )
@@ -650,6 +668,7 @@ class HubDatabase:
                 "hub_calendar_imports",
                 "hub_imported_calendar_events",
                 "hub_task_deletion_markers",
+                "hub_provider_relay_cache",
             }
         )
     )
@@ -660,20 +679,30 @@ class HubDatabase:
         4: PHASE4_REQUIRED_TABLES,
         5: PHASE5_REQUIRED_TABLES,
         6: PHASE6_REQUIRED_TABLES,
-        7: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
-        8: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
-        9: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
+        7: frozenset(
+            REQUIRED_TABLES.difference({"hub_task_deletion_markers", "hub_provider_relay_cache"})
+        ),
+        8: frozenset(
+            REQUIRED_TABLES.difference({"hub_task_deletion_markers", "hub_provider_relay_cache"})
+        ),
+        9: frozenset(
+            REQUIRED_TABLES.difference({"hub_task_deletion_markers", "hub_provider_relay_cache"})
+        ),
         10: frozenset(
             REQUIRED_TABLES.difference(
                 {
                     "hub_calendar_imports",
                     "hub_imported_calendar_events",
                     "hub_task_deletion_markers",
+                    "hub_provider_relay_cache",
                 }
             )
         ),
-        11: frozenset(REQUIRED_TABLES.difference({"hub_task_deletion_markers"})),
-        12: REQUIRED_TABLES,
+        11: frozenset(
+            REQUIRED_TABLES.difference({"hub_task_deletion_markers", "hub_provider_relay_cache"})
+        ),
+        12: frozenset(REQUIRED_TABLES.difference({"hub_provider_relay_cache"})),
+        13: REQUIRED_TABLES,
     }
 
     def __init__(self, path: Path | str) -> None:

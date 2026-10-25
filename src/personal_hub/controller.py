@@ -61,6 +61,7 @@ from personal_hub.feeds.contracts import (
     FeedResult,
     FeedSnapshot,
     FeedSubscription,
+    FeedSyncState,
 )
 from personal_hub.feeds.fetcher import FeedFetcher
 from personal_hub.feeds.parser import matches_filters
@@ -87,9 +88,11 @@ from personal_hub.messages import (
     MessageRepository,
     MessageResult,
     MessageService,
+    MessageSnapshot,
     MessageSource,
     MessageSourceConfig,
     MessageSummary,
+    MessageSyncState,
 )
 from personal_hub.messages.categories import MessageCategory
 from personal_hub.reminders import DurableReminderClaimStore, ReminderService
@@ -118,7 +121,18 @@ from personal_hub.sync import (
     SyncSnapshot,
     SyncStatus,
 )
-from personal_hub.sync.contracts import JSONValue
+from personal_hub.sync.calendar_source import ProviderRelayCalendarSource
+from personal_hub.sync.contracts import JSONValue, SyncRole
+from personal_hub.sync.relay_contracts import (
+    PROVIDER_RELAY_MAX_AGE,
+    RELAY_CATEGORIES,
+    ProviderRelayCalendarSnapshot,
+    ProviderRelayFeedSnapshot,
+    ProviderRelayMessageSnapshot,
+    ProviderRelaySnapshot,
+    ProviderRelayWatchSnapshot,
+)
+from personal_hub.sync.repository import ProviderRelayRepository
 from personal_hub.tasks import HubTask, HubTaskList, TaskFilter, TaskRepository
 from personal_hub.today import (
     DailyDigest,
@@ -279,6 +293,7 @@ class HubController:
         self.database = selected_database
         self._owns_database = owns_database
         self.settings_repository = settings_repository or SettingsRepository(selected_database)
+        self.sync_service = sync_service or SyncService(self.settings_repository)
         self.source_repository = source_repository or SourceRepository(selected_database)
         self.inbox_repository = inbox_repository or InboxRepository(selected_database)
         self.audit_repository = audit_repository or AuditRepository(selected_database)
@@ -288,12 +303,21 @@ class HubController:
         self.task_repository = task_repository or TaskRepository(selected_database)
         self.task_list_repository = self.task_repository.lists
         self._settings_defaults = initial_settings
+        if self.sync_service.provider_relay_role() == "consumer":
+            initial_settings = initial_settings.model_copy(update={"offline_mode": True})
         self._settings = _load_controller_settings(
             self.settings_repository,
             defaults=initial_settings,
             database_path=selected_database.path,
         )
-        self.sync_service = sync_service or SyncService(self.settings_repository)
+        if (
+            self.sync_service.provider_relay_role() == "consumer"
+            and not self._settings.offline_mode
+        ):
+            self._settings = self._settings.model_copy(update={"offline_mode": True})
+            self.settings_repository.save_settings(self._settings)
+        self.provider_relay_repository = ProviderRelayRepository(selected_database)
+        self._provider_relay_calendar_source_ids: set[str] = set()
         self.calendar_service = calendar_service or CalendarService(
             offline=self._settings.offline_mode
         )
@@ -398,6 +422,7 @@ class HubController:
         self._message_attention_notice_keys: list[str] = []
         self._message_attention_notice_lock = Lock()
         self._closed = False
+        self._restore_provider_relay_cache()
 
     @property
     def settings(self) -> HubSettings:
@@ -448,6 +473,8 @@ class HubController:
         else:
             raise TypeError("settings must be HubSettings, a mapping, or None")
         values.update(changes)
+        if self.sync_service.provider_relay_role() == "consumer":
+            values["offline_mode"] = True
         updated = HubSettings.model_validate(values)
         if not _same_path(updated.database_path, self.database.path):
             raise ValueError("Hub controller settings cannot change the active database path")
@@ -785,6 +812,9 @@ class HubController:
         return self.calendar_service.register(source, source_id=source_id)
 
     def calendar_results(self) -> tuple[CalendarResult, ...]:
+        self._ensure_open()
+        if not self._consumer_relay_enabled("calendar"):
+            return ()
         return self.calendar_service.results()
 
     async def refresh_calendars(
@@ -846,7 +876,7 @@ class HubController:
         )
         events_by_identity = {
             (result.source_id, event.calendar_id, event.event_id): event
-            for result in self.calendar_service.results()
+            for result in self.calendar_results()
             if result.snapshot is not None
             for event in result.snapshot.events
             if result.provider_id != "google-calendar"
@@ -1471,6 +1501,8 @@ class HubController:
         offset: int = 0,
     ) -> tuple[FeedEntryRecord, ...]:
         self._ensure_open()
+        if not self._consumer_relay_enabled("feeds"):
+            return ()
         if state not in {None, "read", "unread"}:
             raise ValueError("feed read state must be read or unread")
         records = self.feed_entry_repository.list_records(
@@ -1508,6 +1540,8 @@ class HubController:
         return self.feed_entry_repository.get_record(entry_id)
 
     def feed_results(self) -> tuple[FeedResult, ...]:
+        if not self._consumer_relay_enabled("feeds"):
+            return ()
         return self.feed_service.results()
 
     async def refresh_feeds(
@@ -1549,6 +1583,8 @@ class HubController:
         include_read: bool = False,
         limit: int = 100,
     ) -> tuple[TodayItem, ...]:
+        if not self._consumer_relay_enabled("feeds"):
+            return ()
         selected = (
             None
             if selected_subscription_ids is None
@@ -1731,6 +1767,8 @@ class HubController:
         limit: int = 100,
     ) -> tuple[WatchObservation, ...]:
         self._ensure_open()
+        if not self._consumer_relay_enabled("watches"):
+            return ()
         return tuple(self.watch_repository.list_observations(watch_id, limit=limit))
 
     def watch_alerts(
@@ -1740,6 +1778,8 @@ class HubController:
         limit: int = 100,
     ) -> tuple[AlertEvent, ...]:
         self._ensure_open()
+        if not self._consumer_relay_enabled("watches"):
+            return ()
         return tuple(self.watch_repository.list_alerts(watch_id=watch_id, limit=limit))
 
     async def test_watch_now(
@@ -1869,10 +1909,12 @@ class HubController:
         timestamp = now or datetime.now(UTC)
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise ValueError("watch Today timestamp must be timezone-aware")
+        if not self._consumer_relay_enabled("watches"):
+            return ()
         local_date = timestamp.astimezone(ZoneInfo(self._settings.default_timezone)).date()
         watches = {watch.watch_id: watch for watch in self.list_watches(limit=10_000)}
         items: list[TodayItem] = []
-        for alert in self.watch_repository.list_alerts(limit=min(limit * 4, 1_000)):
+        for alert in self.watch_alerts(limit=min(limit * 4, 1_000)):
             if (
                 alert.observed_at.astimezone(ZoneInfo(self._settings.default_timezone)).date()
                 != local_date
@@ -1986,6 +2028,8 @@ class HubController:
         limit: int = 1_000,
     ) -> tuple[MessageSourceConfig, ...]:
         self._ensure_open()
+        if not self._consumer_relay_enabled("messages"):
+            return ()
         return tuple(self.message_repository.list_sources(enabled=enabled, limit=limit))
 
     def list_message_summaries(
@@ -1998,6 +2042,8 @@ class HubController:
         limit: int = 200,
     ) -> tuple[MessageSummary, ...]:
         self._ensure_open()
+        if not self._consumer_relay_enabled("messages"):
+            return ()
         return self.message_service.summaries(
             source_id=source_id,
             unread=unread,
@@ -2300,6 +2346,38 @@ class HubController:
 
     get_sync_status = sync_status
 
+    def provider_relay_role(self) -> SyncRole:
+        self._ensure_open()
+        return self.sync_service.provider_relay_role()
+
+    def set_provider_relay_role(self, role: SyncRole) -> SyncStatus:
+        """Select this device as local-only, provider collector, or offline consumer."""
+
+        self._ensure_open()
+        self.sync_service.set_provider_relay_role(role)
+        if role == "consumer":
+            self.update_settings(offline_mode=True)
+            self._restore_provider_relay_cache()
+        else:
+            self._clear_provider_relay_calendar_sources()
+        return self.sync_service.status()
+
+    def set_provider_relay_categories(self, categories: Iterable[str]) -> SyncStatus:
+        self._ensure_open()
+        status = self.sync_service.set_provider_relay_categories(categories)
+        if self.sync_service.provider_relay_role() == "consumer":
+            self._restore_provider_relay_cache()
+        return status
+
+    def _consumer_relay_enabled(self, category: str) -> bool:
+        return self.sync_service.provider_relay_role() != "consumer" or (
+            category in self.sync_service.provider_relay_categories()
+        )
+
+    def provider_relay_category_enabled(self, category: str) -> bool:
+        self._ensure_open()
+        return self._consumer_relay_enabled(category)
+
     def configure_sync(self, endpoint: Path | str, *, enabled: bool = True) -> SyncStatus:
         """Configure a user-selected shared folder without storing a passphrase."""
 
@@ -2340,11 +2418,11 @@ class HubController:
         *,
         now: datetime | None = None,
     ) -> SyncResult:
-        """Merge and publish Hub-owned state using an in-memory passphrase.
+        """Sync Hub-owned state and the selected provider snapshots.
 
         The callback applies only after the encrypted shards have been read and
-        validated.  A failed validation therefore leaves both the active
-        database and the shared folder unchanged.
+        validated. Provider relay data is read or written only for the selected
+        collector/consumer role, through a separate authenticated shard.
         """
 
         self._ensure_open()
@@ -2362,6 +2440,56 @@ class HubController:
         except (TypeError, ValueError, KeyError, RuntimeError) as error:
             self.sync_service.record_error("Synchronized data failed Hub validation safely.")
             raise SyncError("Synchronized data failed Hub validation safely.") from error
+        relay_item_count = 0
+        role = self.sync_service.provider_relay_role()
+        if role in {"collector", "consumer"}:
+            try:
+                if role == "collector":
+                    relay = self._build_provider_relay_snapshot(
+                        profile_id=result.profile_id,
+                        now=result.completed_at,
+                    )
+                    self.sync_service.publish_provider_relay(relay, passphrase)
+                    relay_item_count = self._provider_relay_item_count(relay)
+                    self._cache_provider_relay_calendar_data(relay)
+                    self.sync_service.record_provider_relay_sync(
+                        at=timestamp,
+                        item_count=relay_item_count,
+                    )
+                else:
+                    relay = self.sync_service.read_provider_relay(passphrase)
+                    if relay is not None:
+                        if relay.profile_id != result.profile_id:
+                            raise SyncError(
+                                "The provider relay belongs to another Personal Hub profile."
+                            )
+                        if timestamp >= relay.expires_at:
+                            self.provider_relay_repository.clear()
+                            self._clear_provider_relay_calendar_sources()
+                            self.sync_service.record_provider_relay_sync(
+                                at=timestamp,
+                                item_count=0,
+                            )
+                        else:
+                            relay_item_count = self._apply_provider_relay_snapshot(
+                                relay,
+                                profile_id=result.profile_id,
+                                now=timestamp,
+                            )
+                            self.sync_service.record_provider_relay_sync(
+                                at=timestamp,
+                                item_count=relay_item_count,
+                            )
+            except SyncError:
+                self.sync_service.record_provider_relay_error(
+                    "The provider relay could not be applied safely."
+                )
+            except (OSError, TypeError, ValueError, KeyError, RuntimeError) as error:
+                self.sync_service.record_provider_relay_error(
+                    "The provider relay could not be applied safely."
+                )
+                raise SyncError("The provider relay could not be applied safely.") from error
+        result = result.model_copy(update={"relay_item_count": relay_item_count})
         self.audit_repository.add(
             AuditEvent(
                 event_type="sync.completed",
@@ -2374,10 +2502,280 @@ class HubController:
                     "tombstone_count": result.tombstone_count,
                     "conflict_count": result.conflict_count,
                     "remote_device_count": result.remote_device_count,
+                    "relay_item_count": relay_item_count,
                 },
             )
         )
         return result
+
+    def _build_provider_relay_snapshot(
+        self,
+        *,
+        profile_id: str,
+        now: datetime,
+    ) -> ProviderRelaySnapshot:
+        categories = self.sync_service.provider_relay_categories()
+        selected = set(categories)
+        calendars: list[ProviderRelayCalendarSnapshot] = []
+        messages: list[ProviderRelayMessageSnapshot] = []
+        feeds: list[ProviderRelayFeedSnapshot] = []
+        watches: list[ProviderRelayWatchSnapshot] = []
+
+        if "calendar" in selected:
+            for result in self.calendar_service.results():
+                if result.snapshot is None or result.state not in {"ready", "empty", "stale"}:
+                    continue
+                source = self.calendar_service.source(result.source_id)
+                if isinstance(source, ProviderRelayCalendarSource):
+                    continue
+                calendars.append(
+                    ProviderRelayCalendarSnapshot(
+                        display_name=(
+                            " ".join(
+                                str(getattr(source, "display_name", result.source_id)).split()
+                            )[:160]
+                            or result.source_id
+                        ),
+                        snapshot=result.snapshot,
+                    )
+                )
+
+        if "messages" in selected:
+            for config in self.message_repository.list_sources(enabled=True, limit=1_000):
+                state = self.message_repository.sync_state(config.source_id)
+                if state is None or state.last_success_at is None:
+                    continue
+                summaries = tuple(
+                    self.message_repository.list_summaries(
+                        source_id=config.source_id,
+                        limit=config.query.limit,
+                    )
+                )
+                messages.append(
+                    ProviderRelayMessageSnapshot(
+                        config=config,
+                        snapshot=MessageSnapshot(
+                            source_id=config.source_id,
+                            provider=config.provider,
+                            account_id=config.account_id,
+                            collected_at=state.last_success_at,
+                            summaries=summaries,
+                        ),
+                    )
+                )
+
+        if "feeds" in selected:
+            for subscription in self.feed_subscription_repository.list(
+                enabled=True,
+                limit=1_000,
+            ):
+                state = self.feed_subscription_repository.sync_state(subscription.subscription_id)
+                if state is None or state.last_success_at is None:
+                    continue
+                feeds.append(
+                    ProviderRelayFeedSnapshot(
+                        subscription_id=subscription.subscription_id,
+                        collected_at=state.last_success_at,
+                        entries=tuple(
+                            self.feed_entry_repository.list(
+                                subscription_id=subscription.subscription_id,
+                                limit=1_000,
+                            )
+                        ),
+                    )
+                )
+
+        if "watches" in selected:
+            for watch in self.watch_repository.list(limit=1_000):
+                state = self.watch_repository.sync_state(watch.watch_id)
+                observations = tuple(
+                    self.watch_repository.list_observations(watch.watch_id, limit=200)
+                )
+                alerts = tuple(
+                    self.watch_repository.list_alerts(watch_id=watch.watch_id, limit=200)
+                )
+                checked_at = (
+                    state.last_success_at
+                    if state is not None and state.last_success_at is not None
+                    else max(
+                        (
+                            *[item.checked_at for item in observations],
+                            *[item.observed_at for item in alerts],
+                        ),
+                        default=now,
+                    )
+                )
+                if observations or alerts:
+                    watches.append(
+                        ProviderRelayWatchSnapshot(
+                            watch_id=watch.watch_id,
+                            checked_at=checked_at,
+                            observations=observations,
+                            alerts=alerts,
+                        )
+                    )
+
+        return ProviderRelaySnapshot(
+            profile_id=profile_id,
+            collector_device_id=self.sync_service.device_id(),
+            generated_at=now,
+            expires_at=now + PROVIDER_RELAY_MAX_AGE,
+            categories=categories,
+            calendars=tuple(calendars),
+            messages=tuple(messages),
+            feeds=tuple(feeds),
+            watches=tuple(watches),
+        )
+
+    @staticmethod
+    def _provider_relay_item_count(snapshot: ProviderRelaySnapshot) -> int:
+        return (
+            sum(len(item.snapshot.events) for item in snapshot.calendars)
+            + sum(len(item.snapshot.summaries) for item in snapshot.messages)
+            + sum(len(item.entries) for item in snapshot.feeds)
+            + sum(len(item.observations) + len(item.alerts) for item in snapshot.watches)
+        )
+
+    def _restore_provider_relay_cache(self) -> None:
+        self._clear_provider_relay_calendar_sources()
+        cached = self.provider_relay_repository.get()
+        if cached is None:
+            return
+        now = datetime.now(UTC)
+        if cached.expires_at <= now:
+            self.provider_relay_repository.clear()
+            return
+        profile = self.settings_repository.get("sync.profile_id")
+        if not isinstance(profile, str) or cached.profile_id != profile:
+            return
+        if self.sync_service.provider_relay_role() == "consumer":
+            self._apply_provider_relay_snapshot(cached, profile_id=profile, now=now)
+
+    def _clear_provider_relay_calendar_sources(self) -> None:
+        for source_id in tuple(self._provider_relay_calendar_source_ids):
+            if source_id not in self.calendar_service.source_ids:
+                continue
+            source = self.calendar_service.source(source_id)
+            if isinstance(source, ProviderRelayCalendarSource):
+                self.calendar_service.unregister(source_id)
+            else:
+                self.calendar_service.clear_snapshot(source_id)
+        self._provider_relay_calendar_source_ids.clear()
+
+    def _cache_provider_relay_calendar_data(self, snapshot: ProviderRelaySnapshot) -> None:
+        if not snapshot.calendars or "calendar" not in snapshot.categories:
+            self.provider_relay_repository.clear()
+            return
+        calendar_cache = ProviderRelaySnapshot(
+            profile_id=snapshot.profile_id,
+            collector_device_id=snapshot.collector_device_id,
+            generated_at=snapshot.generated_at,
+            expires_at=snapshot.expires_at,
+            categories=("calendar",),
+            calendars=snapshot.calendars,
+        )
+        self.provider_relay_repository.save(calendar_cache)
+
+    def _apply_provider_relay_snapshot(
+        self,
+        snapshot: ProviderRelaySnapshot,
+        *,
+        profile_id: str,
+        now: datetime,
+    ) -> int:
+        if snapshot.profile_id != profile_id:
+            raise SyncError("The provider relay belongs to another Personal Hub profile.")
+        if now >= snapshot.expires_at:
+            self.provider_relay_repository.clear()
+            return 0
+        selected = set(self.sync_service.provider_relay_categories())
+        categories = tuple(category for category in RELAY_CATEGORIES if category in selected)
+        effective = ProviderRelaySnapshot.model_validate(
+            {
+                **snapshot.model_dump(mode="python"),
+                "categories": categories,
+                "calendars": snapshot.calendars if "calendar" in selected else (),
+                "messages": snapshot.messages if "messages" in selected else (),
+                "feeds": snapshot.feeds if "feeds" in selected else (),
+                "watches": snapshot.watches if "watches" in selected else (),
+            }
+        )
+
+        self._clear_provider_relay_calendar_sources()
+        for item in effective.calendars:
+            snapshot_value = item.snapshot
+            source_id = snapshot_value.source_id
+            if source_id not in self.calendar_service.source_ids:
+                source = ProviderRelayCalendarSource(
+                    snapshot_value,
+                    display_name=item.display_name,
+                )
+                self.calendar_service.register(source, source_id=source_id)
+            else:
+                source = self.calendar_service.source(source_id)
+                if isinstance(source, ProviderRelayCalendarSource):
+                    source.snapshot = snapshot_value
+                    source.display_name = item.display_name
+            self.calendar_service.seed_relay_snapshot(snapshot_value)
+            self._provider_relay_calendar_source_ids.add(source_id)
+
+        for item in effective.messages:
+            config = item.config
+            existing = {
+                summary.message_id: summary
+                for summary in self.message_repository.list_summaries(
+                    source_id=config.source_id,
+                    limit=1_000,
+                )
+            }
+            self.message_repository.add_source(config)
+            imported = tuple(
+                summary.model_copy(update={"category": existing[summary.message_id].category})
+                if summary.message_id in existing
+                else summary
+                for summary in item.snapshot.summaries
+            )
+            self.message_repository.upsert_summaries(
+                config,
+                imported,
+                retained_at=item.snapshot.collected_at,
+            )
+            self.message_repository.save_sync_state(
+                MessageSyncState(
+                    source_id=config.source_id,
+                    state="stale",
+                    last_checked_at=snapshot.generated_at,
+                    last_success_at=item.snapshot.collected_at,
+                    failure_count=0,
+                    safe_error="Showing the last collector snapshot; refresh on the collector device.",
+                )
+            )
+
+        for item in effective.feeds:
+            if self.feed_subscription_repository.get(item.subscription_id) is None:
+                continue
+            self.feed_entry_repository.upsert_many(item.entries, seen_at=item.collected_at)
+            self.feed_subscription_repository.save_sync_state(
+                FeedSyncState(
+                    subscription_id=item.subscription_id,
+                    state="stale",
+                    last_checked_at=snapshot.generated_at,
+                    last_success_at=item.collected_at,
+                    safe_error="Showing the last collector snapshot; refresh on the collector device.",
+                )
+            )
+        if effective.feeds:
+            self._restore_feed_service(reset=True)
+
+        for item in effective.watches:
+            self.watch_repository.import_relay_snapshot(item)
+
+        if "calendar" in selected:
+            if effective.calendars and "calendar" in snapshot.categories:
+                self._cache_provider_relay_calendar_data(effective)
+            else:
+                self.provider_relay_repository.clear()
+        return self._provider_relay_item_count(effective)
 
     synchronize = sync_now
 
@@ -2779,6 +3177,12 @@ class HubController:
                 defaults=self._settings_defaults,
                 database_path=self.database.path,
             )
+            if (
+                self.sync_service.provider_relay_role() == "consumer"
+                and not self._settings.offline_mode
+            ):
+                self._settings = self._settings.model_copy(update={"offline_mode": True})
+                self.settings_repository.save_settings(self._settings)
             _set_service_offline(self.source_service, self._settings.offline_mode)
             _set_service_offline(self.calendar_service, self._settings.offline_mode)
             self.ical_feed_manager.set_offline(self._settings.offline_mode)
@@ -2787,6 +3191,7 @@ class HubController:
             _set_service_offline(self.feed_service, self._settings.offline_mode)
             _set_service_offline(self.watch_service, self._settings.offline_mode)
             self._restore_feed_service(reset=True)
+            self._restore_provider_relay_cache()
         return restored
 
     restore = restore_database

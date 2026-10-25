@@ -364,8 +364,9 @@ It contains no model, voice, planner, command, or assistant settings.
 - Local CSV/text import for tasks and read-only calendar items with downloadable templates.
 - Scheduled morning or evening digest.
 - Full packaging, installer, update, and recovery paths.
-- Optional encrypted shared-folder synchronization for Hub-owned local state; credentials and
-  provider caches remain device-local.
+- Optional encrypted shared-folder synchronization for Hub-owned local state, plus a separate
+  opt-in provider relay with one collector and offline consumer devices. Credentials remain
+  device-local; only bounded selected snapshots are shared.
 
 ### Later candidates
 
@@ -763,6 +764,7 @@ keys, WAL mode where appropriate, bounded busy timeouts, and explicit backup/res
 | Audit metadata | 30 days |
 | Credentials | Until disconnect, encrypted at rest |
 | Encrypted sync shards | Until the user removes the shared-folder copy or a device shard is replaced |
+| Provider relay cache | Up to 30 days on a receiving device; the collector shard is replaced on publish or removed by the user |
 
 Retention cleanup is transactional, scheduled, bounded, and visible in diagnostics.
 
@@ -801,6 +803,41 @@ Personal Hub account or hosted service.
   replacing the local database.
 - Sync is manual and explicit. It adds no inbound listener, provider network scope, or
   automatic background upload, and remains useful when the shared folder is unavailable.
+
+### Optional provider relay
+
+The shared-folder sync feature also supports an explicit **Provider collector** role. A user
+selects one device as the collector and selects which of these bounded display snapshots it may
+publish: calendars, message summaries, feed entries, and watch observations/alerts. A consumer
+device can receive those snapshots through the same user-selected folder without configuring
+provider credentials. Provider networking is forced off in consumer mode, including calendar
+event writes. The default role remains **This device only**.
+
+- The collector reads only its existing last-good, bounded Hub snapshots. It does not receive
+  broader provider scopes or copy provider connection metadata. Refresh still follows the
+  source's normal user selection, query, time window, rate limit, and retention controls.
+- One separate `collector-<device-id>.relay` shard is encrypted with the same passphrase-derived
+  Scrypt/AES-256-GCM protection as local sync and is authenticated with a distinct format tag.
+  It is atomically replaced on the collector's explicit **Sync now** action. The passphrase is
+  never retained.
+- The relay can include connected-calendar events from the most recently loaded query window,
+  selected Gmail/Outlook/Slack summaries, retained RSS/Atom entries, and bounded watch history
+  and alerts. The consumer applies these through its normal display repositories; Inbox alert
+  state and feed read state stay local to each device.
+- Credentials, OAuth and provider connection metadata, full message bodies, private iCalendar
+  feed URLs, source tokens, and provider write bindings are never included. Message previews,
+  calendar details, feed summaries/links, and normalized watch values are user content and are
+  visible to anyone who has both the shared-folder access and passphrase.
+- Relay snapshots expire after at most 30 days. Receiving devices retain a validated local
+  calendar snapshot for up to that period; messages, feed entries, and watch history follow
+  their existing local retention controls. Expired snapshots are not re-applied.
+- The collector must be online and able to reach both providers and the shared folder when it
+  refreshes and publishes new data. It does not need to stay online afterward. A consumer can
+  use its last received snapshot while the collector is offline; the data becomes stale. A
+  cloud folder still needs its own sync client to upload/download the encrypted file.
+- Publishing and receiving are explicit folder operations. There is no hosted account, inbound
+  listener, background relay upload, or provider action routed from a consumer to the collector.
+  Google calendar writes remain an explicit local collector action and are never relayed.
 
 ## Provider Architecture
 

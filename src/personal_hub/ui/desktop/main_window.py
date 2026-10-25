@@ -201,6 +201,10 @@ class SyncView:
     last_error: str = ""
     remote_device_count: int = 0
     record_count: int = 0
+    relay_role: str = "local"
+    relay_categories: tuple[str, ...] = ("calendar", "messages", "feeds", "watches")
+    relay_last_sync_at: str = ""
+    relay_item_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1048,6 +1052,20 @@ def _coerce_sync(value: SyncView | Mapping[str, object] | None) -> SyncView:
     if isinstance(value, SyncView):
         return value
     data: object = value or {}
+    raw_categories = _field(
+        data,
+        "relay_categories",
+        ("calendar", "messages", "feeds", "watches"),
+    )
+    relay_categories = (
+        tuple(
+            item
+            for item in raw_categories
+            if isinstance(item, str) and item in {"calendar", "messages", "feeds", "watches"}
+        )
+        if isinstance(raw_categories, (tuple, list))
+        else ("calendar", "messages", "feeds", "watches")
+    )
     return SyncView(
         state=_safe_text(
             _field(data, "state", "not_configured"), fallback="not_configured", limit=32
@@ -1059,6 +1077,10 @@ def _coerce_sync(value: SyncView | Mapping[str, object] | None) -> SyncView:
         last_error=_safe_text(_field(data, "last_error", ""), limit=240),
         remote_device_count=max(0, _int_value(_field(data, "remote_device_count", 0), 0)),
         record_count=max(0, _int_value(_field(data, "record_count", 0), 0)),
+        relay_role=_safe_text(_field(data, "relay_role", "local"), fallback="local", limit=16),
+        relay_categories=relay_categories,
+        relay_last_sync_at=_safe_text(_field(data, "relay_last_sync_at", ""), limit=120),
+        relay_item_count=max(0, _int_value(_field(data, "relay_item_count", 0), 0)),
     )
 
 
@@ -2505,7 +2527,7 @@ QSplitter::handle:horizontal {
 
 #calendarFreshnessLabel, #calendarStatusLabel, #calendarTimezoneLabel,
 #calendarSourcesTitle, #calendarSourcesEmpty, #calendarWeekdayLabel,
-#calendarMoreLabel, #calendarEmptyLabel {
+#calendarMoreButton, #calendarEmptyLabel {
     color: #9aabc0;
 }
 
@@ -2598,6 +2620,21 @@ QSplitter::handle:horizontal {
 #calendarEventButton:hover, #calendarEventButton:focus {
     background: #265a84;
     border: 2px solid #70b5ff;
+}
+
+#calendarMoreButton {
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    min-height: 16px;
+    max-height: 20px;
+    padding: 0 3px;
+    text-align: left;
+}
+
+#calendarMoreButton:hover, #calendarMoreButton:focus {
+    background: #1a4164;
+    color: #e7eef7;
 }
 
 #calendarEventDetailsPanel {
@@ -3523,6 +3560,8 @@ class PersonalHubMainWindow(QMainWindow):
     sync_configure_requested = Signal(str)
     sync_requested = Signal(str)
     sync_disable_requested = Signal()
+    sync_relay_role_changed = Signal(str)
+    sync_relay_categories_changed = Signal(object)
     source_refresh_requested = Signal(str)
     platform_configure_requested = Signal(str)
     source_reconnect_requested = Signal(str)
@@ -4596,6 +4635,9 @@ class PersonalHubMainWindow(QMainWindow):
             self._render_mini_calendar()
 
     def _open_mini_calendar_date(self, value: date) -> None:
+        self._open_calendar_date(value)
+
+    def _open_calendar_date(self, value: date) -> None:
         self._calendar_cursor = value
         self.set_calendar_mode("day")
         self._render_calendar_views()
@@ -5415,13 +5457,28 @@ class PersonalHubMainWindow(QMainWindow):
                 day_label.setAlignment(Qt.AlignmentFlag.AlignRight)
                 cell_layout.addWidget(day_label)
                 events = self._events_for_calendar_date(current)
-                for event in events[:5]:
+                visible_events = events if len(events) <= 2 else events[:1]
+                for event in visible_events:
                     cell_layout.addWidget(self._build_calendar_event_button(event))
-                if len(events) > 5:
-                    more = QLabel(f"+ {len(events) - 5} more")
-                    more.setObjectName("calendarMoreLabel")
-                    more.setAccessibleName(f"{len(events) - 5} more events")
-                    more.setTextFormat(Qt.TextFormat.PlainText)
+                hidden_event_count = len(events) - len(visible_events)
+                if hidden_event_count:
+                    more = QPushButton(f"+ {hidden_event_count} more")
+                    more.setObjectName("calendarMoreButton")
+                    more.setAccessibleName(
+                        f"Show all {len(events)} calendar items for {current.isoformat()}"
+                    )
+                    more.setAccessibleDescription(
+                        "Opens this date in the day view so every calendar item is reachable."
+                    )
+                    more.setToolTip(f"Open {current.isoformat()} in day view")
+                    more.setMinimumWidth(0)
+                    more.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+                    more.setAutoDefault(False)
+                    more.clicked.connect(
+                        lambda _checked=False, selected_date=current: self._open_calendar_date(
+                            selected_date
+                        )
+                    )
                     cell_layout.addWidget(more)
                 cell_layout.addStretch(1)
                 self.calendar_month_layout.addWidget(cell, week + 1, column)
@@ -8941,13 +8998,40 @@ class PersonalHubMainWindow(QMainWindow):
         sync_title.setAccessibleName("Encrypted sync heading")
         sync_layout.addRow(sync_title)
         sync_description = QLabel(
-            "Use a shared folder from OneDrive, Dropbox, a network drive, or a USB device. "
-            "Only encrypted Hub-owned state is published; credentials stay on each device."
+            "Choose one provider collector to refresh connected sources and publish encrypted "
+            "snapshots. Consumer devices read the latest snapshot without provider access. "
+            "Credentials, message bodies, and private calendar feed URLs stay local."
         )
         sync_description.setObjectName("pageSubtitle")
         sync_description.setTextFormat(Qt.TextFormat.PlainText)
         sync_description.setWordWrap(True)
         sync_layout.addRow(sync_description)
+        self.sync_role_combo = QComboBox()
+        self.sync_role_combo.setObjectName("providerRelayRole")
+        self.sync_role_combo.setAccessibleName("Provider relay device role")
+        for label, value in (
+            ("This device only", "local"),
+            ("Provider collector", "collector"),
+            ("Offline consumer", "consumer"),
+        ):
+            self.sync_role_combo.addItem(label, value)
+        self.sync_role_combo.currentIndexChanged.connect(self._request_sync_role_change)
+        sync_layout.addRow(QLabel("Device role"), self.sync_role_combo)
+        self.sync_relay_category_checkboxes: dict[str, QCheckBox] = {}
+        relay_categories = QHBoxLayout()
+        for category, label in (
+            ("calendar", "Calendars"),
+            ("messages", "Message summaries"),
+            ("feeds", "News entries"),
+            ("watches", "Watch results"),
+        ):
+            checkbox = QCheckBox(label)
+            checkbox.setAccessibleName(f"Share {label.lower()} through provider relay")
+            checkbox.toggled.connect(self._request_sync_categories_change)
+            self.sync_relay_category_checkboxes[category] = checkbox
+            relay_categories.addWidget(checkbox)
+        relay_categories.addStretch(1)
+        sync_layout.addRow(QLabel("Provider snapshot content"), relay_categories)
         self.sync_status_label = QLabel("Not configured")
         self.sync_status_label.setObjectName("diagnosticsBody")
         self.sync_status_label.setAccessibleName("Encrypted sync status")
@@ -9220,7 +9304,9 @@ class PersonalHubMainWindow(QMainWindow):
     def network_refresh_paused(self) -> bool:
         return self._network_refresh_paused
 
-    def _set_offline_mode(self, enabled: bool, *, sync_tray: bool = True) -> None:
+    def _set_offline_mode(
+        self, enabled: bool, *, sync_tray: bool = True, emit: bool = True
+    ) -> None:
         enabled = bool(enabled)
         changed = enabled != self._offline_mode
         self._offline_mode = enabled
@@ -9234,11 +9320,11 @@ class PersonalHubMainWindow(QMainWindow):
             self.tray_controller.set_offline_mode(enabled, emit=False)
         self._render_mini_calendar()
         self._update_status()
-        if changed:
+        if changed and emit:
             self.offline_mode_changed.emit(enabled)
 
-    def set_offline_mode(self, enabled: bool) -> None:
-        self._set_offline_mode(enabled)
+    def set_offline_mode(self, enabled: bool, *, emit: bool = True) -> None:
+        self._set_offline_mode(enabled, emit=emit)
 
     @property
     def offline_mode(self) -> bool:
@@ -9767,12 +9853,60 @@ class PersonalHubMainWindow(QMainWindow):
         )
         if view.last_sync_at:
             detail = f"{detail} · Last sync {view.last_sync_at}"
+        role_labels = {
+            "local": "This device only",
+            "collector": "Provider collector",
+            "consumer": "Offline consumer",
+        }
+        role_index = self.sync_role_combo.findData(view.relay_role)
+        if role_index >= 0 and role_index != self.sync_role_combo.currentIndex():
+            blocker = QSignalBlocker(self.sync_role_combo)
+            self.sync_role_combo.setCurrentIndex(role_index)
+            del blocker
+        selected_categories = set(view.relay_categories)
+        for category, checkbox in self.sync_relay_category_checkboxes.items():
+            if checkbox.isChecked() != (category in selected_categories):
+                blocker = QSignalBlocker(checkbox)
+                checkbox.setChecked(category in selected_categories)
+                del blocker
+        role_detail = role_labels.get(view.relay_role, "This device only")
+        if view.relay_role == "collector":
+            relay_detail = (
+                f" · Published {view.relay_item_count} item(s)"
+                if view.relay_last_sync_at
+                else " · No provider snapshot published yet"
+            )
+        elif view.relay_role == "consumer":
+            relay_detail = (
+                f" · Received {view.relay_item_count} item(s)"
+                if view.relay_last_sync_at
+                else " · No collector snapshot received yet"
+            )
+        else:
+            relay_detail = ""
+        if view.relay_last_sync_at:
+            relay_detail += f" · Last relay sync {view.relay_last_sync_at}"
+        detail = f"{role_detail}{relay_detail} · {detail}"
         self.sync_status_label.setText(f"{state} — {detail}")
         if view.endpoint and not self.sync_endpoint_input.hasFocus():
             self.sync_endpoint_input.setText(view.endpoint)
         configured = bool(view.endpoint)
         self.sync_button.setEnabled(configured and view.enabled)
         self.sync_disable_button.setEnabled(configured and view.enabled)
+
+    def _request_sync_role_change(self, _: int) -> None:
+        selected = self.sync_role_combo.currentData()
+        if isinstance(selected, str):
+            self.sync_relay_role_changed.emit(selected)
+
+    def _request_sync_categories_change(self, _checked: bool = False) -> None:
+        self.sync_relay_categories_changed.emit(
+            tuple(
+                category
+                for category, checkbox in self.sync_relay_category_checkboxes.items()
+                if checkbox.isChecked()
+            )
+        )
 
     def sync_view(self) -> SyncView:
         return self._sync_view

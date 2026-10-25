@@ -157,6 +157,35 @@ class CalendarService:
     def last_result(self, source_id: str) -> CalendarResult | None:
         return self._last_results.get(source_id)
 
+    def seed_relay_snapshot(self, snapshot: CalendarSnapshot) -> CalendarResult:
+        """Seed a validated collector snapshot for an offline consumer device."""
+
+        if not isinstance(snapshot, CalendarSnapshot):
+            raise TypeError("calendar relay cache expects CalendarSnapshot")
+        source = self.source(snapshot.source_id)
+        provider_id = str(getattr(source, "provider_id", snapshot.provider_id))
+        if snapshot.provider_id != provider_id:
+            raise ValueError("calendar relay provider identity does not match its source")
+        self._last_good[snapshot.source_id] = snapshot
+        state: CalendarState = "offline" if self.offline else "stale"
+        result = CalendarResult(
+            source_id=snapshot.source_id,
+            provider_id=provider_id,
+            state=state,
+            checked_at=snapshot.collected_at,
+            snapshot=snapshot,
+            last_success_at=snapshot.collected_at,
+            safe_message=("Showing the last collector snapshot; refresh on the collector device."),
+        )
+        self._last_results[snapshot.source_id] = result
+        return result
+
+    def clear_snapshot(self, source_id: str) -> None:
+        """Forget retained provider content while keeping its source registration."""
+
+        self._last_good.pop(source_id, None)
+        self._last_results.pop(source_id, None)
+
     def results(self) -> tuple[CalendarResult, ...]:
         return tuple(
             self._last_results[source_id]

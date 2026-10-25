@@ -64,6 +64,12 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
+  NormalizedDataDir: String;
+  DefaultDataDir: String;
+  TempRoot: String;
+  VerificationRoot: String;
+  VerificationRootName: String;
+  SafeToDelete: Boolean;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
@@ -71,6 +77,45 @@ begin
     if DataDir = '' then
       DataDir := ExpandConstant('{localappdata}\PersonalHub');
     if DeleteUserDataRequested() then
-      DelTree(DataDir, True, True, True);
+    begin
+      NormalizedDataDir := ExpandFileName(DataDir);
+      while (Length(NormalizedDataDir) > 3) and
+        (Copy(NormalizedDataDir, Length(NormalizedDataDir), 1) = '\') do
+        Delete(NormalizedDataDir, Length(NormalizedDataDir), 1);
+
+      DefaultDataDir := ExpandFileName(ExpandConstant('{localappdata}\PersonalHub'));
+      while (Length(DefaultDataDir) > 3) and
+        (Copy(DefaultDataDir, Length(DefaultDataDir), 1) = '\') do
+        Delete(DefaultDataDir, Length(DefaultDataDir), 1);
+
+      SafeToDelete := CompareText(NormalizedDataDir, DefaultDataDir) = 0;
+      if not SafeToDelete then
+      begin
+        { The release lifecycle harness uses this narrowly scoped temporary layout.
+          Arbitrary /HUBDATADIR paths are never recursively deleted. }
+        TempRoot := ExpandFileName(GetTempDir());
+        while (Length(TempRoot) > 3) and (Copy(TempRoot, Length(TempRoot), 1) = '\') do
+          Delete(TempRoot, Length(TempRoot), 1);
+
+        VerificationRoot := ExtractFileDir(NormalizedDataDir);
+        VerificationRootName := ExtractFileName(VerificationRoot);
+        SafeToDelete :=
+          (CompareText(ExtractFileName(NormalizedDataDir), 'PersonalHub') = 0) and
+          (CompareText(ExpandFileName(ExtractFileDir(VerificationRoot)), TempRoot) = 0) and
+          (Length(VerificationRootName) > Length('PersonalHubInstallerVerification-')) and
+          (CompareText(
+            Copy(VerificationRootName, 1, Length('PersonalHubInstallerVerification-')),
+            'PersonalHubInstallerVerification-') = 0);
+      end;
+
+      if SafeToDelete then
+        DelTree(NormalizedDataDir, True, True, True)
+      else
+        MsgBox(
+          'Personal Hub data was preserved because the requested cleanup path is not a recognized Personal Hub data directory.',
+          mbInformation,
+          MB_OK
+        );
+    end;
   end;
 end;

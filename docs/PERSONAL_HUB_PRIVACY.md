@@ -10,13 +10,14 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 | --- | --- | --- |
 | Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state, imported and manually created calendar items, linked event changes, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
 | Retained remote summaries | feed entries, watch observations/alerts, selected message headers/previews | Hub SQLite database; bounded by age and count |
-| Memory-only provider content | connected-calendar snapshots and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
+| Memory-only provider content | connected-calendar snapshots on a normal local/collector device and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
+| Received provider relay content | selected calendar events, message summaries, feed entries, watch observations and alerts | Hub database on the consumer device; calendar relay cache expires after at most 30 days, other rows follow their configured retention |
 | Provider-canonical data | Canvas calendar items, calendar events, email, Slack messages, and public pages | Remains at the provider; Hub read adapters do not mutate it |
 | Credentials | OAuth access/refresh tokens, the private Canvas iCalendar URL, or optional integration token | Hub-only encrypted vault/DPAPI namespace until disconnect |
 | Operational metadata | source state, last success, safe failure class, notification claims, audit event type | Hub database/log boundary; no titles, bodies, tokens, or raw provider errors |
 | Backups | Hub SQLite data and non-secret state | User-selected or Hub backup directory; ordinary backups exclude credentials |
 | JSON exports | bounded visible local data and retained summaries | Explicit user-selected file; excludes credentials, data paths, message bodies, and calendar snapshots |
-| Encrypted sync shards | selected Hub-owned local state for cross-device use | User-selected shared folder; each device shard is passphrase-encrypted and replaced on successful sync |
+| Encrypted sync shards | Hub-owned local state, plus separately selected provider snapshots when relay mode is enabled | User-selected shared folder; device sync shards and the single collector relay shard are passphrase-encrypted |
 
 Local Assistant has a different default data root, `assistant.db`, vault namespace, mutex,
 startup value, executable, installer ID, and update channel. Hub path validation rejects an
@@ -34,7 +35,8 @@ overlap with the default Local Assistant database/data root.
   session-only; the maximum is 30 days.
 - Message bodies: never stored in the database, cache, backup, audit, log, or notification.
 - Connected-calendar snapshots: memory only. Explicitly imported local calendar items are
-  stored in the Hub database until the user removes that import.
+  stored in the Hub database until the user removes that import. In consumer mode, received
+  calendar snapshots are stored locally for up to 30 days and then removed.
 - Calendar event completion state: not stored. Provider snapshots remain memory-only, while
   completion for due-dated to-do items is stored on the underlying local task record.
 - Credentials: until disconnect, encrypted for the current Windows user.
@@ -107,18 +109,19 @@ does not include the secret vault.
 
 The explicit JSON export includes user-visible local content, including imported calendar items,
 and retained remote summaries, so
-users should protect it like any personal-data export. It
-never reads the secret vault or the memory-only message-body and connected-calendar snapshot
-caches.
+users should protect it like any personal-data export. It never reads the secret vault or the
+memory-only message-body and connected-calendar snapshot caches. A consumer's local backup may
+include its received provider relay cache and content already imported into the bounded message,
+feed, watch, and Inbox repositories.
 
 ## Encrypted sync boundary
 
 The optional **Sync across devices** feature uses a user-selected folder as a file transport.
-Each device writes its own bounded shard beneath `.personal-hub-sync`; the snapshot is encrypted
-with a passphrase-derived Scrypt key and AES-256-GCM. The passphrase is held only for the
-explicit sync operation. The folder may be local, removable, SMB-backed, or managed by a cloud
-file provider, but Personal Hub does not operate a hosted sync account, inbound listener, or
-provider write path.
+Each device writes its own bounded local-state shard beneath `.personal-hub-sync`; the snapshot
+is encrypted with a passphrase-derived Scrypt key and AES-256-GCM. The passphrase is held only
+for the explicit sync operation. The folder may be local, removable, SMB-backed, or managed by
+a cloud file provider, but Personal Hub does not operate a hosted sync account or inbound
+listener.
 
 The encrypted snapshot may contain local task lists and tasks, explicitly imported calendar
 items, feed subscriptions, watch definitions, and an allowlisted subset of shared preferences
@@ -127,11 +130,28 @@ provider snapshots, message summaries or bodies, feed entries/read state, watch 
 alerts, Inbox history, or private iCalendar feed URLs. The shard filename contains only a
 random device identity; user records are inside the encrypted payload.
 
-Sync pairs devices to one Hub profile and merges with deterministic UTC last-write-wins rules.
-Durable tombstones carry deletions, equal-time payload conflicts are counted, and malformed,
-tampered, wrong-passphrase, or foreign-profile shards are rejected before the local database is
-changed. The shared-folder provider's account permissions and retention policies remain outside
-Personal Hub's control, so users should protect the folder as they would any encrypted backup.
+Local-state sync pairs devices to one Hub profile and merges with deterministic UTC last-write-wins
+rules. Durable tombstones carry deletions, equal-time payload conflicts are counted, and malformed,
+tampered, wrong-passphrase, or foreign-profile shards are rejected before that merge is applied.
+
+An optional **Provider collector** role publishes one separate `collector-<device-id>.relay`
+shard. The user selects the role and the calendar, message-summary, feed-entry, and watch-result
+categories to share. The collector publishes its existing bounded snapshots during an explicit
+**Sync now** action. A consumer reads the shard and caches the validated data locally. Consumer
+mode forces provider networking off, including Google event writes, and the consumer can keep
+using its most recent received snapshot while the collector is offline. That information is
+marked stale and expires after at most 30 days. The collector only needs to be online when it
+must refresh providers and publish an update. For a cloud folder, its sync client must upload the
+new encrypted shard; consumers need the folder client to download it.
+
+The relay may contain selected calendar titles, locations and links; message sender, subject,
+preview and provider deep link; feed entry title, author, summary and link; and bounded watch
+values and alerts. It never contains OAuth tokens, vault material, provider connection metadata,
+full message bodies, private iCalendar feed URLs, or Google event-write bindings. Local `.sync`
+shards continue to exclude provider caches and message content. Data in `.relay` is encrypted,
+but anyone with shared-folder access and the passphrase can read it. The shared-folder provider's
+account permissions and retention policies remain outside Personal Hub's control, so users
+should protect the folder as they would any encrypted personal-data export.
 
 ## Display and notifications
 

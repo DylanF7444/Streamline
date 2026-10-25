@@ -27,6 +27,8 @@ SyncCollection = Literal[
     "watches",
 ]
 SyncState = Literal["disabled", "not_configured", "ready", "error"]
+SyncRole = Literal["local", "collector", "consumer"]
+SyncRelayCategory = Literal["calendar", "messages", "feeds", "watches"]
 type JSONScalar = str | int | float | bool | None
 type JSONValue = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 
@@ -176,6 +178,15 @@ class SyncStatus(HubContract):
     last_error: str | None = Field(default=None, max_length=240)
     remote_device_count: int = Field(default=0, ge=0, le=1_000)
     record_count: int = Field(default=0, ge=0, le=50_000)
+    relay_role: SyncRole = "local"
+    relay_categories: tuple[SyncRelayCategory, ...] = (
+        "calendar",
+        "messages",
+        "feeds",
+        "watches",
+    )
+    relay_last_sync_at: datetime | None = None
+    relay_item_count: int = Field(default=0, ge=0, le=50_000)
 
     @field_validator("device_id")
     @classmethod
@@ -186,6 +197,21 @@ class SyncStatus(HubContract):
     @classmethod
     def _last_sync_is_utc(cls, value: datetime | None) -> datetime | None:
         return None if value is None else _utc(value)
+
+    @field_validator("relay_last_sync_at")
+    @classmethod
+    def _last_relay_sync_is_utc(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _utc(value)
+
+    @field_validator("relay_categories")
+    @classmethod
+    def _relay_categories_are_unique(
+        cls,
+        value: tuple[SyncRelayCategory, ...],
+    ) -> tuple[SyncRelayCategory, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("provider relay categories must be unique")
+        return value
 
     @field_validator("last_error")
     @classmethod
@@ -205,6 +231,7 @@ class SyncResult(HubContract):
     record_count: int = Field(default=0, ge=0, le=50_000)
     tombstone_count: int = Field(default=0, ge=0, le=50_000)
     conflict_count: int = Field(default=0, ge=0, le=50_000)
+    relay_item_count: int = Field(default=0, ge=0, le=50_000)
 
     @field_validator("completed_at")
     @classmethod
@@ -223,6 +250,8 @@ __all__ = [
     "SyncCollection",
     "SyncRecord",
     "SyncResult",
+    "SyncRole",
+    "SyncRelayCategory",
     "SyncSnapshot",
     "SyncState",
     "SyncStatus",

@@ -136,9 +136,34 @@ folder:
    next sync.
 3. Retry with a wrong passphrase, a tampered shard, and a shard from a different profile. Each
    attempt must fail without replacing the receiving database or exposing a raw error.
-4. Confirm the shard bytes do not contain recognizable task text, provider payloads, OAuth tokens,
-   private iCalendar URLs, or vault material. Confirm the credential vault and provider caches
-   remain outside the shared folder.
+4. Confirm `.sync` shard bytes do not contain recognizable task text, provider payloads, OAuth
+   tokens, private iCalendar URLs, or vault material. Confirm the credential vault and raw local
+   provider caches remain outside the shared folder.
+
+For provider relay acceptance, use one collector and one consumer with isolated Hub data roots and
+the same temporary shared folder:
+
+1. Set the first device to **Provider collector**, enable the calendar, message-summary, feed, and
+   watch categories, connect test accounts, then refresh its configured sources and choose **Sync
+   now**. Confirm exactly one `collector-<device-id>.relay` file is atomically replaced.
+2. Set the second device to **Offline consumer** and choose **Sync now**. Verify the selected
+   calendar events, bounded message summaries, retained feed entries, watch observations/alerts,
+   and alert Inbox rows appear. Verify message bodies, credentials, provider connection metadata,
+   private iCalendar feed URLs, and Google write bindings are absent from decrypted relay data.
+3. Disconnect the collector from the network and keep the consumer online. Confirm consumer
+   refresh, message-body open, and Google event sync make no provider requests, while the last
+   received snapshots remain visible with stale/offline status. Reconnect only the shared folder
+   transport and sync again; the consumer must receive the same validated snapshot without the
+   collector process running.
+4. Try a wrong passphrase, modified relay bytes, multiple collector shards, a foreign-profile
+   relay, malformed bounded content, and an expired relay. Each must fail or expire safely
+   without replacing a previously validated consumer cache or exposing provider payloads in logs.
+5. Turn off each receive category, sync, and confirm future content in that category is hidden.
+   Confirm consumer role persists across restart and continues to force provider access off.
+
+The collector must be running and online when fresh provider data needs to be collected and
+published. It is not an always-on relay server. A cloud file provider remains the user's file
+transport and must upload the collector shard before consumers can download it.
 
 This acceptance is manual and offline from providers; a cloud file provider, if used, is only the
 user-managed transport and does not replace the local security checks.

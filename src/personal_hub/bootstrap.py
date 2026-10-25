@@ -115,6 +115,10 @@ def build_hub_container(
         persisted_settings = settings_repository.load_settings(resolved_settings)
         if not settings_repository.all():
             settings_repository.save_settings(persisted_settings)
+        relay_role = settings_repository.get("sync.provider_relay_role", "local")
+        if relay_role == "consumer" and not persisted_settings.offline_mode:
+            persisted_settings = persisted_settings.model_copy(update={"offline_mode": True})
+            settings_repository.save_settings(persisted_settings)
         lifecycle.settings = persisted_settings
 
         source_repository = SourceRepository(database)

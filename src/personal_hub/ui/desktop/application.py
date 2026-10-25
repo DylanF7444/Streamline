@@ -717,6 +717,8 @@ class HubDesktopCoordinator(QObject):
         window.sync_configure_requested.connect(self._sync_configure_requested)
         window.sync_requested.connect(self._sync_requested)
         window.sync_disable_requested.connect(self._sync_disable_requested)
+        window.sync_relay_role_changed.connect(self._sync_relay_role_changed)
+        window.sync_relay_categories_changed.connect(self._sync_relay_categories_changed)
         window.source_refresh_requested.connect(self._source_refresh_requested)
         window.platform_configure_requested.connect(self._platform_configure_requested)
         window.source_reconnect_requested.connect(self._source_reconnect_requested)
@@ -1334,10 +1336,15 @@ class HubDesktopCoordinator(QObject):
 
     def render_web_watches(self) -> None:
         definitions = self.container.controller.list_watches(limit=10_000)
+        relay_enabled = self.container.controller.provider_relay_category_enabled("watches")
         watches: list[WebWatchView] = []
         states = []
         for definition in definitions:
-            state = self.container.watch_repository.sync_state(definition.watch_id)
+            state = (
+                self.container.watch_repository.sync_state(definition.watch_id)
+                if relay_enabled
+                else None
+            )
             if state is not None:
                 states.append(state)
             watches.append(
@@ -1357,9 +1364,13 @@ class HubDesktopCoordinator(QObject):
                     cooldown_minutes=definition.cooldown_minutes,
                     allow_http=definition.allow_http,
                     status="stale" if state is None else state.state,
-                    detail="Watch has not been checked yet."
-                    if state is None
-                    else state.safe_error or "",
+                    detail=(
+                        "Watch snapshot sharing is disabled on this device."
+                        if not relay_enabled
+                        else "Watch has not been checked yet."
+                        if state is None
+                        else state.safe_error or ""
+                    ),
                     last_checked_at=None if state is None else state.last_checked_at,
                     last_value="" if state is None else _watch_value_text(state.baseline_value),
                     sensitive=True,
@@ -2333,10 +2344,69 @@ class HubDesktopCoordinator(QObject):
             return
         self.window.clear_sync_passphrase()
         self.render_all()
-        self.window.set_settings_status(
-            f"Sync complete: {result.record_count} record(s) across "
-            f"{result.remote_device_count + 1} device(s)."
-        )
+        sync_status = self.container.controller.sync_status()
+        self.window.render_sync_status(sync_status)
+        if sync_status.last_error:
+            self.window.set_settings_status(
+                f"Hub records synced. Provider relay needs attention: {sync_status.last_error}"
+            )
+            return
+        role = self.container.controller.provider_relay_role()
+        if role == "collector":
+            message = (
+                f"Sync complete. Published {result.relay_item_count} provider snapshot item(s) "
+                f"and synced {result.record_count} Hub record(s)."
+            )
+        elif role == "consumer":
+            message = (
+                f"Sync complete. Received {result.relay_item_count} provider snapshot item(s) "
+                f"and synced {result.record_count} Hub record(s)."
+            )
+        else:
+            message = (
+                f"Sync complete: {result.record_count} record(s) across "
+                f"{result.remote_device_count + 1} device(s)."
+            )
+        self.window.set_settings_status(message)
+
+    @Slot(str)
+    def _sync_relay_role_changed(self, role: str) -> None:
+        try:
+            self.container.controller.set_provider_relay_role(role)  # type: ignore[arg-type]
+        except (RuntimeError, TypeError, ValueError):
+            self.window.set_settings_status("Provider relay role could not be changed safely.")
+            self.window.render_sync_status(self.container.controller.sync_status())
+            return
+        self.container.settings = self.container.controller.settings
+        if role == "consumer":
+            self.set_offline_mode(True)
+        else:
+            self.window.set_offline_mode(self.container.settings.offline_mode, emit=False)
+        self.window.render_sync_status(self.container.controller.sync_status())
+        self.render_all()
+        if role == "collector":
+            self.window.set_settings_status(
+                "This device will publish selected provider snapshots on Sync now."
+            )
+        elif role == "consumer":
+            self.window.set_settings_status(
+                "Provider access is off here. Sync now reads the collector's latest snapshot."
+            )
+        else:
+            self.window.set_settings_status("This device uses its own connected sources.")
+
+    @Slot(object)
+    def _sync_relay_categories_changed(self, categories: object) -> None:
+        if not isinstance(categories, (tuple, list)):
+            return
+        try:
+            self.container.controller.set_provider_relay_categories(
+                item for item in categories if isinstance(item, str)
+            )
+        except (RuntimeError, TypeError, ValueError):
+            self.window.set_settings_status("Provider relay content selection could not be saved.")
+        self.window.render_sync_status(self.container.controller.sync_status())
+        self.render_all()
 
     @Slot()
     def _sync_disable_requested(self) -> None:
@@ -3509,6 +3579,7 @@ class HubDesktopCoordinator(QObject):
             return
         updated = self.container.controller.set_offline_mode(enabled)
         self.container.settings = updated
+        self.window.set_offline_mode(updated.offline_mode, emit=False)
         if enabled and self._global_refresh_thread is not None:
             self._global_refresh_thread.cancel()
         if enabled and self._refresh_thread is not None:

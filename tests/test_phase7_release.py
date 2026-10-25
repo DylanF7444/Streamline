@@ -89,6 +89,9 @@ def test_installer_uses_separate_identity_startup_and_explicit_data_choice() -> 
     assert 'Name: "startup"' in hub and "Flags: unchecked" in hub
     assert "DeleteUserDataRequested" in hub
     assert "DELETEUSERDATA" in hub and "HUBDATADIR" in hub
+    assert "SafeToDelete" in hub
+    assert "PersonalHubInstallerVerification-" in hub
+    assert hub.index("if SafeToDelete then") < hub.index("DelTree(NormalizedDataDir")
     assert "Choose No to preserve all user data" in hub
     assert "LocalAssistant" not in hub
 

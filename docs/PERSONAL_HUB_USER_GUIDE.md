@@ -287,18 +287,42 @@ export as sensitive because it intentionally contains your visible local content
 
 ## Sync across devices
 
-Personal Hub can share selected local state through a folder that you control. In **Settings**,
-open **Sync across devices**, choose the same shared folder on each device, select **Save
-folder**, enter a passphrase, and choose **Sync now**. Use the same passphrase on every device.
-Sync is manual; the folder may be local, removable, an SMB share, or a user-managed cloud folder
-such as OneDrive or Dropbox. Personal Hub does not create a hosted account or run an inbound
-network service.
+Personal Hub can share local Hub data through a folder that you control. In **Settings**, open
+**Sync across devices**, choose the same shared folder on each device, select **Save folder**,
+enter a passphrase, and choose **Sync now**. Use the same passphrase on every device. Sync is
+manual; the folder may be local, removable, an SMB share, or a user-managed cloud folder such as
+OneDrive or Dropbox. Personal Hub does not create a hosted account or run an inbound service.
 
-Sync includes local task lists and tasks, explicitly imported calendar items, feed subscriptions,
-watch definitions, and selected shared preferences and view state. It does not include passwords,
+By default, **This device only** keeps provider data on the device. The `.sync` shard includes
+local task lists and tasks, explicitly imported calendar items, feed subscriptions, watch
+definitions, and selected shared preferences and view state. It does not include passwords,
 OAuth tokens, the credential vault, provider connections or caches, message content, feed entries,
-watch history, Inbox history, or private iCalendar feed URLs. The passphrase is used only for the
-current sync and is not saved by Hub.
+watch history, Inbox history, or private iCalendar feed URLs.
+
+To share provider snapshots, set one device to **Provider collector** and select the categories
+to publish: Calendars, Message summaries, News entries, and Watch results. Use **Sync now** on
+that device to replace its encrypted collector shard with the latest bounded snapshots already
+loaded in Personal Hub. Set other devices to **Offline consumer**. Consumer mode turns provider
+access off on those devices; **Sync now** reads the collector shard and adds its snapshots to the
+usual Calendar, Messages, News, Watchlists, Home, and Inbox views. Unchecking a category stops
+future imports for that category. Previously received content follows its normal local retention.
+Only one collector shard can be active in the shared folder. To replace the collector, change the
+old device to **This device only**, then remove its `collector-<device-id>.relay` file from the
+`.personal-hub-sync` folder before the new collector publishes. Consumers can keep using snapshots
+they already received.
+
+The collector includes its most recently loaded calendar query window, selected message summaries,
+retained feed entries, and bounded watch observations/alerts. It never shares credentials, provider
+connection metadata, full message bodies, private iCalendar feed URLs, or Google event-write
+bindings. The passphrase is used only for the current sync and is not saved by Hub. Anyone with
+access to the folder and passphrase can read the encrypted relay contents.
+
+The collector must be online and able to reach both providers and the shared folder when it needs
+to refresh and publish new information. It does not need to stay online afterward. Consumer
+devices can keep using their last received snapshots while the collector is offline; those
+snapshots become stale and expire after at most 30 days. With a cloud folder, the folder sync
+client must upload the collector file, and consumer devices need their folder clients to download
+it.
 
 Changes merge by their UTC update time. A deletion is carried by an encrypted tombstone, so it
 continues to propagate after another device has been offline. Equal-time conflicting edits use a
