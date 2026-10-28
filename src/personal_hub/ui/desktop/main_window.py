@@ -179,7 +179,7 @@ class SettingsView:
     watch_refresh_minutes: int = 60
     message_retention_days: int = 7
     message_refresh_minutes: int = 10
-    canvas_remove_completed_assignments: bool = False
+    remove_completed_tasks_after_due_date: bool = False
     text_scale: float = 1.0
     high_contrast: bool = False
     reduced_motion: bool = False
@@ -188,6 +188,12 @@ class SettingsView:
     ui_background_color: str = ""
     ui_surface_color: str = ""
     network_refresh_paused: bool = False
+
+    @property
+    def canvas_remove_completed_assignments(self) -> bool:
+        """Backward-compatible alias for the broader task cleanup setting."""
+
+        return self.remove_completed_tasks_after_due_date
 
 
 @dataclass(frozen=True, slots=True)
@@ -1163,8 +1169,12 @@ def _coerce_settings(value: SettingsView | Mapping[str, object] | None) -> Setti
             7,
         ),
         message_refresh_minutes=_int_value(_field(data, "message_refresh_minutes", 10), 10),
-        canvas_remove_completed_assignments=_bool_value(
-            _field(data, "canvas_remove_completed_assignments", False)
+        remove_completed_tasks_after_due_date=_bool_value(
+            _field(
+                data,
+                "remove_completed_tasks_after_due_date",
+                _field(data, "canvas_remove_completed_assignments", False),
+            )
         ),
         text_scale=text_scale,
         high_contrast=_bool_value(
@@ -8885,7 +8895,7 @@ class PersonalHubMainWindow(QMainWindow):
             ("text_scale", "Text scale"),
             ("high_contrast", "High contrast"),
             ("reduced_motion", "Reduced motion"),
-            ("canvas_remove_completed_assignments", "Completed Canvas assignments"),
+            ("remove_completed_tasks_after_due_date", "Completed tasks after due date"),
             ("network_refresh_paused", "Network refresh"),
         ):
             row = QWidget()
@@ -8928,8 +8938,8 @@ class PersonalHubMainWindow(QMainWindow):
             ("high_contrast", "High contrast"),
             ("reduced_motion", "Reduced motion"),
             (
-                "canvas_remove_completed_assignments",
-                "Remove completed Canvas assignments after due date",
+                "remove_completed_tasks_after_due_date",
+                "Remove completed tasks after due date",
             ),
         )
         for key, label in checkbox_fields:
@@ -8938,6 +8948,10 @@ class PersonalHubMainWindow(QMainWindow):
             checkbox.toggled.connect(self._mark_settings_unsaved)
             editor_layout.addRow(checkbox)
             self.settings_checkboxes[key] = checkbox
+        # Keep the previous internal lookup key working for existing UI callers.
+        self.settings_checkboxes["canvas_remove_completed_assignments"] = self.settings_checkboxes[
+            "remove_completed_tasks_after_due_date"
+        ]
 
         self.settings_inputs: dict[str, QLineEdit | TimezoneComboBox] = {}
         input_fields = (
@@ -9945,6 +9959,7 @@ class PersonalHubMainWindow(QMainWindow):
         values: dict[str, object] = {
             key: checkbox.isChecked() for key, checkbox in self.settings_checkboxes.items()
         }
+        values.pop("canvas_remove_completed_assignments", None)
         values.update(
             {
                 "default_timezone": self.settings_inputs["default_timezone"].timezone(),
@@ -10011,8 +10026,8 @@ class PersonalHubMainWindow(QMainWindow):
             "text_scale": f"{max(1.0, min(view.text_scale, 1.75)):.2g}×",
             "high_contrast": "On" if view.high_contrast else "Off",
             "reduced_motion": "On" if view.reduced_motion else "Off",
-            "canvas_remove_completed_assignments": (
-                "On" if view.canvas_remove_completed_assignments else "Off"
+            "remove_completed_tasks_after_due_date": (
+                "On" if view.remove_completed_tasks_after_due_date else "Off"
             ),
             "network_refresh_paused": "Paused" if view.network_refresh_paused else "Active",
         }
@@ -10035,7 +10050,9 @@ class PersonalHubMainWindow(QMainWindow):
                 "digest_enabled": view.digest_enabled,
                 "high_contrast": view.high_contrast,
                 "reduced_motion": view.reduced_motion,
-                "canvas_remove_completed_assignments": view.canvas_remove_completed_assignments,
+                "remove_completed_tasks_after_due_date": (
+                    view.remove_completed_tasks_after_due_date
+                ),
             }
             for key, checked in checkbox_values.items():
                 self.settings_checkboxes[key].setChecked(checked)

@@ -166,11 +166,14 @@ same-origin native `/courses/{course}/assignments/{id}` URL using the assignment
 course context that Canvas includes. The safe link is retained on the local task and exposed as
 **Open in Canvas** in Tasks and Calendar; items without an assignment identity have no
 native-open action.
-An opt-in setting, **Remove completed Canvas assignments after due date**, now removes only
-completed, past-due assignment task copies during a successful Canvas refresh and records a
-durable Personal Hub deletion marker. Later refreshes and restarts honor that marker instead of
-recreating the assignment as an open task. Generic Canvas calendar items, open/future
-assignments, and Canvas itself are unaffected.
+The opt-in setting is now **Remove completed tasks after due date**. Local maintenance removes
+completed, past-due tasks from Personal Hub at startup and during its minute schedule, including
+while offline. All-day tasks are eligible after their due date passes in the task's timezone;
+open, future-due, undated, and archived tasks remain. The first completed task in an active
+recurring series remains as its schedule anchor. Canvas imports retain a durable local
+deletion marker so later feed refreshes do not recreate removed tasks. Canvas itself is never
+modified. The existing `canvas_remove_completed_assignments` preference migrates to the broader
+setting.
 
 Deterministic evidence for this slice:
 
@@ -180,8 +183,9 @@ Deterministic evidence for this slice:
 - Ruff lint, changed-surface format checks, documentation consistency, and import isolation:
   passed.
 
-No live Canvas feed was contacted. A rotated non-production feed remains a release acceptance
-check.
+The historical test counts above cover the original Canvas-specific behavior; the broadened
+cleanup has not been covered by new automated tests in this update. No live Canvas feed was
+contacted. A rotated non-production feed remains a release acceptance check.
 
 ## Standalone repository extraction — September 8, 2026
 

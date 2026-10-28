@@ -356,7 +356,8 @@ class ExternalPlatformManager:
         message_refresh_minutes: int = 10,
         message_retention_days: int = 7,
         default_timezone: str = "UTC",
-        canvas_remove_completed_assignments: bool = False,
+        remove_completed_tasks_after_due_date: bool = False,
+        canvas_remove_completed_assignments: bool | None = None,
         transport: BoundedProviderTransport | None = None,
         canvas_importer: CanvasIcalTaskImporter | None = None,
         oauth_authorizer: OAuthAuthorizer = authorize_oauth_with_loopback,
@@ -371,7 +372,11 @@ class ExternalPlatformManager:
         self.message_refresh_minutes = message_refresh_minutes
         self.message_retention_days = message_retention_days
         self.default_timezone = default_timezone
-        self.canvas_remove_completed_assignments = bool(canvas_remove_completed_assignments)
+        self.remove_completed_tasks_after_due_date = bool(
+            remove_completed_tasks_after_due_date
+            if canvas_remove_completed_assignments is None
+            else canvas_remove_completed_assignments
+        )
         self.transport = transport or BoundedProviderTransport()
         self.oauth_authorizer = oauth_authorizer
         self.canvas_importer = canvas_importer or CanvasIcalTaskImporter(task_repository)
@@ -590,16 +595,18 @@ class ExternalPlatformManager:
         fallback_timezone = (
             configured_timezone if isinstance(configured_timezone, str) else self.default_timezone
         )
-        remove_completed_assignments = self.settings_repository.get(
-            "canvas_remove_completed_assignments",
-            self.canvas_remove_completed_assignments,
+        remove_completed_tasks_after_due_date = self.settings_repository.get(
+            "remove_completed_tasks_after_due_date",
+            self.remove_completed_tasks_after_due_date,
         )
         tasks = await self.canvas_importer.sync(
             feed_url,
             account_label=config.account_label,
             fallback_timezone=fallback_timezone,
-            remove_completed_assignments=type(remove_completed_assignments) is bool
-            and remove_completed_assignments,
+            remove_completed_tasks_after_due_date=(
+                type(remove_completed_tasks_after_due_date) is bool
+                and remove_completed_tasks_after_due_date
+            ),
             now=now,
         )
         return SourceSnapshot(

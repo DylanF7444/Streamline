@@ -73,13 +73,19 @@ class CanvasIcalTaskImporter:
         *,
         account_label: str,
         fallback_timezone: str = "UTC",
-        remove_completed_assignments: bool = False,
+        remove_completed_tasks_after_due_date: bool = False,
+        remove_completed_assignments: bool | None = None,
         now: datetime | None = None,
     ) -> tuple[HubTask, ...]:
         """Import concrete VEVENTs and optionally clean completed past-due assignments."""
 
         origin = self.validate_feed_url(feed_url)
         sync_time = _aware_utc(now)
+        cleanup_canvas_assignments = (
+            remove_completed_tasks_after_due_date
+            if remove_completed_assignments is None
+            else remove_completed_assignments
+        )
         if self._origin != origin:
             self.reset()
             self._origin = origin
@@ -150,7 +156,7 @@ class CanvasIcalTaskImporter:
                 if current is not None:
                     self.task_repository.delete(task_id)
                 continue
-            if remove_completed_assignments and _should_remove_completed_assignment(
+            if cleanup_canvas_assignments and _should_remove_completed_assignment(
                 current,
                 assignment_url=native_url,
                 now=sync_time,
@@ -200,7 +206,7 @@ class CanvasIcalTaskImporter:
                 updated_at=max(sync_time, current.updated_at),
             )
             if updated is not None:
-                if remove_completed_assignments and _should_remove_completed_assignment(
+                if cleanup_canvas_assignments and _should_remove_completed_assignment(
                     updated,
                     assignment_url=native_url,
                     now=sync_time,
@@ -214,7 +220,7 @@ class CanvasIcalTaskImporter:
                     )
                     continue
                 imported.append(updated)
-        if remove_completed_assignments:
+        if cleanup_canvas_assignments:
             self._remove_completed_assignments_past_due(origin=origin, now=sync_time)
         self.last_import_count = len(imported)
         return tuple(imported)

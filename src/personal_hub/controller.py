@@ -169,6 +169,7 @@ _SYNCABLE_HUB_SETTINGS = frozenset(
         "message_summary_retention_days",
         "message_max_summaries_per_source",
         "message_refresh_minutes",
+        "remove_completed_tasks_after_due_date",
         "canvas_remove_completed_assignments",
         "ui_text_scale",
         "ui_high_contrast",
@@ -473,6 +474,10 @@ class HubController:
         else:
             raise TypeError("settings must be HubSettings, a mapping, or None")
         values.update(changes)
+        if "canvas_remove_completed_assignments" in values:
+            values["remove_completed_tasks_after_due_date"] = values.pop(
+                "canvas_remove_completed_assignments"
+            )
         if self.sync_service.provider_relay_role() == "consumer":
             values["offline_mode"] = True
         updated = HubSettings.model_validate(values)
@@ -689,6 +694,52 @@ class HubController:
         return removed
 
     cleanup_retained_data = run_retention_cleanup
+
+    def cleanup_completed_tasks_after_due_date(self, *, now: datetime | None = None) -> int:
+        """Remove completed, past-due local tasks when the opt-in setting is enabled."""
+
+        self._ensure_open()
+        if not self._settings.remove_completed_tasks_after_due_date:
+            return 0
+        timestamp = now or datetime.now(UTC)
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("task cleanup timestamp must be timezone-aware")
+        timestamp = timestamp.astimezone(UTC)
+        removed = 0
+        for task in self.task_repository.completed_past_due(now=timestamp, limit=10_000):
+            if task.recurrence is not None and self.task_repository.is_active_recurrence_anchor(
+                task.task_id
+            ):
+                # The first occurrence supplies month/year recurrence anchoring while
+                # later occurrences remain active. Keep that one local record intact.
+                continue
+            if "canvas" in task.tags:
+                # Keep a provider-scoped marker for Canvas imports so the next feed
+                # refresh cannot recreate a task removed from Personal Hub.
+                external_key = task.external_url or f"canvas-task:{task.task_id}"
+                was_removed = self.task_repository.mark_deleted_on_hub(
+                    task.task_id,
+                    provider_id="canvas",
+                    external_key=external_key,
+                    deleted_at=timestamp,
+                )
+            else:
+                was_removed = self.task_repository.delete(task.task_id)
+            removed += int(was_removed)
+        if removed:
+            self.audit_repository.add(
+                AuditEvent(
+                    event_type="task.due_date_cleanup",
+                    source_type="local_tasks",
+                    source_id=None,
+                    outcome="succeeded",
+                    occurred_at=timestamp,
+                    metadata={"records_removed": removed},
+                )
+            )
+        return removed
+
+    cleanup_completed_tasks = cleanup_completed_tasks_after_due_date
 
     # ------------------------------------------------------------------
     # Local tasks, Today, reminders, and deterministic digests.
@@ -2912,8 +2963,15 @@ class HubController:
                     raise ValueError("sync setting value is missing")
                 value = payload["value"]
                 if key in _SYNCABLE_HUB_SETTINGS:
-                    setting_changes[key] = value
-                    setting_records[key] = (value, record.updated_at)
+                    setting_key = (
+                        "remove_completed_tasks_after_due_date"
+                        if key == "canvas_remove_completed_assignments"
+                        else key
+                    )
+                    previous = setting_records.get(setting_key)
+                    if previous is None or record.updated_at >= previous[1]:
+                        setting_changes[setting_key] = value
+                        setting_records[setting_key] = (value, record.updated_at)
                 elif key in _SYNCABLE_DYNAMIC_SETTINGS:
                     dynamic_settings[key] = (value, record.updated_at)
                 else:

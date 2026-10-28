@@ -114,6 +114,8 @@ class SettingsRepository:
     """Persist individual settings values as bounded JSON."""
 
     _NON_PERSISTED_SETTINGS = frozenset({"profile", "data_dir", "database_name"})
+    _LEGACY_CANVAS_CLEANUP_SETTING = "canvas_remove_completed_assignments"
+    _TASK_CLEANUP_SETTING = "remove_completed_tasks_after_due_date"
 
     def __init__(self, database: HubDatabase) -> None:
         self.database = database
@@ -216,6 +218,9 @@ class SettingsRepository:
                 else:
                     row.value_json = encoded
                     row.updated_at = now
+            legacy_row = session.get(HubSettingRow, self._LEGACY_CANVAS_CLEANUP_SETTING)
+            if legacy_row is not None:
+                session.delete(legacy_row)
         return settings
 
     save = save_settings
@@ -234,6 +239,13 @@ class SettingsRepository:
                 if key in known_fields and key not in self._NON_PERSISTED_SETTINGS
             }
         )
+        if self._LEGACY_CANVAS_CLEANUP_SETTING in values:
+            if self._TASK_CLEANUP_SETTING not in values:
+                legacy_value = values[self._LEGACY_CANVAS_CLEANUP_SETTING]
+                if type(legacy_value) is bool:
+                    merged[self._TASK_CLEANUP_SETTING] = legacy_value
+                    self.set(self._TASK_CLEANUP_SETTING, legacy_value)
+            self.delete(self._LEGACY_CANVAS_CLEANUP_SETTING)
         # HubSettings performs the final strict/isolated validation, including
         # protecting data_dir from Local Assistant overlap.
         return HubSettings.model_validate(merged)

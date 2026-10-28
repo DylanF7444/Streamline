@@ -34,6 +34,10 @@ overlap with the default Local Assistant database/data root.
 - Message summaries: 7 days and 500 summaries per source by default. Retention 0 is
   session-only; the maximum is 30 days.
 - Message bodies: never stored in the database, cache, backup, audit, log, or notification.
+- Completed tasks: retained until user deletion by default. The optional **Remove completed
+  tasks after due date** setting removes only completed tasks whose due time/date has passed;
+  tasks without due dates, open tasks, future-due tasks, and archived tasks remain. The first
+  completed task in an active recurring series is retained as its schedule anchor.
 - Connected-calendar snapshots: memory only. Explicitly imported local calendar items are
   stored in the Hub database until the user removes that import. In consumer mode, received
   calendar snapshots are stored locally for up to 30 days and then removed.
@@ -41,8 +45,10 @@ overlap with the default Local Assistant database/data root.
   completion for due-dated to-do items is stored on the underlying local task record.
 - Credentials: until disconnect, encrypted for the current Windows user.
 
-Cleanup is bounded, transactional, and scheduled once per local day even while offline. The
-newest watch observation remains as a transition baseline when older watch history expires.
+The optional completed-task cleanup runs during local maintenance at startup and on its
+minute schedule, including while offline. Other retention cleanup is bounded, transactional,
+and scheduled once per local day. The newest watch observation remains as a transition baseline
+when older watch history expires.
 Clearing local summaries or uninstalling with data
 deletion does not delete or change provider-canonical email, chat, calendar, or webpage data.
 
@@ -93,10 +99,11 @@ Canvas iCalendar paths contain bearer-like calendar tokens. The full URL is encr
 Hub vault and excluded from ordinary settings, logs, diagnostics, and exports. Canvas event
 titles, descriptions, locations, and safe event links become local task fields. Refresh updates
 those local tasks but never submits, edits, or completes work in Canvas. Disconnect deletes the
-saved feed URL and retains the already-created local tasks. When completed past-due Canvas
-assignments are removed by the opt-in cleanup setting, Personal Hub retains only a safe,
+saved feed URL and retains the already-created local tasks. When a completed past-due Canvas
+task is removed by the opt-in cleanup setting, Personal Hub retains only a safe,
 provider-scoped deletion marker so a later refresh cannot recreate the local task; the marker
-does not change Canvas data.
+does not change Canvas data. Cleanup also removes eligible local tasks from other sources, but
+does not modify any provider-canonical data.
 
 ## Credentials and OAuth
 

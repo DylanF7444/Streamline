@@ -557,6 +557,58 @@ class TaskRepository:
             )
         )
 
+    def completed_past_due(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 10_000,
+    ) -> list[HubTask]:
+        """Return completed tasks whose timed due instant or all-day due date passed."""
+
+        timestamp = _aware_now(now)
+        if not 1 <= limit <= 10_000:
+            raise ValueError("completed task cleanup limit must be between 1 and 10000")
+        candidates = self.list(
+            state="completed",
+            due_before=timestamp,
+            sort_by="due_at",
+            limit=limit,
+        )
+        expired: list[HubTask] = []
+        for task in candidates:
+            if task.due_at is None:
+                continue
+            if task.due_is_all_day:
+                zone = ZoneInfo(task.timezone)
+                if task.due_at.astimezone(zone).date() >= timestamp.astimezone(zone).date():
+                    continue
+            expired.append(task)
+        return expired
+
+    def is_active_recurrence_anchor(self, task_id: UUID | str) -> bool:
+        """Return whether a task anchors an unfinished recurring series."""
+
+        identifier = str(_as_uuid(task_id))
+        with self.database.session() as session:
+            row = session.get(HubTaskRow, identifier)
+            if row is None or row.recurrence_json is None:
+                return False
+            occurrence = self._occurrence_for_task(session, row)
+            if occurrence is None or occurrence.occurrence_index != 1:
+                return False
+            latest = session.scalar(
+                select(HubTaskOccurrenceRow)
+                .where(HubTaskOccurrenceRow.series_id == occurrence.series_id)
+                .order_by(HubTaskOccurrenceRow.occurrence_index.desc())
+                .limit(1)
+            )
+            if latest is None:
+                return False
+            if latest.next_task_id is not None:
+                return session.get(HubTaskRow, latest.next_task_id) is not None
+            latest_task = session.get(HubTaskRow, latest.task_id)
+            return latest_task is not None and latest_task.state == "open"
+
     def upcoming(
         self,
         *,

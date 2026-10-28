@@ -184,6 +184,7 @@ class _MaintenanceThread(QThread):
             )
             created: list[Any] = list(loop.run_until_complete(self._task))
             settings = self._container.controller.settings
+            self._container.controller.cleanup_completed_tasks_after_due_date(now=now)
             local_now = now.astimezone(ZoneInfo(settings.default_timezone))
             digest_hour, digest_minute = (int(part) for part in settings.digest_time.split(":", 1))
             if settings.digest_enabled and local_now.timetz().replace(tzinfo=None) >= time(
@@ -777,7 +778,9 @@ class HubDesktopCoordinator(QObject):
                 watch_refresh_minutes=settings.watch_refresh_minutes,
                 message_retention_days=settings.message_summary_retention_days,
                 message_refresh_minutes=settings.message_refresh_minutes,
-                canvas_remove_completed_assignments=settings.canvas_remove_completed_assignments,
+                remove_completed_tasks_after_due_date=(
+                    settings.remove_completed_tasks_after_due_date
+                ),
                 text_scale=settings.ui_text_scale,
                 high_contrast=settings.ui_high_contrast,
                 reduced_motion=settings.ui_reduced_motion,

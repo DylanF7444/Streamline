@@ -752,7 +752,7 @@ keys, WAL mode where appropriate, bounded busy timeouts, and explicit backup/res
 | Data | Default retention |
 | --- | --- |
 | Open tasks | Until completed or deleted |
-| Completed tasks | 90 days, user configurable |
+| Completed tasks | Until user deletion, or optional due-date cleanup after the due date (active recurrence anchors are retained) |
 | Calendar snapshots | Memory only in MVP |
 | Imported local calendar items | Until the named import is removed |
 | Feed entries | 30 days or bounded item count |
@@ -942,9 +942,10 @@ raw exceptions, or unbounded response bodies.
   calendar token; persist only its HTTPS origin in ordinary settings.
 - Import every bounded concrete `VEVENT` as one stable local task whose due date is `DTSTART`.
 - Repeated refreshes update the same task and never reopen a completed or archived task.
-- When the opt-in completed-assignment cleanup is enabled, a completed past-due assignment
-  is removed from the local task list and leaves a durable Personal Hub deletion marker, so
-  later refreshes and restarts do not recreate it as an open task.
+- When the opt-in completed-task cleanup is enabled, eligible completed tasks with a passed
+  due date are removed from Personal Hub during local maintenance. Canvas imports leave a
+  durable Personal Hub deletion marker, so later refreshes and restarts do not recreate them
+  as open tasks.
 - Due-dated imported tasks use the existing task-to-Calendar projection; Canvas is not given a
   calendar write or task write operation.
 - Disconnect removes the private feed URL while retaining the local tasks already created.

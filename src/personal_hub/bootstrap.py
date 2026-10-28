@@ -189,7 +189,9 @@ def build_hub_container(
             message_refresh_minutes=persisted_settings.message_refresh_minutes,
             message_retention_days=persisted_settings.message_summary_retention_days,
             default_timezone=persisted_settings.default_timezone,
-            canvas_remove_completed_assignments=persisted_settings.canvas_remove_completed_assignments,
+            remove_completed_tasks_after_due_date=(
+                persisted_settings.remove_completed_tasks_after_due_date
+            ),
         )
         source_service = SourceService(
             source_registry,

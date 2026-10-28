@@ -104,12 +104,14 @@ without duplicating them or reopening completed/archived tasks.
 Canvas's iCalendar feed identifies assignment events in its calendar URL; Personal Hub converts
 those same-origin links to the native assignment page. The task row provides **Open in Canvas**
 for those assignments; items without a safe assignment identity do not show a native-open action.
-To remove completed assignment copies after they are no longer due, enable **Remove completed
-Canvas assignments after due date** in Settings. On a successful Canvas refresh, this removes
-only completed, past-due assignment copies from the local task list and records a durable
-Personal Hub deletion marker. Later refreshes and restarts honor that marker instead of
-recreating the assignment as an open task. Open, future, and generic Canvas calendar items
-remain, and Canvas itself is never modified.
+Enable **Remove completed tasks after due date** in Settings to remove completed, past-due
+tasks from Personal Hub, regardless of where they came from. Local maintenance checks at
+startup and every minute, including while offline. Timed tasks are removed after their due
+instant; all-day tasks are removed on the next day in the task's timezone. Tasks without due
+dates, open tasks, future-due tasks, and archived tasks remain. The first completed task in an
+active recurring series is kept as its schedule anchor. For Canvas items, Personal Hub keeps a
+local deletion marker so later feed refreshes do not recreate removed tasks. Canvas itself is
+never modified.
 
 ### Calendar
 
