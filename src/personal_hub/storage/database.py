@@ -561,6 +561,28 @@ class HubProviderRelayCacheRow(HubBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class HubActivityRow(HubBase):
+    __tablename__ = "hub_activity"
+
+    entry_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    active_completion_key: Mapped[str | None] = mapped_column(String(300), unique=True)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class HubReflectionRow(HubBase):
+    __tablename__ = "hub_reflections"
+
+    reflection_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    display_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class HubDatabase:
     """Small, explicit database boundary used by the Hub composition root."""
 
@@ -580,7 +602,7 @@ class HubDatabase:
     # Version 13 adds the locally cached, validated provider relay snapshot.
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 13
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 14
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -703,7 +725,9 @@ class HubDatabase:
         ),
         12: frozenset(REQUIRED_TABLES.difference({"hub_provider_relay_cache"})),
         13: REQUIRED_TABLES,
+        14: REQUIRED_TABLES | {"hub_activity", "hub_reflections"},
     }
+    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[14]
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path).expanduser().resolve(strict=False)
@@ -838,6 +862,10 @@ class HubDatabase:
             version += 1
             if version == 9:
                 session.execute(delete(HubCalendarEventStateRow))
+            if version == 14:
+                from personal_hub.logging.repository import backfill_completions
+
+                backfill_completions(session)
         row = session.get(HubSchemaVersionRow, 1)
         if row is None:
             raise RuntimeError("Personal Hub schema version record is missing")

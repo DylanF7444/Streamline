@@ -1,6 +1,6 @@
 # Personal Hub Application Implementation Plan
 
-- **Status:** Phases 0–7 implemented at deterministic source gates; release approval pending external evidence
+- **Status:** Current feature-development baseline complete for now; release evidence deferred while feature work continues
 - **Date:** September 2, 2026
 - **Working product name:** Personal Hub
 - **Repository strategy:** Standalone repository
@@ -146,6 +146,30 @@ new cloud service.
 - Users expecting autonomous purchases, replies, or account changes.
 
 ## Information Architecture
+
+October 28, 2026 extension: **Tracking / Logging** is a persistent, accessible mode selector.
+Tracking contains the existing workspace pages below; Logging contains **Activity**,
+**Reflection**, and **Summary**. Each mode remembers its last page locally. Sources and
+Settings remain fixed in Management. Opening a task from Logging switches to Tracking;
+returning to Logging restores its previous page. The detailed implemented specification is
+`PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
+
+Activity captures task completions transactionally, with immutable title, list/tag, time, and
+occurrence snapshots. Undo/reopen retains corrected history and excludes it from totals;
+recompletion creates a new fact. Task deletion and cleanup preserve Logging. Manual progress
+can link an open task without changing it and supports optional explicitly entered duration.
+Reflections are separate dated, bounded plain-text records with local draft autosave. Summary
+reports factual counts, list/tag breakdowns, daily activity, and entered durations only.
+Home offers an optional **Logged today** widget without reflection text.
+
+Schema 14 adds independent `hub_activity` and `hub_reflections` tables and backfills available
+completed tasks once. Both participate in local backup, restore, export, privacy masking,
+lock, and explicit data deletion. Logging defaults to keep until deleted. Settings provides
+a separate preview/apply history-deletion control; ordinary retention and completed-task
+cleanup never remove Logging. Activity follows explicitly enabled encrypted shared-folder
+sync. Reflections require a separate device-local opt-in on each participating device.
+Provider APIs and the provider collector relay never receive Logging content. No AI, running
+timer, inferred hours, score, or streak is involved.
 
 The main window uses a persistent left navigation rail and a content area. The **Workspace**
 group contains Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,

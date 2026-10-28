@@ -40,6 +40,7 @@ _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,
 _MAX_TITLE_LENGTH: Final[int] = 180
 
 SECTION_DESTINATIONS: Final[dict[str, str]] = {
+    "logged_today": "Activity",
     "mini_calendar": "Calendar",
     "schedule": "Calendar",
     "calendar": "Calendar",
@@ -196,10 +197,7 @@ class _CardHeader(QWidget):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
-        if (
-            self._drag_enabled
-            and _key_direction(event.key()) is not None
-        ):
+        if self._drag_enabled and _key_direction(event.key()) is not None:
             self.keyboard_move_requested.emit(event.key())
             event.accept()
             return

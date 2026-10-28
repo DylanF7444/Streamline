@@ -9,9 +9,10 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
+from personal_hub.logging.repository import capture_completion, correct_completion
 from personal_hub.storage.database import (
     HubDatabase,
     HubTaskDeletionMarkerRow,
@@ -25,6 +26,7 @@ from personal_hub.tasks.contracts import (
     HubTaskList,
     Recurrence,
     TaskFilter,
+    TaskOccurrenceIdentity,
     TaskPriority,
     TaskSortField,
     TaskState,
@@ -248,16 +250,64 @@ class TaskRepository:
         self.database = database
         self.lists = TaskListRepository(database)
 
-    def add(self, task: HubTask) -> HubTask:
+    def add(
+        self,
+        task: HubTask,
+        *,
+        record_activity: bool = True,
+        sync_occurrence: TaskOccurrenceIdentity | None = None,
+    ) -> HubTask:
         if not isinstance(task, HubTask):
             raise TypeError("task repository expects HubTask")
         with self.database.session() as session:
-            row = self._save_in_session(session, task)
+            metadata = (
+                _AUTO_OCCURRENCE_METADATA
+                if sync_occurrence is None
+                else (
+                    str(sync_occurrence.series_id),
+                    sync_occurrence.occurrence_index,
+                    occurrence_key(sync_occurrence.series_id, sync_occurrence.occurrence_index),
+                    str(sync_occurrence.generated_from_task_id)
+                    if sync_occurrence.generated_from_task_id
+                    else None,
+                )
+            )
+            row = self._save_in_session(
+                session, task, record_activity=record_activity, occurrence_metadata=metadata
+            )
             session.flush()
             return self._contract(row)
 
     create_from_contract = add
     save = add
+
+    def sync_occurrence(self, task_id: UUID | str) -> TaskOccurrenceIdentity | None:
+        with self.database.session() as session:
+            row = session.get(HubTaskRow, str(task_id))
+            if row is None or row.series_id is None:
+                return None
+            return TaskOccurrenceIdentity(
+                series_id=UUID(row.series_id),
+                occurrence_index=row.occurrence_index,
+                generated_from_task_id=UUID(row.generated_from_task_id)
+                if row.generated_from_task_id
+                else None,
+            )
+
+    def rebuild_recurrence_links(self) -> None:
+        with self.database.session() as session:
+            for row in session.scalars(
+                select(HubTaskRow).where(HubTaskRow.generated_from_task_id.is_not(None))
+            ):
+                previous = session.get(HubTaskRow, row.generated_from_task_id)
+                if (
+                    previous
+                    and previous.state == "completed"
+                    and previous.series_id == row.series_id
+                ):
+                    occurrence = self._occurrence_for_task(session, previous)
+                    if occurrence:
+                        occurrence.next_task_id = row.task_id
 
     def create(self, task: HubTask | None = None, **values: object) -> HubTask:
         if task is not None:
@@ -290,9 +340,11 @@ class TaskRepository:
         payload.update(changes)
         payload["task_id"] = identifier
         if "updated_at" not in changes:
-            payload["updated_at"] = datetime.now(UTC)
+            payload["updated_at"] = max(
+                datetime.now(UTC), current.updated_at + timedelta(microseconds=1)
+            )
         if payload.get("state") == "completed" and "completed_at" not in changes:
-            payload["completed_at"] = payload["updated_at"]
+            payload["completed_at"] = current.completed_at or payload["updated_at"]
         elif payload.get("state") == "open":
             payload["completed_at"] = None
         revised = HubTask.model_validate(payload)
@@ -385,6 +437,7 @@ class TaskRepository:
         identifier = str(_as_uuid(task_id))
         timestamp = _aware_now(completed_at)
         with self.database.session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
             row = session.get(HubTaskRow, identifier)
             if row is None:
                 return None
@@ -393,10 +446,13 @@ class TaskRepository:
             if row.state != "completed":
                 row.state = "completed"
                 row.completed_at = _db_time(timestamp)
-                row.updated_at = _db_time(timestamp)
+                row.updated_at = max(
+                    _db_time(timestamp), row.updated_at + timedelta(microseconds=1)
+                )
                 occurrence = self._occurrence_for_task(session, row)
                 if occurrence is not None:
                     occurrence.completed_at = _db_time(timestamp)
+                capture_completion(session, row)
             # Re-running completion, including after a process restart, is a
             # no-op on the completed row but repairs/observes its one next link.
             self._ensure_next_occurrence(session, row, timestamp)
@@ -420,11 +476,13 @@ class TaskRepository:
         identifier = str(_as_uuid(task_id))
         timestamp = _aware_now(at)
         with self.database.session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
             row = session.get(HubTaskRow, identifier)
             if row is None:
                 return None
             if row.state != "completed":
                 return self._contract(row)
+            correct_completion(session, identifier, timestamp)
             occurrence = self._occurrence_for_task(session, row)
             next_task_id = None if occurrence is None else occurrence.next_task_id
             if occurrence is not None:
@@ -440,7 +498,7 @@ class TaskRepository:
                     session.delete(next_row)
             row.state = "open"
             row.completed_at = None
-            row.updated_at = _db_time(timestamp)
+            row.updated_at = max(_db_time(timestamp), row.updated_at + timedelta(microseconds=1))
             session.flush()
             return self._contract(row)
 
@@ -684,9 +742,11 @@ class TaskRepository:
         occurrence_metadata: tuple[str, int, str, str | None]
         | None
         | object = _AUTO_OCCURRENCE_METADATA,
+        record_activity: bool = True,
     ) -> HubTaskRow:
         identifier = str(task.task_id)
         row = session.get(HubTaskRow, identifier)
+        was_completed = row is not None and row.completed_at is not None
         if occurrence_metadata is _AUTO_OCCURRENCE_METADATA:
             metadata = None if row is None else self._occurrence_metadata(session, row)
         else:
@@ -735,6 +795,11 @@ class TaskRepository:
                 occurrence.due_at = _db_time(task.due_at)
                 occurrence.completed_at = _db_time(task.completed_at)
             session.flush()
+        if record_activity:
+            if task.completed_at is not None and not was_completed:
+                capture_completion(session, row)
+            elif was_completed and task.completed_at is None:
+                correct_completion(session, identifier, task.updated_at)
         return row
 
     @staticmethod
@@ -868,8 +933,10 @@ class TaskRepository:
             if row is None:
                 return None
             row.state = state
-            row.updated_at = _db_time(timestamp)
+            row.updated_at = max(_db_time(timestamp), row.updated_at + timedelta(microseconds=1))
             if clear_completed:
+                if row.completed_at is not None:
+                    correct_completion(session, identifier, timestamp)
                 row.completed_at = None
             session.flush()
             return self._contract(row)

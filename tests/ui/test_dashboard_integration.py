@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 from personal_hub.bootstrap import build_hub_container
 from personal_hub.config import HubSettings
 from personal_hub.ui.desktop.application import HubDesktopCoordinator
+from personal_hub.ui.desktop.dashboard import GRID_COLUMNS
 from personal_hub.ui.desktop.main_window import (
     TodayItemView,
     TodaySectionView,
@@ -30,7 +31,7 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
     window.dashboard.set_widget_size("schedule", "wide")
     window.dashboard.set_widget_size("mini_calendar", "compact")
     layout = window.dashboard.export_layout()
-    layout["order"] = list(reversed(layout["order"]))
+    layout["geometry"]["schedule"] = {"x": 0, "y": 420, "w": GRID_COLUMNS, "h": 300}
     layout["hidden"] = ["news", "upcoming", "mini_calendar"]
     window.restore_dashboard_layout(layout)
     window.dashboard.layout_changed.emit(window.dashboard.export_layout())
@@ -44,10 +45,11 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
         }
     )
     expected = window.dashboard.export_layout()
-    assert expected["sizes"]["schedule"] == "wide"
-    assert expected["order"] == layout["order"]
+    assert expected["geometry"]["schedule"]["w"] == GRID_COLUMNS
+    assert expected["geometry"] == layout["geometry"]
     assert set(expected["hidden"]) == {"news", "upcoming", "mini_calendar"}
-    assert expected["sizes"]["mini_calendar"] == "compact"
+    assert expected["geometry"]["mini_calendar"]["w"] == GRID_COLUMNS // 2
+    assert expected["geometry"]["mini_calendar"]["h"] == 240
     assert window.reduced_motion
     coordinator.render_task_surfaces()
     assert window.dashboard.export_layout() == expected

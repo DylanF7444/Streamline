@@ -64,6 +64,7 @@ from personal_hub.messages.categories import (
 from personal_hub.ui.desktop.appearance import AppearancePanel, theme_stylesheet
 from personal_hub.ui.desktop.dashboard import DashboardBoard
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
+from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
 from personal_hub.ui.desktop.workspace_navigation import (
@@ -85,6 +86,9 @@ NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     "Inbox",
     "Sources",
     "Settings",
+    "Activity",
+    "Reflection",
+    "Summary",
 )
 NAVIGATION_LABELS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS
 PLANNED_NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[1:]
@@ -97,9 +101,13 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Inbox": "inboxButton",
     "Sources": "sourcesButton",
     "Settings": "settingsButton",
+    "Activity": "activityButton",
+    "Reflection": "reflectionButton",
+    "Summary": "summaryButton",
 }
 _WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
-_MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[5:]
+_MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = ("Sources", "Settings")
+_LOGGING_DESTINATIONS: Final[tuple[str, ...]] = ("Activity", "Reflection", "Summary")
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
 
@@ -3302,6 +3310,7 @@ class TaskRowWidget(QFrame):
 
     complete_requested = Signal(str)
     edit_requested = Signal(str)
+    log_requested = Signal(str)
     archive_requested = Signal(str)
     undo_requested = Signal(str)
     native_open_requested = Signal(object)
@@ -3412,6 +3421,10 @@ class TaskRowWidget(QFrame):
         self.action_menu = QMenu(self.action_button)
         edit_action = self.action_menu.addAction("Edit task")
         edit_action.triggered.connect(lambda _checked=False: self.edit_button.click())
+        log_action = self.action_menu.addAction("Log progress")
+        log_action.triggered.connect(
+            lambda _checked=False: self.log_requested.emit(self.task.task_id)
+        )
         self.action_menu.addSeparator()
         archive_action = self.action_menu.addAction(archive_label)
         archive_action.triggered.connect(lambda _checked=False: self.archive_button.click())
@@ -3728,6 +3741,9 @@ class PersonalHubMainWindow(QMainWindow):
         self._workspace_calendar_view_members: dict[str, tuple[str, ...]] = {}
         self._workspace_task_lists: tuple[tuple[str, str], ...] = ()
         self._workspace_calendar_sources: tuple[CalendarSourceView, ...] = ()
+        self._workspace_mode = "Tracking"
+        self._mode_pages = {"Tracking": HOME_DESTINATION, "Logging": "Activity"}
+        self.logging_workspace = LoggingWorkspace(self)
 
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
@@ -3784,6 +3800,8 @@ class PersonalHubMainWindow(QMainWindow):
                 page = self._build_inbox_page()
             elif destination == "Sources":
                 page = self._build_sources_page()
+            elif destination in _LOGGING_DESTINATIONS:
+                page = self.logging_workspace.pages[destination]
             else:
                 page = self._build_settings_page()
             self.page_widgets[destination] = page
@@ -3857,6 +3875,12 @@ class PersonalHubMainWindow(QMainWindow):
         navigation_label.setTextFormat(Qt.TextFormat.PlainText)
         self.navigation_caption = navigation_label
         layout.addWidget(navigation_label)
+        self.mode_selector = QComboBox()
+        self.mode_selector.setObjectName("workspaceModeSelector")
+        self.mode_selector.setAccessibleName("Tracking or Logging mode")
+        self.mode_selector.addItems(["Tracking", "Logging"])
+        self.mode_selector.currentTextChanged.connect(self.set_workspace_mode)
+        layout.addWidget(self.mode_selector)
 
         workspace_header = QWidget(navigation)
         workspace_header.setObjectName("workspaceNavigationHeader")
@@ -3880,8 +3904,8 @@ class PersonalHubMainWindow(QMainWindow):
         workspace_header_layout.addWidget(self.workspace_customize_button)
         layout.addWidget(workspace_header)
 
-        self._navigation_group = QButtonGroup(navigation)
-        self._navigation_group.setExclusive(True)
+        # Keep selection explicit: Qt button groups remove Tab focus from
+        # unchecked actions when focus changes within the group.
         self._static_navigation_buttons: dict[str, QPushButton] = {}
         for destination in NAVIGATION_DESTINATIONS:
             button = self._create_navigation_button(
@@ -3939,7 +3963,7 @@ class PersonalHubMainWindow(QMainWindow):
         return navigation
 
     def _create_navigation_button(self, route_id: str, label: str, object_name: str) -> QPushButton:
-        button = QPushButton(label)
+        button = QPushButton(label, self.navigation_layout.parentWidget())
         button.setObjectName(object_name)
         button.setProperty("hubNavigation", True)
         button.setAccessibleName(label)
@@ -3948,7 +3972,6 @@ class PersonalHubMainWindow(QMainWindow):
         button.setAutoDefault(False)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setMinimumHeight(38)
-        self._navigation_group.addButton(button)
         button.clicked.connect(
             lambda _checked=False, value=route_id: self._set_active_destination(value)
         )
@@ -4027,6 +4050,10 @@ class PersonalHubMainWindow(QMainWindow):
         return tuple(ordered)
 
     def _display_workspace_entries(self) -> tuple[WorkspaceNavigationEntry, ...]:
+        if self._workspace_mode == "Logging":
+            return tuple(
+                WorkspaceNavigationEntry(name, name, name) for name in _LOGGING_DESTINATIONS
+            )
         entries = self._ordered_workspace_entries()
         if not (self._privacy_masked or self._locked):
             return entries
@@ -4056,11 +4083,12 @@ class PersonalHubMainWindow(QMainWindow):
                 continue
             route_id = widget.property("workspaceRouteId")
             if isinstance(route_id, str):
-                self._navigation_group.removeButton(widget)
                 self.navigation_buttons.pop(route_id, None)
                 widget.deleteLater()
 
         entries = self._display_workspace_entries()
+        for destination in (*_WORKSPACE_DESTINATIONS, *_LOGGING_DESTINATIONS):
+            self._static_navigation_buttons[destination].hide()
         self._workspace_navigation_entries = {entry.route_id: entry for entry in entries}
         self._workspace_route_targets = {entry.route_id: entry.destination for entry in entries}
         task_list_names = dict(self._workspace_task_lists)
@@ -4085,18 +4113,29 @@ class PersonalHubMainWindow(QMainWindow):
             button.setText(entry.label.replace("&", "&&"))
             button.setAccessibleName(entry.label)
             button.setAccessibleDescription(f"Open the {entry.label} page.")
-            should_hide = entry.route_id in self._workspace_hidden_routes
-            was_hidden = bool(button.property("workspaceNavigationHidden"))
-            if should_hide:
-                button.hide()
-            elif was_hidden:
-                button.show()
+            self.workspace_navigation_layout.addWidget(button)
+            should_hide = (
+                self._workspace_mode == "Tracking"
+                and entry.route_id in self._workspace_hidden_routes
+            )
+            button.setVisible(not should_hide)
             button.setProperty("workspaceNavigationHidden", should_hide)
             button.setChecked(entry.route_id == self._active_destination)
-            self.workspace_navigation_layout.addWidget(button)
 
         self.workspace_navigation_layout.addStretch(1)
-        self.workspace_customize_button.setVisible(bool(entries))
+        focus_buttons = [
+            self.navigation_buttons[entry.route_id]
+            for entry in entries
+            if not self.navigation_buttons[entry.route_id].isHidden()
+        ] + [self._static_navigation_buttons[name] for name in _MANAGEMENT_DESTINATIONS]
+        previous_control = self.mode_selector
+        for button in focus_buttons:
+            self.setTabOrder(previous_control, button)
+            previous_control = button
+        self.workspace_navigation_label.setText(self._workspace_mode.upper())
+        self.workspace_customize_button.setVisible(
+            bool(entries) and self._workspace_mode == "Tracking"
+        )
         self.workspace_customize_button.setEnabled(not (self._privacy_masked or self._locked))
         if hasattr(self, "calendar_view_groups_button"):
             self.calendar_view_groups_button.setEnabled(not (self._privacy_masked or self._locked))
@@ -6779,6 +6818,7 @@ class PersonalHubMainWindow(QMainWindow):
             row = TaskRowWidget(task)
             row.complete_requested.connect(self.complete_task)
             row.edit_requested.connect(self.open_task_editor)
+            row.log_requested.connect(self.log_task_progress)
             row.archive_requested.connect(self.archive_task)
             row.undo_requested.connect(self.undo_task)
             row.native_open_requested.connect(self.task_native_open_requested.emit)
@@ -7053,6 +7093,12 @@ class PersonalHubMainWindow(QMainWindow):
     def complete_selected_task(self) -> TaskView | None:
         task = self.selected_task()
         return self.complete_task(task.task_id) if task is not None else None
+
+    def log_task_progress(self, task_id: str) -> None:
+        if self._privacy_masked or self._locked:
+            return
+        self.show_destination("Activity")
+        self.logging_workspace.log_progress(task_id=task_id)
 
     def archive_selected_task(self) -> TaskView | None:
         task = self.selected_task()
@@ -9218,14 +9264,33 @@ class PersonalHubMainWindow(QMainWindow):
             self.privacy_overlay.setGeometry(self.pages.rect())
 
     def _set_active_destination(self, destination: str, *, emit: bool = True) -> bool:
+        if not self.logging_workspace.flush():
+            return False
+        previous_destination = self._active_destination
         if destination == "Today":
             destination = HOME_DESTINATION
+        if destination not in self.page_widgets and not any(
+            entry.route_id == destination for entry in self._default_workspace_entries()
+        ):
+            return False
+        desired_mode = "Logging" if destination in _LOGGING_DESTINATIONS else "Tracking"
+        if destination not in _MANAGEMENT_DESTINATIONS and desired_mode != self._workspace_mode:
+            self._workspace_mode = desired_mode
+            # Navigation rebuilds retire collection routes from the other mode.
+            # Select the intended route first so collection fallback cannot
+            # switch us back to the mode we are leaving.
+            self._active_destination = destination
+            with QSignalBlocker(self.mode_selector):
+                self.mode_selector.setCurrentText(desired_mode)
+            self._render_workspace_navigation()
         entry = self._workspace_navigation_entries.get(destination)
         target_destination = entry.destination if entry is not None else destination
         if target_destination not in self.page_widgets:
             return False
-        changed = destination != self._active_destination
+        changed = destination != previous_destination
         self._active_destination = destination
+        if target_destination not in _MANAGEMENT_DESTINATIONS:
+            self._mode_pages[self._workspace_mode] = destination
         self._workspace_calendar_filter = (
             self._workspace_calendar_view_members.get(entry.collection_id)
             if entry is not None and entry.collection_kind == "calendar_view"
@@ -9249,12 +9314,58 @@ class PersonalHubMainWindow(QMainWindow):
             self._render_task_list()
         if changed and hasattr(self, "page_transition"):
             self.page_transition.start()
-        self.navigation_buttons[destination].setChecked(True)
+        for route_id, button in self.navigation_buttons.items():
+            button.setChecked(route_id == destination)
         self._update_workspace_page_title(destination)
         self._update_status()
         if emit:
             self.destination_changed.emit(destination)
         return True
+
+    @property
+    def workspace_mode(self) -> str:
+        return self._workspace_mode
+
+    def set_workspace_mode(self, mode: str) -> None:
+        if mode in {"Tracking", "Logging"}:
+            destination = self._mode_pages[mode]
+            if (
+                mode == "Tracking"
+                and destination not in _WORKSPACE_DESTINATIONS
+                and not any(
+                    entry.route_id == destination for entry in self._default_workspace_entries()
+                )
+            ):
+                destination = (
+                    "Tasks" if destination.startswith("collection.task-list.") else HOME_DESTINATION
+                )
+            self._set_active_destination(destination)
+            with QSignalBlocker(self.mode_selector):
+                self.mode_selector.setCurrentText(self._workspace_mode)
+
+    def workspace_mode_preferences(self) -> dict[str, object]:
+        return {"mode": self._workspace_mode, "pages": dict(self._mode_pages)}
+
+    def restore_workspace_mode(self, value: object) -> None:
+        if not isinstance(value, Mapping):
+            return
+        pages = value.get("pages", {})
+        if isinstance(pages, Mapping):
+            for mode, destination in pages.items():
+                if isinstance(destination, str) and (
+                    (mode == "Logging" and destination in _LOGGING_DESTINATIONS)
+                    or (
+                        mode == "Tracking"
+                        and (
+                            destination in _WORKSPACE_DESTINATIONS
+                            or destination in self._workspace_route_targets
+                        )
+                    )
+                ):
+                    self._mode_pages[mode] = destination
+        mode = value.get("mode", "Tracking")
+        if mode in {"Tracking", "Logging"}:
+            self._set_active_destination(self._mode_pages[mode], emit=False)
 
     def show_destination(self, destination: str) -> bool:
         """Select a workspace or management route without doing I/O."""
@@ -9377,6 +9488,11 @@ class PersonalHubMainWindow(QMainWindow):
     def request_quit(self) -> None:
         if self._quitting:
             return
+        if not self.logging_workspace.flush() or self.logging_workspace.dirty:
+            self.status_label.setText(
+                "A reflection has unsaved writing. Review it before quitting."
+            )
+            return
         self._quitting = True
         self.tray_controller.hide()
         self.quit_requested.emit()
@@ -9396,6 +9512,9 @@ class PersonalHubMainWindow(QMainWindow):
         return self._close_to_tray
 
     def closeEvent(self, event: Any) -> None:
+        if not self.logging_workspace.flush() or self.logging_workspace.dirty:
+            event.ignore()
+            return
         if self._close_to_tray and not self._quitting:
             event.ignore()
             self.hide()
@@ -10255,6 +10374,7 @@ class PersonalHubMainWindow(QMainWindow):
         return tuple(self._source_failures.values())
 
     def set_privacy_masked(self, masked: bool) -> None:
+        self.logging_workspace.set_private(bool(masked) or self._locked)
         self._privacy_masked = bool(masked)
         if hasattr(self, "settings_values"):
             self.settings_values["privacy_masking"] = "On" if self._privacy_masked else "Off"
@@ -10281,6 +10401,7 @@ class PersonalHubMainWindow(QMainWindow):
         return self._privacy_masked
 
     def set_locked(self, locked: bool) -> None:
+        self.logging_workspace.set_private(bool(locked) or self._privacy_masked)
         self._locked = bool(locked)
         self.pages.setEnabled(not self._locked)
         if self._locked:

@@ -7,11 +7,12 @@ import os
 import re
 import tempfile
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
+from personal_hub.logging.contracts import ActivityEntry
 from personal_hub.storage.repositories import SettingsRepository
 from personal_hub.sync.contracts import (
     SYNC_SNAPSHOT_FORMAT,
@@ -101,10 +102,22 @@ def merge_snapshots(
 
     records: dict[tuple[str, str], tuple[SyncRecord, str]] = {}
     tombstones: dict[tuple[str, str], tuple[SyncTombstone, str]] = {}
+    corrections: dict[str, ActivityEntry] = {}
     conflicts = 0
     for snapshot in selected:
         source = snapshot.device_id
         for record in snapshot.records:
+            if record.collection == "activity":
+                entry = ActivityEntry.model_validate_json(json.dumps(record.payload))
+                if str(entry.entry_id) != record.record_id or entry.updated_at != record.updated_at:
+                    raise ValueError("sync Activity identity or timestamp is invalid")
+                if entry.undone_at is not None:
+                    previous_correction = corrections.get(record.record_id)
+                    if (
+                        previous_correction is None
+                        or entry.updated_at > previous_correction.updated_at
+                    ):
+                        corrections[record.record_id] = entry
             key = (record.collection, record.record_id)
             previous = records.get(key)
             if previous is None:
@@ -143,6 +156,70 @@ def merge_snapshots(
             del tombstones[key]
 
     timestamp = _utc(generated_at or datetime.now(UTC))
+    for identifier, correction in corrections.items():
+        selected_record = records.get(("activity", identifier))
+        if selected_record:
+            record, source = selected_record
+            entry = ActivityEntry.model_validate_json(json.dumps(record.payload))
+            revised = ActivityEntry.model_validate(
+                {
+                    **entry.model_dump(),
+                    "undone_at": correction.undone_at,
+                    "updated_at": max(entry.updated_at, correction.updated_at),
+                }
+            )
+            records[("activity", identifier)] = (
+                SyncRecord(
+                    collection="activity",
+                    record_id=identifier,
+                    updated_at=revised.updated_at,
+                    payload=revised.model_dump(mode="json"),
+                ),
+                source,
+            )
+    # Two offline devices can complete the same occurrence independently. Keep
+    # one active fact and retain the other as corrected history, before publish.
+    active_completions: dict[tuple[object, object], ActivityEntry] = {}
+    entries = []
+    for (collection, _identifier), (record, source) in records.items():
+        if collection == "activity":
+            entry = ActivityEntry.model_validate_json(json.dumps(record.payload))
+            if str(entry.entry_id) != record.record_id or entry.updated_at != record.updated_at:
+                raise ValueError("sync Activity identity or timestamp is invalid")
+            if entry.kind == "task_completion" and entry.undone_at is None:
+                entries.append((entry, source))
+    for entry, source in sorted(
+        entries, key=lambda item: (item[0].occurred_at, str(item[0].entry_id)), reverse=True
+    ):
+        key = (entry.task_id, entry.occurrence_key)
+        task_record = records.get(("tasks", str(entry.task_id)))
+        reopened_at = None
+        if (
+            task_record
+            and task_record[0].payload.get("state") == "open"
+            and task_record[0].updated_at >= entry.updated_at
+        ):
+            reopened_at = task_record[0].updated_at
+        if key in active_completions or reopened_at is not None:
+            conflicts += int(key in active_completions)
+            correction = max(
+                entry.updated_at + timedelta(microseconds=1),
+                reopened_at or active_completions[key].updated_at,
+            )
+            revised = ActivityEntry.model_validate(
+                {**entry.model_dump(), "undone_at": correction, "updated_at": correction}
+            )
+            records[("activity", str(entry.entry_id))] = (
+                SyncRecord(
+                    collection="activity",
+                    record_id=str(entry.entry_id),
+                    updated_at=revised.updated_at,
+                    payload=revised.model_dump(mode="json"),
+                ),
+                source,
+            )
+        else:
+            active_completions[key] = entry
     merged = SyncSnapshot(
         format=SYNC_SNAPSHOT_FORMAT,
         profile_id=profile_id,
@@ -273,6 +350,7 @@ class FileSyncEngine:
         *,
         apply: Callable[[SyncSnapshot], None] | None = None,
         now: datetime | None = None,
+        excluded_collections: frozenset[str] = frozenset(),
     ) -> SyncResult:
         """Merge all visible shards, apply the result, then publish this device."""
 
@@ -280,6 +358,24 @@ class FileSyncEngine:
             raise SyncConfigurationError("Local sync snapshot has the wrong device identity.")
         timestamp = _utc(now or datetime.now(UTC))
         previous, other = self._read_shards(passphrase)
+
+        def filtered(snapshot: SyncSnapshot) -> SyncSnapshot:
+            return snapshot.model_copy(
+                update={
+                    "records": tuple(
+                        r for r in snapshot.records if r.collection not in excluded_collections
+                    ),
+                    "tombstones": tuple(
+                        t for t in snapshot.tombstones if t.collection not in excluded_collections
+                    ),
+                }
+            )
+
+        # Excluded private collections are neither received, republished, nor
+        # treated as local deletions when this device opts out.
+        previous = filtered(previous) if previous else None
+        other = tuple(filtered(snapshot) for snapshot in other)
+        local_snapshot = filtered(local_snapshot)
         profiles = _profile_ids((*other, *(() if previous is None else (previous,))))
         if local_snapshot.profile_id is not None:
             profiles.add(local_snapshot.profile_id)
@@ -310,7 +406,7 @@ class FileSyncEngine:
                         SyncTombstone(
                             collection=record.collection,
                             record_id=record.record_id,
-                            deleted_at=timestamp,
+                            deleted_at=max(timestamp, record.updated_at),
                         )
                     )
             tombstones.extend(previous.tombstones)
@@ -592,7 +688,14 @@ class SyncService:
             raise SyncConfigurationError("Configure a shared sync folder before syncing.")
         engine = FileSyncEngine(endpoint, device_id=self._device_id())
         try:
-            result = engine.synchronize(local_snapshot, passphrase, apply=apply, now=now)
+            excluded = (
+                frozenset()
+                if self.settings_repository.get("logging.sync_reflections", False) is True
+                else frozenset({"reflections"})
+            )
+            result = engine.synchronize(
+                local_snapshot, passphrase, apply=apply, now=now, excluded_collections=excluded
+            )
         except (SyncError, SyncBundleError, SyncPassphraseError):
             self.record_error()
             raise

@@ -81,6 +81,8 @@ from personal_hub.imports import (
     parse_import,
     read_import_file,
 )
+from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.logging.repository import ActivityRepository, ReflectionRepository, save_activity
 from personal_hub.messages import (
     MessageAttentionNotice,
     MessageBody,
@@ -105,7 +107,7 @@ from personal_hub.sources import (
     safe_state_message,
 )
 from personal_hub.storage.backup import backup_database, restore_database
-from personal_hub.storage.database import HubDatabase
+from personal_hub.storage.database import HubActivityRow, HubDatabase, HubReflectionRow
 from personal_hub.storage.repositories import (
     AuditRepository,
     InboxRepository,
@@ -134,6 +136,7 @@ from personal_hub.sync.relay_contracts import (
 )
 from personal_hub.sync.repository import ProviderRelayRepository
 from personal_hub.tasks import HubTask, HubTaskList, TaskFilter, TaskRepository
+from personal_hub.tasks.contracts import TaskOccurrenceIdentity
 from personal_hub.today import (
     DailyDigest,
     DailyDigestBuilder,
@@ -292,6 +295,8 @@ class HubController:
         selected_database.migrate()
         self.container = container
         self.database = selected_database
+        self.activity_repository = ActivityRepository(selected_database)
+        self.reflection_repository = ReflectionRepository(selected_database)
         self._owns_database = owns_database
         self.settings_repository = settings_repository or SettingsRepository(selected_database)
         self.sync_service = sync_service or SyncService(self.settings_repository)
@@ -742,6 +747,109 @@ class HubController:
     cleanup_completed_tasks = cleanup_completed_tasks_after_due_date
 
     # ------------------------------------------------------------------
+    # Private Logging: no provider calls, task mutations, or content auditing.
+
+    def list_activity(self, options: LogFilter | None = None) -> list[ActivityEntry]:
+        self._ensure_open()
+        return self.activity_repository.list(options)
+
+    def log_progress(self, **values: object) -> ActivityEntry:
+        self._ensure_open()
+        task_id = values.get("task_id")
+        if task_id:
+            task = self.get_task(str(task_id))
+            if task is None:
+                raise ValueError("linked task is unavailable")
+            values.setdefault("list_id", task.list_id)
+            values.setdefault("tags", task.tags)
+        list_id = values.get("list_id")
+        if list_id:
+            task_list = self.task_list_repository.get(list_id)
+            if task_list is None:
+                raise ValueError("linked list is unavailable")
+            values["list_name"] = task_list.name
+        return self.activity_repository.add(ActivityEntry(**values))
+
+    def update_activity(self, entry_id: str, **changes: object) -> ActivityEntry:
+        self._ensure_open()
+        current = self.activity_repository.get(entry_id)
+        if current and current.kind == "manual":
+            if changes.get("task_id") and changes["task_id"] != current.task_id:
+                linked = self.get_task(str(changes["task_id"]))
+                if linked is None:
+                    raise ValueError("linked task is unavailable")
+            if "list_id" in changes:
+                identifier = changes["list_id"]
+                task_list = self.task_list_repository.get(identifier) if identifier else None
+                if identifier and task_list is None and identifier != current.list_id:
+                    raise ValueError("linked list is unavailable")
+                changes["list_name"] = (
+                    task_list.name if task_list else (current.list_name if identifier else None)
+                )
+        return self.activity_repository.update(entry_id, **changes)
+
+    def delete_activity(self, entry_id: str) -> bool:
+        self._ensure_open()
+        return self.activity_repository.delete(entry_id)
+
+    def activity_summary(self, options: LogFilter) -> dict[str, object]:
+        self._ensure_open()
+        return self.activity_repository.summary(options)
+
+    def list_reflections(self, options: LogFilter | None = None) -> list[ReflectionEntry]:
+        self._ensure_open()
+        return self.reflection_repository.list(options)
+
+    def save_reflection(self, entry: ReflectionEntry) -> ReflectionEntry:
+        self._ensure_open()
+        current = self.reflection_repository.get(entry.reflection_id)
+        values = entry.model_dump()
+        if current:
+            values["created_at"] = current.created_at
+        values["updated_at"] = max(datetime.now(UTC), entry.created_at, entry.updated_at)
+        return self.reflection_repository.save(ReflectionEntry.model_validate(values))
+
+    def delete_reflection(self, reflection_id: str) -> bool:
+        self._ensure_open()
+        return self.reflection_repository.delete(reflection_id)
+
+    def set_reflection_sync(self, enabled: bool) -> None:
+        self._ensure_open()
+        if type(enabled) is not bool:
+            raise ValueError("reflection sync requires an explicit choice")
+        self.settings_repository.set("logging.sync_reflections", enabled)
+
+    def logging_retention(
+        self, *, days: int | None = None, now: datetime | None = None, apply: bool = False
+    ) -> dict[str, int]:
+        """Explicit preview/apply only; ordinary maintenance never removes Logging."""
+        self._ensure_open()
+        if days is not None and (type(days) is not int or not 1 <= days <= 36500):
+            raise ValueError("Logging retention must be keep forever or 1–36500 days")
+        timestamp = _utc_sync_time(now)
+        if days is None:
+            return {"activity": 0, "reflections": 0}
+        cutoff = timestamp - timedelta(days=days)
+        with self.database.session() as session:
+            from sqlalchemy import select
+
+            activity = session.scalars(
+                select(HubActivityRow).where(
+                    HubActivityRow.occurred_at < cutoff.replace(tzinfo=None)
+                )
+            ).all()
+            reflections = session.scalars(
+                select(HubReflectionRow).where(
+                    HubReflectionRow.display_date
+                    < cutoff.astimezone(ZoneInfo(self.settings.default_timezone)).date().isoformat()
+                )
+            ).all()
+            result = {"activity": len(activity), "reflections": len(reflections)}
+            if apply:
+                for row in (*activity, *reflections):
+                    session.delete(row)
+            return result
+
     # Local tasks, Today, reminders, and deterministic digests.
 
     def list_tasks(
@@ -2873,12 +2981,16 @@ class HubController:
             )
         for state in ("open", "completed", "archived"):
             for task in self.task_repository.list(state=state, limit=10_000):
+                task_payload = task.model_dump(mode="json")
+                occurrence = self.task_repository.sync_occurrence(task.task_id)
+                if occurrence:
+                    task_payload["occurrence"] = occurrence.model_dump(mode="json")
                 records.append(
                     SyncRecord(
                         collection="tasks",
                         record_id=str(task.task_id),
                         updated_at=task.updated_at,
-                        payload=cast(dict[str, JSONValue], task.model_dump(mode="json")),
+                        payload=cast(dict[str, JSONValue], task_payload),
                     )
                 )
 
@@ -2926,6 +3038,26 @@ class HubController:
                 )
             )
 
+        for collection, entries, id_field in (
+            ("activity", self.activity_repository.all(), "entry_id"),
+            (
+                "reflections",
+                self.reflection_repository.all()
+                if self.settings_repository.get("logging.sync_reflections", False) is True
+                else [],
+                "reflection_id",
+            ),
+        ):
+            for entry in entries:
+                records.append(
+                    SyncRecord(
+                        collection=collection,
+                        record_id=str(getattr(entry, id_field)),
+                        updated_at=entry.updated_at,
+                        payload=cast(dict[str, JSONValue], entry.model_dump(mode="json")),
+                    )
+                )
+
         profile_value = self.settings_repository.get("sync.profile_id")
         profile_id = profile_value if isinstance(profile_value, str) else None
         return SyncSnapshot(
@@ -2948,14 +3080,51 @@ class HubController:
         dynamic_settings: dict[str, tuple[JSONValue, datetime]] = {}
         task_lists: dict[str, HubTaskList] = {}
         tasks: dict[str, HubTask] = {}
+        task_occurrences: dict[str, TaskOccurrenceIdentity] = {}
         calendar_imports: dict[str, CalendarImport] = {}
         calendar_events: dict[str, list[ImportedCalendarEvent]] = {}
         feed_subscriptions: dict[str, tuple[FeedSubscription, datetime]] = {}
         watches: dict[str, WatchDefinition] = {}
+        activity: dict[str, ActivityEntry] = {}
+        reflections: dict[str, ReflectionEntry] = {}
 
         for record in merged.records:
             payload = record.payload
-            if record.collection == "settings":
+            if record.collection in {"activity", "reflections"}:
+                if (
+                    record.collection == "reflections"
+                    and self.settings_repository.get("logging.sync_reflections", False) is not True
+                ):
+                    continue
+                entry = (
+                    ActivityEntry if record.collection == "activity" else ReflectionEntry
+                ).model_validate_json(json.dumps(payload))
+                identifier = (
+                    entry.entry_id if isinstance(entry, ActivityEntry) else entry.reflection_id
+                )
+                if str(identifier) != record.record_id or entry.updated_at != record.updated_at:
+                    raise ValueError("sync Logging identity or timestamp is invalid")
+                if isinstance(entry, ActivityEntry):
+                    existing = self.activity_repository.get(entry.entry_id)
+                    if existing and existing.kind == "task_completion":
+                        for field in (
+                            "kind",
+                            "task_id",
+                            "occurrence_key",
+                            "title_snapshot",
+                            "description",
+                            "occurred_at",
+                            "created_at",
+                            "list_id",
+                            "list_name",
+                            "tags",
+                        ):
+                            if getattr(existing, field) != getattr(entry, field):
+                                raise ValueError("sync cannot rewrite saved completion facts")
+                    activity[record.record_id] = entry
+                else:
+                    reflections[record.record_id] = entry
+            elif record.collection == "settings":
                 key = payload.get("key")
                 if not isinstance(key, str) or key != record.record_id:
                     raise ValueError("sync setting identity is invalid")
@@ -2982,7 +3151,13 @@ class HubController:
                     raise ValueError("sync task-list identity is invalid")
                 task_lists[record.record_id] = task_list
             elif record.collection == "tasks":
-                task = HubTask.model_validate_json(json.dumps(payload))
+                task_payload = dict(payload)
+                occurrence = task_payload.pop("occurrence", None)
+                if occurrence is not None:
+                    task_occurrences[record.record_id] = TaskOccurrenceIdentity.model_validate_json(
+                        json.dumps(occurrence)
+                    )
+                task = HubTask.model_validate_json(json.dumps(task_payload))
                 if str(task.task_id) != record.record_id:
                     raise ValueError("sync task identity is invalid")
                 tasks[record.record_id] = task
@@ -3011,6 +3186,18 @@ class HubController:
 
         if set(calendar_events).difference(calendar_imports):
             raise ValueError("sync calendar event has no import batch")
+        identities = [(item.series_id, item.occurrence_index) for item in task_occurrences.values()]
+        if len(identities) != len(set(identities)):
+            raise ValueError("sync contains duplicate recurrence occurrences")
+        for identifier, item in task_occurrences.items():
+            if item.occurrence_index == 1 and str(item.series_id) != identifier:
+                raise ValueError("sync recurrence anchor identity is invalid")
+            previous = task_occurrences.get(str(item.generated_from_task_id))
+            if previous and (
+                previous.series_id != item.series_id
+                or previous.occurrence_index + 1 != item.occurrence_index
+            ):
+                raise ValueError("sync recurrence predecessor is invalid")
         revised_settings = HubSettings.model_validate(
             {**self._settings.model_dump(mode="python"), **setting_changes}
         )
@@ -3046,7 +3233,10 @@ class HubController:
         for identifier in deleted("tasks"):
             self.task_repository.delete(identifier)
         for task in tasks.values():
-            self.task_repository.add(task)
+            self.task_repository.add(
+                task, record_activity=False, sync_occurrence=task_occurrences.get(str(task.task_id))
+            )
+        self.task_repository.rebuild_recurrence_links()
 
         for identifier in deleted("calendar_imports"):
             self.calendar_import_repository.delete_import(identifier)
@@ -3086,6 +3276,25 @@ class HubController:
             self.watch_repository.add(watch)
             if should_reset:
                 self.watch_repository.reset_baseline(watch.watch_id)
+        with self.database.session() as session:
+            for identifier in deleted("activity"):
+                row = session.get(HubActivityRow, identifier)
+                if row:
+                    session.delete(row)
+            for identifier in deleted("reflections"):
+                row = session.get(HubReflectionRow, identifier)
+                if row:
+                    session.delete(row)
+            # Release unique active keys before applying a remote correction.
+            for identifier in activity:
+                row = session.get(HubActivityRow, identifier)
+                if row:
+                    row.active_completion_key = None
+            session.flush()
+            for entry in activity.values():
+                save_activity(session, entry)
+            for entry in reflections.values():
+                self.reflection_repository.save_in_session(session, entry)
         self._restore_feed_service(reset=True)
 
     # ------------------------------------------------------------------
@@ -3166,6 +3375,10 @@ class HubController:
                 item.model_dump(mode="json") for item in self.list_source_connections()
             ],
             "tasks": [item.model_dump(mode="json") for item in tasks],
+            "activity": [item.model_dump(mode="json") for item in self.activity_repository.all()],
+            "reflections": [
+                item.model_dump(mode="json") for item in self.reflection_repository.all()
+            ],
             "calendar_imports": [item.model_dump(mode="json") for item in calendar_imports],
             "imported_calendar_events": [
                 item.model_dump(mode="json") for item in imported_calendar_events

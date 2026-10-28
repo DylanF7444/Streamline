@@ -226,6 +226,17 @@ behavior, and redacted logs. Never record tokens or real message content.
 
 ## Accessibility review
 
+For Tracking/Logging acceptance, also verify mode and per-mode page memory across restart;
+completion/retry/recurrence/undo/recompletion without duplicate active history; preserved
+snapshots after task edits and cleanup; manual progress on open tasks; dated reflection
+autosave, search, edit, deletion, and failed-save recovery; local date and list/tag filters;
+duration-not-tracked labeling; and the optional Logged today widget. Test masking and lock
+with an active draft and capture dialog. Back up, export, delete, and restore both record
+types. Review explicit history deletion counts before applying. With two temporary roots,
+verify Activity sync, separate reflection opt-in on both devices, opt-out without inferred
+deletions, correction/tombstone merging, and no Logging data in the collector relay. No real
+provider account is required for these checks.
+
 Run automated UI tests, then manually review at 720×460, 100–175% Hub text scale, Windows
 high contrast, keyboard-only operation, reduced motion, Narrator, and at least one additional
 screen reader. Confirm navigation order, visible focus, names/roles/states, list/action

@@ -212,6 +212,14 @@ class HubTask(HubContract):
         return self
 
 
+class TaskOccurrenceIdentity(HubContract):
+    """Stable recurrence identity carried with encrypted local task sync."""
+
+    series_id: UUID
+    occurrence_index: int = Field(ge=1, le=10_000)
+    generated_from_task_id: UUID | None = None
+
+
 class HubTaskList(HubContract):
     """A named local list used to group tasks."""
 

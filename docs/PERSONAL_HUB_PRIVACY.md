@@ -8,7 +8,7 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 | Category | Examples | Location and lifetime |
 | --- | --- | --- |
-| Hub-native local data | tasks, lists, tags, settings, feed subscriptions, watch definitions, Inbox state, imported and manually created calendar items, linked event changes, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
+| Hub-native local data | tasks, lists, tags, Activity, reflections, settings, feed subscriptions, watch definitions, Inbox state, imported and manually created calendar items, linked event changes, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |
 | Retained remote summaries | feed entries, watch observations/alerts, selected message headers/previews | Hub SQLite database; bounded by age and count |
 | Memory-only provider content | connected-calendar snapshots on a normal local/collector device and explicitly opened message bodies | Process memory only; cleared on lock/clear/shutdown/exit |
 | Received provider relay content | selected calendar events, message summaries, feed entries, watch observations and alerts | Hub database on the consumer device; calendar relay cache expires after at most 30 days, other rows follow their configured retention |
@@ -24,6 +24,12 @@ startup value, executable, installer ID, and update channel. Hub path validation
 overlap with the default Local Assistant database/data root.
 
 ## Default retention
+
+- Activity and reflections: keep until explicitly deleted. Completed-task cleanup and ordinary
+  summary retention never remove them. The separate Logging history control previews counts
+  before an explicit age-based deletion; it does not silently enable automatic expiration.
+  Both tables are in SQLite backups, restores, explicit JSON exports, and full local-data
+  deletion. Protect exports and backups as private writing.
 
 - Inbox: 90 days for cleanup-eligible history, configurable from 1–365 days.
 - Audit metadata: 30 days, configurable from 1–365 days.
@@ -122,6 +128,17 @@ include its received provider relay cache and content already imported into the 
 feed, watch, and Inbox repositories.
 
 ## Encrypted sync boundary
+
+Activity is Hub-native local data and participates only when encrypted shared-folder sync is
+explicitly enabled. Reflections require the separate **Include private reflections in encrypted
+shared-folder sync** choice on each device and are excluded by default. That permission is
+device-local and never copied as a shared preference. Opted-out devices neither receive nor
+republish reflection content nor treat its absence as a deletion. Disabling reflection sync
+does not remove copies already shared with other devices or their encrypted shards. Both
+Logging record types remain excluded from provider APIs, provider refreshes, and the provider
+collector relay, regardless of selected relay categories. Titles, notes, and reflection text
+never enter operational logs, audit metadata, diagnostics, or notifications. Masking/lock hide
+the Logging pages and clear visible writing controls after flushing local drafts.
 
 The optional **Sync across devices** feature uses a user-selected folder as a file transport.
 Each device writes its own bounded local-state shard beneath `.personal-hub-sync`; the snapshot

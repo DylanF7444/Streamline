@@ -29,6 +29,7 @@ from personal_hub.calendar.native import LOCAL_CALENDAR_ID
 from personal_hub.feeds.contracts import FeedResult, FeedSyncState
 from personal_hub.integrations.canvas import canvas_assignment_url
 from personal_hub.lifecycle import LifecycleEvent
+from personal_hub.logging.contracts import LogFilter
 from personal_hub.messages import (
     MESSAGE_CATEGORY_VALUES,
     MessageAttentionNotice,
@@ -54,6 +55,7 @@ from personal_hub.ui.desktop.connection_dialog import ExternalPlatformDialog
 from personal_hub.ui.desktop.dashboard import LAYOUT_VERSION
 from personal_hub.ui.desktop.ical_dialog import IcalFeedDialog
 from personal_hub.ui.desktop.import_dialog import ImportDialog
+from personal_hub.ui.desktop.logging_coordinator import LoggingCoordinator
 from personal_hub.ui.desktop.main_window import (
     AttentionNotificationView,
     CalendarEventView,
@@ -726,7 +728,11 @@ class HubDesktopCoordinator(QObject):
         window.source_enabled_changed.connect(self._source_enabled_changed)
         window.source_disconnect_requested.connect(self._source_disconnect_requested)
         application.aboutToQuit.connect(self.shutdown)
+        self.logging_coordinator = LoggingCoordinator(
+            container.controller, window, refresh_home=self.render_task_surfaces
+        )
         self.render_all()
+        window.restore_workspace_mode(container.settings_repository.get("workspace_modes", None))
         window.calendar_mode_changed.connect(self._save_calendar_mode)
         window.calendar_period_changed.connect(self._calendar_period_changed)
         window.calendar_selection_changed.connect(self._calendar_selection_changed)
@@ -808,11 +814,15 @@ class HubDesktopCoordinator(QObject):
         self.render_diagnostics()
 
     def render_task_surfaces(self) -> None:
+        self.logging_coordinator.refresh()
         task_lists = self.container.controller.list_task_lists()
         self.window.set_workspace_task_lists(task_lists)
         lists = {str(task_list.list_id): task_list.name for task_list in task_lists}
         self.window.render_tasks(
-            tuple(_task_view(task, lists=lists) for task in self.container.controller.list_tasks()),
+            tuple(
+                _task_view(task, lists=lists)
+                for task in self.container.controller.list_tasks(limit=10_000)
+            ),
             preserve_undo=True,
         )
         projection = self.container.controller.today_projection()
@@ -844,7 +854,18 @@ class HubDesktopCoordinator(QObject):
         )
         watch_items = self.container.controller.watch_today_items(now=projection.generated_at)
         message_items = self.container.controller.message_today_items(limit=100)
+        activity_day = projection.generated_at.astimezone(ZoneInfo(projection.timezone)).date()
+        activity_facts = self.container.controller.activity_summary(
+            LogFilter(start=activity_day, end=activity_day, timezone=projection.timezone)
+        )
+        activity_count = activity_facts["task_completion"] + activity_facts["manual"]
         sections = (
+            TodaySectionView(
+                section_id="logged_today",
+                title="Logged today",
+                visible=False,
+                body=f"{activity_count} activity entries today. Open Activity to review.",
+            ),
             TodaySectionView(
                 section_id="schedule",
                 title="Agenda",
@@ -2339,6 +2360,8 @@ class HubDesktopCoordinator(QObject):
 
     @Slot(str)
     def _sync_requested(self, passphrase: str) -> None:
+        if not self.window.logging_workspace.flush():
+            return
         try:
             result = self.container.controller.sync_now(passphrase)
         except (OSError, RuntimeError, TypeError, ValueError, SyncError):
@@ -2426,6 +2449,8 @@ class HubDesktopCoordinator(QObject):
 
     @Slot()
     def _backup_requested(self) -> None:
+        if not self.window.logging_workspace.flush():
+            return
         default_path = self.container.settings.backups_dir / "personal-hub-backup.db"
         selected, _filter = QFileDialog.getSaveFileName(
             self.window,
@@ -2444,6 +2469,8 @@ class HubDesktopCoordinator(QObject):
 
     @Slot()
     def _restore_requested(self) -> None:
+        if not self.window.logging_workspace.flush():
+            return
         if any(
             worker is not None
             for worker in (
@@ -2476,11 +2503,16 @@ class HubDesktopCoordinator(QObject):
             self.window.set_settings_status("Database restore failed integrity checks.")
             return
         self.container.settings = self.container.controller.settings
+        self.window.logging_workspace.reflection = None
+        self.window.logging_workspace.dirty = False
+        self.window.logging_workspace._load_editor()
         self.render_all()
         self.window.set_settings_status("Database restored and migrated successfully.")
 
     @Slot()
     def _export_requested(self) -> None:
+        if not self.window.logging_workspace.flush():
+            return
         default_path = self.container.settings.data_dir / "personal-hub-export.json"
         selected, _filter = QFileDialog.getSaveFileName(
             self.window,
@@ -3684,6 +3716,7 @@ class HubDesktopCoordinator(QObject):
 
     @Slot()
     def shutdown(self) -> None:
+        self.window.logging_workspace.flush()
         if self._closed:
             return
         self._closed = True

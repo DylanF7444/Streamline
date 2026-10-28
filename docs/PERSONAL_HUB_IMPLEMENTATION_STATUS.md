@@ -1,9 +1,56 @@
 # Personal Hub implementation status
 
-Updated October 16, 2026. The authoritative product and technical specification is
+Updated October 28, 2026. The current implementation baseline is complete for now, and
+feature updates can continue without treating release evidence as a blocker. External release
+checks remain pending and should be revisited when release readiness is the focus. The
+authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
+
+## Tracking and Logging — October 28, 2026
+
+Implemented the first-release scope in `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
+Tracking and Logging have persistent mode navigation and separate remembered pages. Logging
+provides Activity capture/history, local Reflection draft autosave and search, and factual
+Summary breakdowns. Schema 14 preserves completion snapshots independently of task cleanup,
+handles undo/recompletion and recurring identities, and migrates available completed tasks.
+Manual progress never changes its linked task. Backup, export, restore, privacy masking,
+session lock, explicit history deletion preview, and an optional count-only Home widget are
+integrated. Activity follows enabled encrypted shared-folder sync; Reflection requires its
+own device-local opt-in. Both stay outside provider APIs and the collector relay.
+
+Implementation details, bounds, and acceptance coverage are recorded in
+`PERSONAL_HUB_LOGGING_IMPLEMENTATION.md`. Visual review covered Activity, Reflection, Summary,
+and a narrow writing view. Focused core, desktop, persistence/sync, and corrected dashboard
+tests pass. Five pre-existing dashboard assertions were updated from obsolete size presets
+to the current version-3 geometry, including real resize and restart-persistence checks.
+Import isolation and accelerated seven-day reliability pass. The one-file executable and
+Inno installer compile; package inspection finds no forbidden dependency. These are unsigned
+development artifacts, with existing public-release gates still deferred.
+
+Final validation for this extension:
+
+| Check | Result |
+| --- | --- |
+| Complete collected test inventory | **339 passed**: 252 core tests and 87 UI tests, executed in 20 fresh-process batches. The Logging batch was rerun successfully after the final keyboard-focus correction. |
+| Focused Logging/task/sync/desktop regression command | **36 passed**; subsequent final Logging UI rerun: **8 passed**. |
+| Dashboard UI batches | **10 passed**, including geometry migration, direct resize, content refresh, and restart persistence. |
+| Ruff format and lint | Passed for all 167 Python files. |
+| Documentation consistency and Git whitespace | Passed. |
+| Startup/import boundary | Passed: no Assistant imports and no Qt before explicit desktop startup. |
+| Accelerated reliability | Passed: 168 virtual hours, six restarts, bounded state. This does not satisfy a 24-hour wall-clock soak. |
+| Final executable and installer | PyInstaller build and Inno Setup 6.7.3 compilation passed; unsigned development artifacts only. |
+| Packaged dependencies | Passed: 2,328 archive entries and 2,477 analysis entries; no forbidden dependencies. Logging contracts, persistence, UI, and coordinator modules are present. |
+
+The monolithic Windows Qt runs were superseded by complete fresh-process batches because
+the long-lived Qt process slows substantially. Core used `python -m pytest --strict-markers
+tests --ignore=tests/ui -q`; every `tests/ui/test_*.py` file ran with the same strict-marker
+options in a fresh process. The collected total was checked against 339, with no tests
+omitted. Per-batch results and the corrected rerun are preserved locally in the ignored
+`.benchmark-data/logging-test-batches/summary.json`. No live provider account or installed
+user data was used. Signing, clean-VM lifecycle/coexistence, manual assistive-technology
+review, and the actual wall-clock soak remain the existing release gates.
 
 ## Direct dashboard positioning and resizing — October 16, 2026
 

@@ -9,7 +9,12 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QLabel
 
-from personal_hub.ui.desktop.dashboard import DashboardBoard
+from personal_hub.ui.desktop.dashboard import (
+    GRID_COLUMNS,
+    GRID_SNAP,
+    LAYOUT_VERSION,
+    DashboardBoard,
+)
 
 
 def test_header_drag_moves_across_columns_and_click_does_not_move(qtbot):
@@ -86,20 +91,23 @@ def test_board_keeps_content_and_emits_allowlisted_layout(qtbot):
     assert board.set_widget_size("schedule", "wide")
 
     layout = board.export_layout()
-    assert layout["version"] == 1
-    assert layout["order"] == ["watchlist", "attention", "schedule"]
-    assert layout["sizes"]["schedule"] == "wide"
+    assert layout["version"] == LAYOUT_VERSION
+    assert layout["order"] == ["watchlist", "schedule", "attention"]
+    assert layout["geometry"]["schedule"]["w"] == GRID_COLUMNS
     assert layout["hidden"] == ["attention"]
     assert changed
     assert all(
-        set(value) == {"version", "order", "hidden", "sizes"}
+        set(value) == {"version", "order", "hidden", "geometry"}
         for value in changed
         if isinstance(value, dict)
     )
     board.reset_layout()
     assert board.export_layout()["order"] == ["schedule", "attention", "watchlist"]
     assert board.export_layout()["hidden"] == ["attention"]
-    assert set(board.export_layout()["sizes"].values()) == {"comfortable"}
+    assert all(
+        rectangle["w"] == GRID_COLUMNS // 2 and rectangle["h"] == 0
+        for rectangle in board.export_layout()["geometry"].values()
+    )
 
 
 @pytest.mark.hub_ui
@@ -129,12 +137,13 @@ def test_restore_filters_unknown_ids_and_preserves_state_on_refresh(qtbot):
     after = board.export_layout()
     assert after["order"][:3] == before["order"]
     assert after["hidden"][:1] == before["hidden"]
-    assert after["sizes"]["watchlist"] == "tall"
-    assert after["sizes"]["schedule"] == "compact"
+    assert after["geometry"]["watchlist"] == before["geometry"]["watchlist"]
+    assert after["geometry"]["schedule"] == before["geometry"]["schedule"]
+    assert after["geometry"]["watchlist"]["h"] > after["geometry"]["schedule"]["h"] > 0
     assert "news" in after["hidden"]
 
     unchanged = board.export_layout()
-    assert not board.restore_layout({"version": 2, "order": [], "hidden": [], "sizes": {}})
+    assert not board.restore_layout({"version": 999, "order": [], "hidden": [], "geometry": {}})
     assert board.export_layout() == unchanged
 
 
@@ -147,6 +156,7 @@ def test_refresh_reuses_card_shells_and_allows_content_replacement(qtbot):
     board.set_editing(True)
     board.set_widget_size("schedule", "wide")
     original_card = board.widget("schedule")
+    original_rectangle = board.export_layout()["geometry"]["schedule"]
 
     board.set_sections(
         [
@@ -158,7 +168,7 @@ def test_refresh_reuses_card_shells_and_allows_content_replacement(qtbot):
 
     assert board.widget("schedule") is original_card
     assert board.widget("schedule").content.text() == "fresh calendar"
-    assert board.widget("schedule").size_preset == "wide"
+    assert board.export_layout()["geometry"]["schedule"] == original_rectangle
     assert board.editing
     assert not board.widget("schedule").edit_controls.isHidden()
 
@@ -209,15 +219,16 @@ def test_edit_toggle_and_reduced_motion_settle_resize_grip(qtbot):
     board.set_editing(True)
     card = board.widget("schedule")
     assert card.resize_grip.isVisible()
-    assert card.resize_grip.geometry().bottomRight() == card.rect().bottomRight() - QPoint(4, 4)
+    assert card.resize_grip.geometry().bottomRight() == card.rect().bottomRight()
 
     board.set_reduced_motion(True)
     start = card.geometry()
-    board._begin_resize("schedule", QPoint(10, 10))
-    board._preview_resize("schedule", QPoint(10, 10 + 5 * 24))
-    board._finish_resize("schedule", QPoint(10, 10 + 5 * 24))
-    assert board.export_layout()["sizes"]["schedule"] in {"comfortable", "tall"}
-    assert card.geometry() != start or board.export_layout()["sizes"]["schedule"] != "comfortable"
+    board._begin_resize("schedule", "se", QPoint(10, 10))
+    board._preview_resize("schedule", "se", QPoint(10, 130))
+    board._finish_resize("schedule", "se", QPoint(10, 130))
+    rectangle = board.export_layout()["geometry"]["schedule"]
+    assert rectangle["h"] > start.height()
+    assert rectangle["h"] % GRID_SNAP == 0
 
     board.edit_button.click()
     assert not board.editing

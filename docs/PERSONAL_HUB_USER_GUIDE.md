@@ -27,6 +27,10 @@ as a public release until the signing and release-evidence gates in the runbook 
 
 ### Navigation and collections
 
+Use the persistent **Tracking / Logging** selector to move between commitments and your
+record of what happened. Each mode remembers its last page. Sources and Settings stay in
+Management in either mode. Tracking contains the workspace pages described below.
+
 The left rail keeps **Sources** and **Settings** together in the fixed **Management** group.
 The **Workspace** group contains Home, Calendar, Tasks, Watchlists, and Inbox. Choose
 **Customize** to rename, reorder, or hide workspace pages; drag pages or use the Move buttons
@@ -84,6 +88,11 @@ status, IANA timezone, priority, list, tags, recurrence, and reminder offsets. T
 filtered and sorted, completed, archived, edited, and undone. Completing a recurring task
 creates exactly one next occurrence.
 
+Completing a task also records one Activity entry automatically. Undo/reopen marks that
+entry **Undone**; enable corrected history in Activity to see it. Completing again creates
+a new entry. Later task edits or deletion do not rewrite the saved title or remove history.
+Choose **Log progress** from a task's actions menu to record work without completing it.
+
 The Tasks toolbar keeps the common path compact: choose a quick view such as **Due today**,
 **Upcoming**, **Overdue**, or **No date**, search by title or metadata, and open **Filters**
 only when state or sort controls are needed. Select **Edit** from a task's actions menu to
@@ -112,6 +121,51 @@ dates, open tasks, future-due tasks, and archived tasks remain. The first comple
 active recurring series is kept as its schedule anchor. For Canvas items, Personal Hub keeps a
 local deletion marker so later feed refreshes do not recreate removed tasks. Canvas itself is
 never modified.
+
+### Logging: Activity, Reflection, and Summary
+
+**Activity** shows work grouped by local date, newest first. Choose **Log progress** for an
+unplanned accomplishment or work on an open task. Enter a description and optionally notes,
+a task/list/tag link, when it happened, and a duration in minutes. Linking a task never changes
+its state. Manual entries can be edited or deleted. Completion entries permit a separate
+note; use normal task undo/reopen to correct an accidental completion. An unavailable task
+link leaves its history intact.
+
+Filter by Today, Last 7 days, a custom range, or All dates. Search descriptions and notes,
+or filter by type, list, and tag. **Include corrected history** reveals Undone completions.
+Use **Load more** for additional matching results. **Open linked task** switches to Tracking;
+the Logging selector returns to your prior page. **Reflect on this day** starts dated writing.
+
+**Reflection** is a separate private writing surface. Choose **Write a reflection**, select
+the date it is about, and optionally add a title. Multiple reflections can share a date.
+Prompts are optional placeholder suggestions; skip them freely. Drafts save on this device
+after a short pause in typing, with a visible **Saved on this device** state. Navigating away
+also saves. A save failure leaves the writing in the editor and shows an unsaved state.
+Bodies are limited to 20,000 characters. Search titles and text, select an entry to edit,
+or delete your own writing. Editing an older entry retains its about-date. Optional task
+links and **Link selected Activity entry** keep the records separate. **View this day's
+Activity** opens its factual timeline. Writing never creates or completes a task.
+
+**Summary** counts completed tasks and manual entries for the selected filters and date range,
+with daily, list, and tag breakdowns. Recurring occurrences count separately; Undone entries
+are excluded. Duration means only the sum of minutes you entered. If none were entered,
+duration is shown as not tracked. There are no scores, inferred hours, streaks, or timers.
+
+Home's optional **Logged today** widget is available through **Add widget**. It shows a compact
+count and opens Activity; it does not show reflection text.
+
+History stays until you delete it. Completed-task cleanup preserves Activity and reflections.
+Settings has a separate Logging history deletion preview; choose an age, review the number of
+Activity entries and reflections affected, then apply the deletion. This control does not
+enable automatic expiration. Backup, restore, and explicit JSON export include both record
+types, including private writing.
+
+Activity follows explicitly enabled encrypted shared-folder sync. Reflections stay local
+unless **Include private reflections in encrypted shared-folder sync** is checked separately
+on each participating device in Settings. Turning it off stops future receiving/publishing
+on this device; already shared copies remain on other devices and in their encrypted shards.
+Logging never enters provider refreshes or the provider collector relay. Masking and session
+lock hide Logging content. All Logging features work offline and without AI.
 
 ### Calendar
 

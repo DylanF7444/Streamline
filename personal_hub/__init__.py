@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from tomllib import load
 
-
 _project_root = Path(__file__).resolve().parent.parent
 _source_package = _project_root / "src" / "personal_hub"
 __path__[:] = [str(_source_package)]

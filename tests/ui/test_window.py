@@ -21,6 +21,9 @@ EXPECTED_NAVIGATION = (
     "Inbox",
     "Sources",
     "Settings",
+    "Activity",
+    "Reflection",
+    "Summary",
 )
 
 

@@ -25,6 +25,8 @@ SyncCollection = Literal[
     "calendar_events",
     "feed_subscriptions",
     "watches",
+    "activity",
+    "reflections",
 ]
 SyncState = Literal["disabled", "not_configured", "ready", "error"]
 SyncRole = Literal["local", "collector", "consumer"]
