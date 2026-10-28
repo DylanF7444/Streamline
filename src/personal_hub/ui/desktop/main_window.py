@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDateTimeEdit,
     QDialog,
     QFormLayout,
@@ -827,7 +828,7 @@ _TIMEZONE_ITEMS: Final[tuple[tuple[str, str], ...]] = tuple(
 
 
 class TimezoneComboBox(QComboBox):
-    """Non-editable timezone selector backed by IANA timezone identifiers."""
+    """Searchable timezone selector backed by IANA timezone identifiers."""
 
     def __init__(
         self,
@@ -837,12 +838,24 @@ class TimezoneComboBox(QComboBox):
     ) -> None:
         super().__init__(parent)
         self._fallback_timezone = "local" if include_local else "UTC"
-        self.setEditable(False)
+        self.setEditable(True)
         self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.setDuplicatesEnabled(False)
         self.setMaxVisibleItems(20)
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.setMinimumContentsLength(18)
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("Type to search time zones")
+            line_edit.setClearButtonEnabled(True)
+            line_edit.setAccessibleDescription(
+                "Type a city or IANA time zone name, then select a matching result."
+            )
+        completer = self.completer()
+        if completer is not None:
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         if include_local:
             self.addItem("Local time", "local")
         self.addItems([label for label, _value in _TIMEZONE_ITEMS])
@@ -872,8 +885,11 @@ class TimezoneComboBox(QComboBox):
     def timezone(self) -> str:
         """Return the stored timezone identifier for the selected option."""
 
-        value = self.currentData()
-        return _safe_text(value, fallback=self.currentText(), limit=128)
+        text = _safe_text(self.currentText(), fallback=self._fallback_timezone, limit=128)
+        index = self.findText(text)
+        if index >= 0:
+            return _safe_text(self.itemData(index), fallback=text, limit=128)
+        return text
 
     # Keep the old line-edit-shaped methods as a small compatibility bridge for
     # callers that populate view controls programmatically.
@@ -8919,6 +8935,7 @@ class PersonalHubMainWindow(QMainWindow):
         for key, label in checkbox_fields:
             checkbox = QCheckBox(label)
             checkbox.setAccessibleName(f"{label} setting")
+            checkbox.toggled.connect(self._mark_settings_unsaved)
             editor_layout.addRow(checkbox)
             self.settings_checkboxes[key] = checkbox
 
@@ -8950,6 +8967,11 @@ class PersonalHubMainWindow(QMainWindow):
                 input_widget = QLineEdit()
                 input_widget.setPlaceholderText(placeholder)
             input_widget.setAccessibleName(label)
+            if isinstance(input_widget, TimezoneComboBox):
+                input_widget.currentIndexChanged.connect(self._mark_settings_unsaved)
+                input_widget.editTextChanged.connect(self._mark_settings_unsaved)
+            else:
+                input_widget.textChanged.connect(self._mark_settings_unsaved)
             editor_layout.addRow(label_widget, input_widget)
             self.settings_inputs[key] = input_widget
 
@@ -8959,6 +8981,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_text_scale_combo.setAccessibleName("Text scale setting")
         for scale in (1.0, 1.25, 1.5, 1.75):
             self.settings_text_scale_combo.addItem(f"{scale:g}×", scale)
+        self.settings_text_scale_combo.currentIndexChanged.connect(self._mark_settings_unsaved)
         editor_layout.addRow(scale_label, self.settings_text_scale_combo)
 
         settings_actions = QVBoxLayout()
@@ -8966,6 +8989,13 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_save_button.setAccessibleName("Save Personal Hub settings")
         self.settings_save_button.clicked.connect(self._request_settings_save)
         settings_actions.addWidget(self.settings_save_button)
+        self.settings_save_status_label = QLabel()
+        self.settings_save_status_label.setObjectName("pageSubtitle")
+        self.settings_save_status_label.setAccessibleName("Settings save confirmation")
+        self.settings_save_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.settings_save_status_label.setWordWrap(True)
+        self.settings_save_status_label.hide()
+        settings_actions.addWidget(self.settings_save_status_label)
         self.settings_backup_button = QPushButton("Back up database")
         self.settings_backup_button.setAccessibleName("Back up Personal Hub database")
         self.settings_backup_button.clicked.connect(self.backup_requested.emit)
@@ -9942,6 +9972,20 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.settings_save_requested.emit(values)
 
+    def _mark_settings_unsaved(self, *_args: object) -> None:
+        """Show that edited settings still need to be saved."""
+
+        self.settings_save_status_label.setText("Unsaved changes. Save settings to apply them.")
+        self.settings_save_status_label.show()
+        self.settings_status_label.setText("Unsaved changes. Select Save settings to apply them.")
+
+    def set_settings_save_status(self, message: str) -> None:
+        """Show save success or failure beside the settings save button."""
+
+        text = _safe_text(message, fallback="Settings unchanged.")
+        self.settings_save_status_label.setText(text)
+        self.settings_save_status_label.show()
+
     def set_settings_status(self, message: str) -> None:
         self.settings_status_label.setText(_safe_text(message, fallback="Settings unchanged."))
 
@@ -9978,6 +10022,8 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_status_label.setText(
             "Hub-owned settings are ready. Changes apply only after Save settings."
         )
+        self.settings_save_status_label.clear()
+        self.settings_save_status_label.hide()
         if hasattr(self, "settings_checkboxes"):
             checkbox_values = {
                 "offline_mode": view.offline_mode,

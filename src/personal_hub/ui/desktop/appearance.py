@@ -473,9 +473,8 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
 #dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
 #dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
 #dashboardResizeGripNW, #dashboardResizeGripSW {{
-    background: {accent};
+    background: transparent;
     border: 0;
-    border-radius: 3px;
 }}
 
 #dashboardDropPreview {{
@@ -772,8 +771,8 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
 #dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
 #dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
 #dashboardResizeGripNW, #dashboardResizeGripSW {{
-    background: #ffffff;
-    border: 1px solid #000000;
+    background: transparent;
+    border: 0;
 }}
 
 #dashboardDropPreview {{

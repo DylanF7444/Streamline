@@ -2299,13 +2299,16 @@ class HubDesktopCoordinator(QObject):
                 setter(desired.start_at_login)
             updated = self.container.controller.update_settings(desired)
         except (OSError, RuntimeError, TypeError, ValueError):
-            self.window.set_settings_status(
+            message = (
                 "Settings were not saved. Check timezone, time, retention, and startup values."
             )
+            self.window.set_settings_status(message)
+            self.window.set_settings_save_status(message)
             return
         self.container.settings = updated
         self.render_all()
         self.window.set_settings_status("Settings saved.")
+        self.window.set_settings_save_status("Settings saved.")
 
     @Slot(object)
     def _save_workspace_navigation(self, value: object) -> None:

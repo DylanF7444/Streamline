@@ -29,6 +29,9 @@ GRID_SNAP: Final[int] = 6
 MIN_CARD_WIDTH: Final[int] = 240
 MAX_CARD_HEIGHT: Final[int] = 1800
 MAX_CARD_TOP: Final[int] = 24000
+RESIZE_ANIMATION_MS: Final[int] = 72
+RESIZE_EDGE_GRIP_SIZE: Final[int] = 10
+RESIZE_CORNER_GRIP_SIZE: Final[int] = 14
 _LEGACY_LAYOUT_VERSION: Final[int] = 1
 _PREVIOUS_LAYOUT_VERSION: Final[int] = 2
 _PREVIOUS_GRID_COLUMNS: Final[int] = 12
@@ -254,12 +257,6 @@ class _ResizeGrip(QFrame):
         self.setAccessibleDescription(
             "Drag this handle or use the arrow keys to resize the widget."
         )
-        if mode in {"n", "s"}:
-            self.setFixedSize(28, 7)
-        elif mode in {"e", "w"}:
-            self.setFixedSize(7, 28)
-        else:
-            self.setFixedSize(14, 14)
         self._dragging = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
@@ -409,17 +406,32 @@ class _DashboardCard(QFrame):
             return
         w, h = self.width(), self.height()
         positions = {
-            "n": ((w - 28) // 2, 0),
-            "s": ((w - 28) // 2, max(0, h - 7)),
-            "e": (max(0, w - 7), (h - 28) // 2),
-            "w": (0, (h - 28) // 2),
-            "ne": (max(0, w - 14), 0),
-            "nw": (0, 0),
-            "se": (max(0, w - 14), max(0, h - 14)),
-            "sw": (0, max(0, h - 14)),
+            "n": (0, 0, w, RESIZE_EDGE_GRIP_SIZE),
+            "s": (0, max(0, h - RESIZE_EDGE_GRIP_SIZE), w, RESIZE_EDGE_GRIP_SIZE),
+            "e": (max(0, w - RESIZE_EDGE_GRIP_SIZE), 0, RESIZE_EDGE_GRIP_SIZE, h),
+            "w": (0, 0, RESIZE_EDGE_GRIP_SIZE, h),
+            "ne": (
+                max(0, w - RESIZE_CORNER_GRIP_SIZE),
+                0,
+                RESIZE_CORNER_GRIP_SIZE,
+                RESIZE_CORNER_GRIP_SIZE,
+            ),
+            "nw": (0, 0, RESIZE_CORNER_GRIP_SIZE, RESIZE_CORNER_GRIP_SIZE),
+            "se": (
+                max(0, w - RESIZE_CORNER_GRIP_SIZE),
+                max(0, h - RESIZE_CORNER_GRIP_SIZE),
+                RESIZE_CORNER_GRIP_SIZE,
+                RESIZE_CORNER_GRIP_SIZE,
+            ),
+            "sw": (
+                0,
+                max(0, h - RESIZE_CORNER_GRIP_SIZE),
+                RESIZE_CORNER_GRIP_SIZE,
+                RESIZE_CORNER_GRIP_SIZE,
+            ),
         }
         for mode, grip in self.resize_grips.items():
-            grip.move(*positions[mode])
+            grip.setGeometry(*positions[mode])
             grip.raise_()
 
     def set_title(self, title: str) -> None:
@@ -472,7 +484,13 @@ class _DashboardCard(QFrame):
     def stop_geometry_animation(self) -> None:
         self._geometry_animation.stop()
 
-    def animate_geometry(self, target: QRect, *, enabled: bool) -> None:
+    def animate_geometry(
+        self,
+        target: QRect,
+        *,
+        enabled: bool,
+        duration: int = 160,
+    ) -> None:
         if not enabled:
             self._geometry_animation.stop()
             self.setGeometry(target)
@@ -481,6 +499,7 @@ class _DashboardCard(QFrame):
         if current == target:
             return
         self._geometry_animation.stop()
+        self._geometry_animation.setDuration(max(1, duration))
         self._geometry_animation.setStartValue(current)
         self._geometry_animation.setEndValue(target)
         self._geometry_animation.start()
@@ -1399,6 +1418,7 @@ class DashboardBoard(QWidget):
         card = self._cards.get(section_id)
         if card is None:
             return
+        card.stop_geometry_animation()
         self._resize_state = {
             "section_id": section_id,
             "mode": mode,
@@ -1426,9 +1446,13 @@ class DashboardBoard(QWidget):
             point.y() - origin.y(),
         )
         state["candidate"] = candidate
-        self._gesture_preview.setGeometry(candidate)
-        self._gesture_preview.raise_()
-        self._gesture_preview.show()
+        card = self._cards.get(section_id)
+        if card is not None:
+            card.animate_geometry(
+                candidate,
+                enabled=not self._reduced_motion,
+                duration=RESIZE_ANIMATION_MS,
+            )
 
     def _finish_resize(self, section_id: str, mode: str, point: object) -> None:
         state = self._resize_state
