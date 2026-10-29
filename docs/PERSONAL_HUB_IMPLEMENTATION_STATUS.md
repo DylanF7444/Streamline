@@ -8,6 +8,28 @@ authoritative product and technical specification is
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
 
+## Desktop usability improvements — October 28, 2026
+
+Reviewed Home, Calendar, Tasks, Watchlists, Inbox, Sources, Settings, and both workspace
+modes against the current product guidance, implementation, UI tests, and synthetic Qt
+screenshots. Implemented clearer page hierarchy, Home capture shortcuts, task-filter recovery,
+source next-step guidance and failure navigation, labeled conditional watch fields, required
+form feedback, accurate Settings load/save states, and less Settings/Logging clutter. Compact
+Calendar, Tasks, and Logging layouts scroll and reveal focused controls; task editing now
+works by keyboard at 720×460 with 175% text. Outcome labels emit visible-change accessibility
+announcements. Existing local-first workflows, preference formats, permissions, and data
+boundaries remain unchanged. Details are in `PERSONAL_HUB_USABILITY_REVIEW.md`.
+
+Validation: **252 core tests and all 95 collected UI tests passed**, using fresh-process UI
+file batches and a final **9-test** usability/Settings persistence rerun after the last fix.
+Eight focused usability tests were added. Ruff formatting (169 Python files), Ruff lint,
+documentation consistency, import isolation, and Git whitespace checks passed. The UI batch
+reported one existing Qt date/time constructor deprecation warning. Offscreen screenshot
+inspection included normal and high-contrast layouts, minimum size, 175% text, and visible
+focused task-save and Logging controls. Native Windows DPI/visual checks, Narrator and another
+screen reader, and first-time-user sessions were not performed; existing manual release
+checks remain pending. No build, signing, or live-provider acceptance is claimed for this slice.
+
 ## Tracking and Logging — October 28, 2026
 
 Implemented the first-release scope in `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.

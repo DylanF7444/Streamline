@@ -143,7 +143,7 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
     texts = _visible_texts(window)
     assert set(EXPECTED_NAVIGATION).issubset(texts)
     assert window.navigation_caption.text() == "NAVIGATION"
-    assert window.today_subtitle.text() == "Schedule, tasks, alerts, news, and source status."
+    assert "Plan in Tasks and Calendar" in window.today_subtitle.text()
     assert not window.findChildren(QLabel, "brandSubtitle")
     assert "A little clarity for every day." not in texts
     assert "YOUR PERSONAL SPACE" not in texts

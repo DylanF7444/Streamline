@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from personal_hub.calendar.local import ImportedCalendarEvent
 from personal_hub.calendar.native import LOCAL_CALENDAR_ID, CalendarSyncBinding
+from personal_hub.ui.desktop.status_label import StatusLabel
 
 
 class CalendarItemDialog(QDialog):
@@ -45,10 +46,11 @@ class CalendarItemDialog(QDialog):
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.title_input = QLineEdit(current.title if current else "")
         self.title_input.setMaxLength(240)
         self.title_input.setAccessibleName("Calendar item title")
-        form.addRow("Title", self.title_input)
+        form.addRow("Title (required)", self.title_input)
         self.timezone_input = QLineEdit(current.timezone if current else timezone)
         self.timezone_input.setMaxLength(128)
         self.timezone_input.setAccessibleName("Calendar item timezone")
@@ -72,11 +74,12 @@ class CalendarItemDialog(QDialog):
         self.location_input = QLineEdit(current.location if current else "")
         self.location_input.setMaxLength(512)
         self.location_input.setAccessibleName("Calendar item location")
-        form.addRow("Location", self.location_input)
+        form.addRow("Location (optional)", self.location_input)
         self.description_input = QPlainTextEdit(current.description if current else "")
         self.description_input.setMaximumHeight(120)
         self.description_input.setAccessibleName("Calendar item notes")
-        form.addRow("Notes", self.description_input)
+        self.description_input.setTabChangesFocus(True)
+        form.addRow("Notes (optional)", self.description_input)
         self.sync_combo = QComboBox()
         self.sync_combo.setAccessibleName("Calendar item sync destination")
         self.sync_combo.addItem("Keep on this device", None)
@@ -115,7 +118,7 @@ class CalendarItemDialog(QDialog):
         description.setWordWrap(True)
         description.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(description)
-        self.status_label = QLabel()
+        self.status_label = StatusLabel()
         self.status_label.setWordWrap(True)
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setAccessibleName("Calendar item validation status")
@@ -151,6 +154,10 @@ class CalendarItemDialog(QDialog):
             self.end_input.setDate(self.start_input.date().addDays(1))
 
     def accept(self) -> None:
+        if not self.title_input.text().strip():
+            self.status_label.setText("Enter a title for this calendar item before saving.")
+            self.title_input.setFocus()
+            return
         try:
             zone = ZoneInfo(self.timezone_input.text().strip())
             values = []

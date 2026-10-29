@@ -67,6 +67,7 @@ from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
+from personal_hub.ui.desktop.status_label import StatusLabel
 from personal_hub.ui.desktop.workspace_navigation import (
     CalendarViewGroupsDialog,
     WorkspaceCalendarView,
@@ -757,9 +758,9 @@ _NEWS_FRESHNESS_MESSAGES: Final[dict[str, str]] = {
     "empty": "No new entries",
     "stale": "Stale · showing the last successful entries",
     "offline": "Offline · refresh is paused",
-    "permission_required": "Permission required",
-    "disconnected": "Disconnected",
-    "error": "Error · feed entries are unavailable",
+    "permission_required": "Permission required · review the connection in Sources",
+    "disconnected": "Disconnected · connect a source in Sources",
+    "error": "Refresh failed · retry or review the source in Sources",
     "refreshing": "Refreshing",
 }
 _MAX_NEWS_ENTRIES: Final = 200
@@ -782,9 +783,9 @@ _CALENDAR_FRESHNESS_MESSAGES: Final[dict[str, str]] = {
     "empty": "No events in this view",
     "stale": "Stale · showing the last successful snapshot",
     "offline": "Offline · refresh is paused",
-    "permission_required": "Permission required",
-    "disconnected": "Disconnected",
-    "error": "Error · calendar data is unavailable",
+    "permission_required": "Permission required · review the connection in Sources",
+    "disconnected": "Disconnected · connect an account in Sources, or add a local item",
+    "error": "Refresh failed · retry or review the source in Sources",
     "refreshing": "Refreshing",
 }
 
@@ -3748,6 +3749,9 @@ class PersonalHubMainWindow(QMainWindow):
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
         self._build_shell()
+        application = QApplication.instance()
+        if application is not None:
+            application.focusChanged.connect(self._page_focus_changed)
         self.page_transition = PageTransition(self.pages)
 
         self.tray_controller = PersonalHubTrayController(self, icon=self.windowIcon())
@@ -3878,6 +3882,9 @@ class PersonalHubMainWindow(QMainWindow):
         self.mode_selector = QComboBox()
         self.mode_selector.setObjectName("workspaceModeSelector")
         self.mode_selector.setAccessibleName("Tracking or Logging mode")
+        mode_help = "Tracking: plan and review what needs attention. Logging: record progress and reflections."
+        self.mode_selector.setAccessibleDescription(mode_help)
+        self.mode_selector.setToolTip(mode_help)
         self.mode_selector.addItems(["Tracking", "Logging"])
         self.mode_selector.currentTextChanged.connect(self.set_workspace_mode)
         layout.addWidget(self.mode_selector)
@@ -4415,9 +4422,9 @@ class PersonalHubMainWindow(QMainWindow):
         header = QWidget()
         header.setObjectName("pageHeader")
         header.setAccessibleName(f"{destination} page header")
-        header_layout = QHBoxLayout(header)
+        header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(12)
+        header_layout.setSpacing(4)
 
         eyebrow = QLabel(destination.upper())
         eyebrow.setObjectName("pageEyebrow")
@@ -4432,6 +4439,7 @@ class PersonalHubMainWindow(QMainWindow):
         title.setObjectName("pageTitle")
         title.setAccessibleName(f"{destination} page title")
         title.setTextFormat(Qt.TextFormat.PlainText)
+        title.setWordWrap(True)
         header_layout.addWidget(title)
 
         subtitle = QLabel(description)
@@ -4440,7 +4448,7 @@ class PersonalHubMainWindow(QMainWindow):
         subtitle.setTextFormat(Qt.TextFormat.PlainText)
         subtitle.setWordWrap(True)
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        header_layout.addWidget(subtitle, 1)
+        header_layout.addWidget(subtitle)
         layout.addWidget(header)
         return eyebrow, title, subtitle
 
@@ -4451,7 +4459,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_eyebrow, self.today_title, self.today_subtitle = self._add_page_header(
             layout,
             TODAY_DESTINATION,
-            "Schedule, tasks, alerts, news, and source status.",
+            "See what needs attention. Plan in Tasks and Calendar; review alerts in Inbox.",
         )
         self._workspace_page_title_labels[HOME_DESTINATION] = self.today_title
         layout.addSpacing(10)
@@ -4495,6 +4503,18 @@ class PersonalHubMainWindow(QMainWindow):
         controls_layout.addWidget(self.today_appearance_button, 0, 4)
         layout.addWidget(controls)
 
+        actions = QHBoxLayout()
+        self.home_add_task_button = QPushButton("Add a task")
+        self.home_add_task_button.setAccessibleName("Go to Tasks to add a task")
+        self.home_add_task_button.clicked.connect(self._start_task_from_home)
+        actions.addWidget(self.home_add_task_button)
+        self.home_log_progress_button = QPushButton("Log progress")
+        self.home_log_progress_button.setAccessibleName("Open Logging to record progress")
+        self.home_log_progress_button.clicked.connect(self._start_progress_from_home)
+        actions.addWidget(self.home_log_progress_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
         self.today_sections_scroll = page
         self.dashboard = DashboardBoard()
         self.today_sections_container = self.dashboard
@@ -4507,6 +4527,14 @@ class PersonalHubMainWindow(QMainWindow):
         self.dashboard.open_requested.connect(self.show_destination)
         self._render_today_sections()
         return page
+
+    def _start_task_from_home(self) -> None:
+        self.show_destination("Tasks")
+        self.task_quick_add_input.setFocus()
+
+    def _start_progress_from_home(self) -> None:
+        self.show_destination("Activity")
+        self.logging_workspace.log_progress()
 
     def _today_section_summary(self, section: TodaySectionView) -> str:
         summary = section.body
@@ -4731,7 +4759,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._sync_dashboard_sections(self.dashboard.export_layout())
 
     def _build_calendar_page(self) -> QWidget:
-        page, layout = self._new_page("calendarPage", "Calendar page")
+        page, layout = self._new_page("calendarPage", "Calendar page", scrollable=True)
         self.calendar_page = page
         self._calendar_layout = layout
         _eyebrow, self.calendar_title, _subtitle = self._add_page_header(
@@ -4742,7 +4770,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._workspace_page_title_labels["Calendar"] = self.calendar_title
 
         item_actions = QHBoxLayout()
-        self.calendar_add_item_button = QPushButton("Add item")
+        self.calendar_add_item_button = QPushButton("Add calendar item")
         self.calendar_add_item_button.setObjectName("calendarAddItemButton")
         self.calendar_add_item_button.setAccessibleName("Add local calendar item")
         self.calendar_add_item_button.clicked.connect(self.calendar_item_create_requested.emit)
@@ -4759,7 +4787,8 @@ class PersonalHubMainWindow(QMainWindow):
 
         toolbar = QFrame()
         toolbar.setObjectName("calendarToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout = QGridLayout(toolbar)
+        self.calendar_toolbar_layout = toolbar_layout
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         toolbar_layout.setSpacing(8)
         self.calendar_previous_button = QPushButton("Previous")
@@ -4767,24 +4796,25 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_previous_button.setAccessibleName("Previous calendar period")
         self.calendar_previous_button.setAutoDefault(False)
         self.calendar_previous_button.clicked.connect(self.previous_calendar_period)
-        toolbar_layout.addWidget(self.calendar_previous_button)
+        toolbar_layout.addWidget(self.calendar_previous_button, 0, 0)
         self.calendar_today_button = QPushButton("Today")
         self.calendar_today_button.setObjectName("calendarTodayButton")
         self.calendar_today_button.setAccessibleName("Go to today")
         self.calendar_today_button.setAutoDefault(False)
         self.calendar_today_button.clicked.connect(self.go_to_calendar_today)
-        toolbar_layout.addWidget(self.calendar_today_button)
+        toolbar_layout.addWidget(self.calendar_today_button, 0, 1)
         self.calendar_next_button = QPushButton("Next")
         self.calendar_next_button.setObjectName("calendarNextButton")
         self.calendar_next_button.setAccessibleName("Next calendar period")
         self.calendar_next_button.setAutoDefault(False)
         self.calendar_next_button.clicked.connect(self.next_calendar_period)
-        toolbar_layout.addWidget(self.calendar_next_button)
+        toolbar_layout.addWidget(self.calendar_next_button, 0, 2)
         self.calendar_period_label = QLabel()
         self.calendar_period_label.setObjectName("calendarPeriodLabel")
         self.calendar_period_label.setAccessibleName("Calendar period")
         self.calendar_period_label.setTextFormat(Qt.TextFormat.PlainText)
-        toolbar_layout.addWidget(self.calendar_period_label, 1)
+        self.calendar_period_label.setWordWrap(True)
+        toolbar_layout.addWidget(self.calendar_period_label, 0, 3)
         self.calendar_mode_combo = QComboBox()
         self.calendar_mode_combo.setObjectName("calendarModeCombo")
         self.calendar_mode_combo.setAccessibleName("Calendar view mode")
@@ -4796,12 +4826,13 @@ class PersonalHubMainWindow(QMainWindow):
         ):
             self.calendar_mode_combo.addItem(label, value)
         self.calendar_mode_combo.currentIndexChanged.connect(self._calendar_mode_from_combo)
-        toolbar_layout.addWidget(self.calendar_mode_combo)
+        toolbar_layout.addWidget(self.calendar_mode_combo, 0, 4)
         self.calendar_timezone_label = QLabel()
         self.calendar_timezone_label.setObjectName("calendarTimezoneLabel")
         self.calendar_timezone_label.setAccessibleName("Calendar timezone")
         self.calendar_timezone_label.setTextFormat(Qt.TextFormat.PlainText)
-        toolbar_layout.addWidget(self.calendar_timezone_label)
+        self.calendar_timezone_label.setWordWrap(True)
+        toolbar_layout.addWidget(self.calendar_timezone_label, 0, 5)
         self.calendar_settings_button = QToolButton()
         self.calendar_settings_button.setObjectName("calendarSettingsButton")
         self.calendar_settings_button.setText("Calendars")
@@ -4814,7 +4845,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_settings_button.setCheckable(True)
         self.calendar_settings_button.setAutoRaise(True)
         self.calendar_settings_button.toggled.connect(self._toggle_calendar_settings)
-        toolbar_layout.addWidget(self.calendar_settings_button)
+        toolbar_layout.addWidget(self.calendar_settings_button, 0, 6)
         self.calendar_view_groups_button = QToolButton()
         self.calendar_view_groups_button.setObjectName("calendarViewGroupsButton")
         self.calendar_view_groups_button.setText("Views")
@@ -4824,7 +4855,7 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.calendar_view_groups_button.setAutoRaise(True)
         self.calendar_view_groups_button.clicked.connect(self._manage_workspace_calendar_views)
-        toolbar_layout.addWidget(self.calendar_view_groups_button)
+        toolbar_layout.addWidget(self.calendar_view_groups_button, 0, 7)
         layout.addWidget(toolbar)
         self.calendar_mode = self.calendar_mode_combo
         self.calendar_previous = self.calendar_previous_button
@@ -4838,6 +4869,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_freshness_label.setObjectName("calendarFreshnessLabel")
         self.calendar_freshness_label.setAccessibleName("Calendar freshness")
         self.calendar_freshness_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.calendar_freshness_label.setWordWrap(True)
         freshness_layout.addWidget(self.calendar_freshness_label)
         self.calendar_status_label = QLabel()
         self.calendar_status_label.setObjectName("calendarStatusLabel")
@@ -5131,6 +5163,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_content_splitter.addWidget(self.calendar_event_details_panel)
         self.calendar_content_splitter.setStretchFactor(0, 1)
         self.calendar_content_splitter.setStretchFactor(1, 0)
+        self.calendar_view_stack.setMinimumHeight(260)
         layout.addWidget(self.calendar_content_splitter, 1)
 
         self._render_calendar_sources()
@@ -6100,19 +6133,19 @@ class PersonalHubMainWindow(QMainWindow):
             )
 
     def _build_tasks_page(self) -> QWidget:
-        page, layout = self._new_page("tasksPage", "Tasks page")
+        page, layout = self._new_page("tasksPage", "Tasks page", scrollable=True)
         self.tasks_page = page
         self._tasks_layout = layout
         _eyebrow, self.tasks_title, _subtitle = self._add_page_header(
             layout,
             "Tasks",
-            "Add and manage local tasks.",
+            "Add a title and press Enter. Use a task's … menu to edit details; completions appear in Logging.",
         )
         self._workspace_page_title_labels["Tasks"] = self.tasks_title
 
         quick_add = QFrame()
         quick_add.setObjectName("taskQuickAdd")
-        quick_layout = QHBoxLayout(quick_add)
+        quick_layout = QGridLayout(quick_add)
         quick_layout.setContentsMargins(12, 10, 12, 10)
         quick_layout.setSpacing(8)
         self.task_quick_add_input = QLineEdit()
@@ -6123,13 +6156,13 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.task_quick_add_input.setPlaceholderText("Quick add a task")
         self.task_quick_add_input.returnPressed.connect(self._quick_add_task)
-        quick_layout.addWidget(self.task_quick_add_input, 1)
+        quick_layout.addWidget(self.task_quick_add_input, 0, 0, 1, 3)
         self.task_quick_add_button = QPushButton("Add task")
         self.task_quick_add_button.setObjectName("taskQuickAddButton")
         self.task_quick_add_button.setAccessibleName("Add task")
         self.task_quick_add_button.setAutoDefault(False)
         self.task_quick_add_button.clicked.connect(self._quick_add_task)
-        quick_layout.addWidget(self.task_quick_add_button)
+        quick_layout.addWidget(self.task_quick_add_button, 1, 0)
         self.task_import_button = QPushButton("Import")
         self.task_import_button.setObjectName("taskImportButton")
         self.task_import_button.setAccessibleName("Import tasks")
@@ -6138,7 +6171,7 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.task_import_button.setAutoDefault(False)
         self.task_import_button.clicked.connect(lambda: self.task_import_requested.emit())
-        quick_layout.addWidget(self.task_import_button)
+        quick_layout.addWidget(self.task_import_button, 1, 1)
         self.task_list_create_button = QPushButton("New list")
         self.task_list_create_button.setObjectName("taskListCreateButton")
         self.task_list_create_button.setAccessibleName("Create a task list")
@@ -6149,7 +6182,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_list_create_button.clicked.connect(
             lambda _checked=False: self.task_list_create_requested.emit()
         )
-        quick_layout.addWidget(self.task_list_create_button)
+        quick_layout.addWidget(self.task_list_create_button, 1, 2)
         layout.addWidget(quick_add)
         # Short aliases make the quick-add surface easy to discover in tests
         # and by composition code without adding another abstraction layer.
@@ -6159,7 +6192,7 @@ class PersonalHubMainWindow(QMainWindow):
 
         task_view_bar = QWidget()
         task_view_bar.setObjectName("taskViewBar")
-        task_view_layout = QHBoxLayout(task_view_bar)
+        task_view_layout = QGridLayout(task_view_bar)
         task_view_layout.setContentsMargins(0, 0, 0, 0)
         task_view_layout.setSpacing(8)
 
@@ -6185,7 +6218,7 @@ class PersonalHubMainWindow(QMainWindow):
             )
             self.task_quick_view_actions[value] = action
         self.task_quick_view_button.setMenu(self.task_quick_view_menu)
-        task_view_layout.addWidget(self.task_quick_view_button)
+        task_view_layout.addWidget(self.task_quick_view_button, 1, 0)
 
         self.task_state_filter = QComboBox()
         self.task_state_filter.setObjectName("taskStateFilter")
@@ -6232,7 +6265,8 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_filter_input.setAccessibleName("Filter tasks")
         self.task_filter_input.setPlaceholderText("Search tasks")
         self.task_filter_input.textChanged.connect(self._task_filters_changed)
-        task_view_layout.addWidget(self.task_filter_input, 1)
+        task_view_layout.addWidget(self.task_filter_input, 0, 0, 1, 3)
+        self.task_filter_input.setClearButtonEnabled(True)
         self.task_search_input = self.task_filter_input
         self.task_filter = self.task_filter_input
 
@@ -6244,7 +6278,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_filters_button.setCheckable(True)
         self.task_filters_button.setAutoRaise(True)
         self.task_filters_button.toggled.connect(self._toggle_task_filters)
-        task_view_layout.addWidget(self.task_filters_button)
+        task_view_layout.addWidget(self.task_filters_button, 1, 1)
 
         self.task_undo_button = QToolButton()
         self.task_undo_button.setObjectName("taskUndoButton")
@@ -6254,18 +6288,19 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_undo_button.setAutoRaise(True)
         self.task_undo_button.clicked.connect(lambda _checked=False: self.undo_task())
         self.task_undo_button.setVisible(False)
-        task_view_layout.addWidget(self.task_undo_button)
+        task_view_layout.addWidget(self.task_undo_button, 1, 2)
         self.task_undo_action = self.task_undo_button
         layout.addWidget(task_view_bar)
 
         filters = QFrame()
         filters.setObjectName("taskFilters")
-        filters_layout = QHBoxLayout(filters)
+        filters_layout = QFormLayout(filters)
+        filters_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         filters_layout.setContentsMargins(10, 8, 10, 8)
         filters_layout.setSpacing(8)
-        filters_layout.addWidget(self.task_state_filter)
-        filters_layout.addWidget(self.task_due_filter)
-        filters_layout.addWidget(self.task_sort_combo)
+        filters_layout.addRow("State", self.task_state_filter)
+        filters_layout.addRow("Due date", self.task_due_filter)
+        filters_layout.addRow("Sort by", self.task_sort_combo)
         filters.setVisible(False)
         self.task_filters_panel = filters
         layout.addWidget(filters)
@@ -6274,7 +6309,16 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_status_label.setObjectName("taskStatusLabel")
         self.task_status_label.setAccessibleName("Task list status")
         self.task_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.task_status_label.setWordWrap(True)
         layout.addWidget(self.task_status_label)
+        self.task_reset_filters_button = QPushButton("Clear task filters")
+        self.task_reset_filters_button.setAccessibleName(
+            "Clear search, state, and due-date task filters"
+        )
+        self.task_reset_filters_button.clicked.connect(
+            lambda: self.set_task_filters(state="all", due="all", search="")
+        )
+        layout.addWidget(self.task_reset_filters_button)
 
         self.tasks_list = TaskListWidget()
         self.tasks_list.setObjectName("tasksList")
@@ -6282,6 +6326,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.tasks_list.setSpacing(6)
         self.tasks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.tasks_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tasks_list.setMinimumHeight(120)
         self.task_list = self.tasks_list
         self.task_list_widget = self.tasks_list
 
@@ -6305,7 +6350,17 @@ class PersonalHubMainWindow(QMainWindow):
         panel.setObjectName("taskEditorPanel")
         panel.setAccessibleName("Task editor")
         panel.setFrameShape(QFrame.Shape.StyledPanel)
-        outer = QVBoxLayout(panel)
+        panel.setMinimumHeight(260)
+        shell = QVBoxLayout(panel)
+        shell.setContentsMargins(0, 0, 0, 0)
+        self.task_editor_scroll = QScrollArea()
+        self.task_editor_scroll.setWidgetResizable(True)
+        self.task_editor_scroll.setAccessibleName("Scrollable task editor")
+        content = QWidget()
+        self.task_editor_scroll.setWidget(content)
+        shell.addWidget(self.task_editor_scroll)
+        outer = QVBoxLayout(content)
+        outer.setSizeConstraint(QVBoxLayout.SizeConstraint.SetMinimumSize)
         outer.setContentsMargins(16, 13, 16, 13)
         outer.setSpacing(8)
 
@@ -6315,69 +6370,62 @@ class PersonalHubMainWindow(QMainWindow):
         heading.setTextFormat(Qt.TextFormat.PlainText)
         self.task_editor_title_label = heading
         outer.addWidget(heading)
-        self.task_editor_status_label = QLabel("")
+        self.task_editor_status_label = StatusLabel("")
         self.task_editor_status_label.setObjectName("taskEditorStatus")
         self.task_editor_status_label.setAccessibleName("Task editor status")
         self.task_editor_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.task_editor_status_label.setWordWrap(True)
         outer.addWidget(self.task_editor_status_label)
 
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(6)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        instructions = QLabel("Title is required. All other details are optional.")
+        instructions.setWordWrap(True)
+        outer.addWidget(instructions)
         outer.addLayout(form)
 
-        def add_label(text: str, row: int, column: int = 0) -> None:
-            label = QLabel(text)
-            label.setObjectName("taskFieldLabel")
-            label.setAccessibleName(f"{text} field")
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            form.addWidget(label, row, column)
-
-        add_label("Title", 0)
         self.task_title_input = QLineEdit()
         self.task_title_input.setObjectName("taskTitleInput")
         self.task_title_input.setAccessibleName("Task title")
-        form.addWidget(self.task_title_input, 0, 1, 1, 3)
+        form.addRow("Title (required)", self.task_title_input)
 
-        add_label("Notes", 1)
         self.task_notes_input = QPlainTextEdit()
         self.task_notes_input.setObjectName("taskNotesInput")
         self.task_notes_input.setAccessibleName("Task notes")
+        self.task_notes_input.setTabChangesFocus(True)
         self.task_notes_input.setMaximumHeight(72)
-        form.addWidget(self.task_notes_input, 1, 1, 1, 3)
+        form.addRow("Notes (optional)", self.task_notes_input)
         self.task_notes_editor = self.task_notes_input
         self.task_notes_edit = self.task_notes_input
         self.task_notes = self.task_notes_input
 
-        add_label("Due", 2)
         self.task_due_input = QDateTimeEdit(QDateTime.currentDateTime())
         self.task_due_input.setObjectName("taskDueInput")
         self.task_due_input.setAccessibleName("Task due date and time")
         self.task_due_input.setCalendarPopup(True)
         self.task_due_input.calendarWidget().setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
-        form.addWidget(self.task_due_input, 2, 1)
+        form.addRow("Due date and time", self.task_due_input)
         self.task_due_edit = self.task_due_input
         self.task_due_date_input = self.task_due_input
         self.task_due = self.task_due_input
-        self.task_has_due_input = QCheckBox("Scheduled")
+        self.task_has_due_input = QCheckBox("Set a due date")
         self.task_has_due_input.setObjectName("taskHasDueInput")
         self.task_has_due_input.setAccessibleName("Task has due date")
-        form.addWidget(self.task_has_due_input, 2, 2)
+        form.addRow("Due date (optional)", self.task_has_due_input)
         self.task_all_day_input = QCheckBox("All day")
         self.task_all_day_input.setObjectName("taskAllDayInput")
         self.task_all_day_input.setAccessibleName("Task all-day due date")
-        form.addWidget(self.task_all_day_input, 2, 3)
+        form.addRow("", self.task_all_day_input)
         self.task_all_day_checkbox = self.task_all_day_input
         self.task_all_day = self.task_all_day_input
 
-        add_label("Timezone", 3)
         self.task_timezone_input = TimezoneComboBox(include_local=True)
         self.task_timezone_input.setObjectName("taskTimezoneInput")
         self.task_timezone_input.setAccessibleName("Task timezone")
-        form.addWidget(self.task_timezone_input, 3, 1)
+        form.addRow("Timezone", self.task_timezone_input)
         self.task_timezone_edit = self.task_timezone_input
         self.task_timezone = self.task_timezone_input
-        add_label("Priority", 3, 2)
         self.task_priority_input = QComboBox()
         self.task_priority_input.setObjectName("taskPriorityInput")
         self.task_priority_input.setAccessibleName("Task priority")
@@ -6388,41 +6436,37 @@ class PersonalHubMainWindow(QMainWindow):
             ("High", "high"),
         ):
             self.task_priority_input.addItem(label, value)
-        form.addWidget(self.task_priority_input, 3, 3)
+        form.addRow("Priority", self.task_priority_input)
         self.task_priority_combo = self.task_priority_input
         self.task_priority = self.task_priority_input
 
-        add_label("List", 4)
         self.task_list_input = QLineEdit()
         self.task_list_input.setObjectName("taskListInput")
         self.task_list_input.setAccessibleName("Task list")
-        form.addWidget(self.task_list_input, 4, 1)
+        form.addRow("List (optional)", self.task_list_input)
         self.task_list_edit = self.task_list_input
         self.task_list_field = self.task_list_input
-        add_label("Tags", 4, 2)
         self.task_tags_input = QLineEdit()
         self.task_tags_input.setObjectName("taskTagsInput")
         self.task_tags_input.setAccessibleName("Task tags")
         self.task_tags_input.setPlaceholderText("work, errands")
-        form.addWidget(self.task_tags_input, 4, 3)
+        form.addRow("Tags (comma separated)", self.task_tags_input)
         self.task_tags_edit = self.task_tags_input
         self.task_tags = self.task_tags_input
 
-        add_label("Recurrence", 5)
         self.task_recurrence_input = QComboBox()
         self.task_recurrence_input.setObjectName("taskRecurrenceInput")
         self.task_recurrence_input.setAccessibleName("Task recurrence")
         self.task_recurrence_input.setEditable(True)
         self.task_recurrence_input.addItems(("", "Daily", "Weekly", "Monthly", "Yearly"))
-        form.addWidget(self.task_recurrence_input, 5, 1)
+        form.addRow("Repeat (optional)", self.task_recurrence_input)
         self.task_recurrence_combo = self.task_recurrence_input
         self.task_recurrence = self.task_recurrence_input
-        add_label("Reminders", 5, 2)
         self.task_reminders_input = QLineEdit()
         self.task_reminders_input.setObjectName("taskRemindersInput")
         self.task_reminders_input.setAccessibleName("Task reminders")
         self.task_reminders_input.setPlaceholderText("minutes before, comma separated")
-        form.addWidget(self.task_reminders_input, 5, 3)
+        form.addRow("Reminders (minutes before)", self.task_reminders_input)
         self.task_reminders_edit = self.task_reminders_input
         self.task_reminders = self.task_reminders_input
 
@@ -6441,8 +6485,23 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_save_button.clicked.connect(self._save_task_edit)
         buttons.addWidget(self.task_save_button)
         outer.addLayout(buttons)
+        outer.addStretch(1)
         panel.hide()
         return panel
+
+    def _page_focus_changed(self, _previous: QWidget, focused: QWidget) -> None:
+        if focused is not None and self.isAncestorOf(focused):
+            # Reveal inner scroll areas before their enclosing page, after Qt
+            # settles layout and focus geometry. This also covers direct shortcuts.
+            QTimer.singleShot(0, self._reveal_focused_control)
+
+    def _reveal_focused_control(self) -> None:
+        focused = self.focusWidget()
+        ancestor = focused.parentWidget() if focused is not None else None
+        while ancestor is not None and ancestor is not self:
+            if isinstance(ancestor, QScrollArea):
+                ancestor.ensureWidgetVisible(focused, 12, 12)
+            ancestor = ancestor.parentWidget()
 
     @property
     def today_view(self) -> TodayView:
@@ -6772,6 +6831,12 @@ class PersonalHubMainWindow(QMainWindow):
         if not hasattr(self, "tasks_list"):
             return
         visible_tasks = [task for task in self._tasks.values() if self._task_matches(task)]
+        filtering = bool(
+            self._task_search_value
+            or self._task_state_filter_value != "all"
+            or self._task_due_filter_value != "all"
+        )
+        self.task_reset_filters_button.setVisible(filtering)
         visible_tasks.sort(key=self._task_sort_key)
         selected_id = None
         selected = self.tasks_list.currentItem()
@@ -6796,7 +6861,9 @@ class PersonalHubMainWindow(QMainWindow):
                 fallback="this list",
             )
             if not list_tasks:
-                self.task_status_label.setText(f"No tasks in {list_name} yet.")
+                self.task_status_label.setText(
+                    f"No tasks in {list_name} yet. Add a title above to begin."
+                )
             elif not visible_tasks:
                 self.task_status_label.setText("No tasks in this list match the selected filters.")
             else:
@@ -6804,13 +6871,22 @@ class PersonalHubMainWindow(QMainWindow):
                     f"{len(visible_tasks)} of {len(list_tasks)} tasks in {list_name}"
                 )
         elif not self._tasks:
-            self.task_status_label.setText("No tasks yet.")
+            self.task_status_label.setText(
+                "No tasks yet. Add a title above and press Enter to begin."
+            )
         elif not visible_tasks:
-            self.task_status_label.setText("No tasks match the selected filters.")
+            self.task_status_label.setText(
+                "No tasks match. Clear task filters to see your tasks again."
+            )
         else:
             self.task_status_label.setText(
                 f"{len(visible_tasks)} of {len(self._tasks)} task"
                 f"{'s' if len(self._tasks) != 1 else ''}"
+            )
+        if filtering:
+            self.task_status_label.setText(
+                self.task_status_label.text()
+                + f" · State: {self.task_state_filter.currentText()} · Due: {self.task_due_filter.currentText()}"
             )
         for task in visible_tasks:
             item = QListWidgetItem()
@@ -7169,6 +7245,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.news_freshness_label.setObjectName("newsFreshnessLabel")
         self.news_freshness_label.setAccessibleName("News freshness")
         self.news_freshness_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.news_freshness_label.setWordWrap(True)
         toolbar_layout.addWidget(self.news_freshness_label)
         self.news_status_label = QLabel()
         self.news_status_label.setObjectName("newsStatusLabel")
@@ -7416,27 +7493,34 @@ class PersonalHubMainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("webWatchPanel")
         panel.setAccessibleName("Deal, restock, and webpage watches")
-        grid = QGridLayout(panel)
+        grid = QVBoxLayout(panel)
         grid.setContentsMargins(12, 10, 12, 10)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        grid.setSpacing(8)
         title = QLabel("Web watches")
         title.setObjectName("webWatchTitle")
         title.setTextFormat(Qt.TextFormat.PlainText)
-        grid.addWidget(title, 0, 0, 1, 6)
+        grid.addWidget(title)
+        help_text = QLabel(
+            "Track a public page, price, or restock. The first successful check establishes a baseline; later changes can create Inbox alerts."
+        )
+        help_text.setWordWrap(True)
+        help_text.setTextFormat(Qt.TextFormat.PlainText)
+        grid.addWidget(help_text)
+        self.watch_form = QFormLayout()
+        self.watch_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.watch_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        grid.addLayout(self.watch_form)
 
         self.watch_name_input = QLineEdit()
         self.watch_name_input.setObjectName("watchNameInput")
         self.watch_name_input.setAccessibleName("Watch name")
         self.watch_name_input.setPlaceholderText("Watch name")
         self.watch_name_input.setMaxLength(240)
-        grid.addWidget(self.watch_name_input, 1, 0, 1, 3)
         self.watch_url_input = QLineEdit()
         self.watch_url_input.setObjectName("watchUrlInput")
         self.watch_url_input.setAccessibleName("Exact watched webpage URL")
         self.watch_url_input.setPlaceholderText("https://shop.example/product")
         self.watch_url_input.setMaxLength(2_048)
-        grid.addWidget(self.watch_url_input, 1, 3, 1, 3)
 
         self.watch_kind_combo = QComboBox()
         self.watch_kind_combo.setObjectName("watchKindCombo")
@@ -7449,7 +7533,6 @@ class PersonalHubMainWindow(QMainWindow):
             ("changedetection.io", "changedetection"),
         ):
             self.watch_kind_combo.addItem(label, value)
-        grid.addWidget(self.watch_kind_combo, 2, 0, 1, 3)
         self.watch_condition_combo = QComboBox()
         self.watch_condition_combo.setObjectName("watchConditionCombo")
         self.watch_condition_combo.setAccessibleName("Typed watch condition")
@@ -7461,36 +7544,30 @@ class PersonalHubMainWindow(QMainWindow):
             ("Restocked", "restocked"),
         ):
             self.watch_condition_combo.addItem(label, value)
-        grid.addWidget(self.watch_condition_combo, 2, 3, 1, 3)
         self.watch_threshold_input = QLineEdit()
         self.watch_threshold_input.setObjectName("watchThresholdInput")
         self.watch_threshold_input.setAccessibleName("Price threshold or percentage")
         self.watch_threshold_input.setPlaceholderText("threshold or %")
         self.watch_threshold_input.setMaxLength(16)
-        grid.addWidget(self.watch_threshold_input, 3, 0, 1, 2)
         self.watch_term_input = QLineEdit()
         self.watch_term_input.setObjectName("watchTermInput")
         self.watch_term_input.setAccessibleName("Watch match term")
         self.watch_term_input.setPlaceholderText("term")
         self.watch_term_input.setMaxLength(240)
-        grid.addWidget(self.watch_term_input, 3, 2, 1, 2)
         self.watch_selector_input = QLineEdit()
         self.watch_selector_input.setObjectName("watchSelectorInput")
         self.watch_selector_input.setAccessibleName("Inert webpage selector")
         self.watch_selector_input.setPlaceholderText("#stock or [itemprop=price]")
         self.watch_selector_input.setMaxLength(240)
-        grid.addWidget(self.watch_selector_input, 3, 4, 1, 2)
 
         self.watch_interval_input = QLineEdit("60")
         self.watch_interval_input.setObjectName("watchIntervalInput")
         self.watch_interval_input.setAccessibleName("Watch refresh interval in minutes")
         self.watch_interval_input.setMaxLength(4)
-        grid.addWidget(self.watch_interval_input, 4, 0)
         self.watch_cooldown_input = QLineEdit("60")
         self.watch_cooldown_input.setObjectName("watchCooldownInput")
         self.watch_cooldown_input.setAccessibleName("Watch alert cooldown in minutes")
         self.watch_cooldown_input.setMaxLength(5)
-        grid.addWidget(self.watch_cooldown_input, 4, 1)
         self.watch_notification_combo = QComboBox()
         self.watch_notification_combo.setObjectName("watchNotificationCombo")
         self.watch_notification_combo.setAccessibleName("Watch notification policy")
@@ -7500,45 +7577,59 @@ class PersonalHubMainWindow(QMainWindow):
             ("Inbox only", "inbox_only"),
         ):
             self.watch_notification_combo.addItem(label, value)
-        grid.addWidget(self.watch_notification_combo, 4, 2, 1, 2)
         self.watch_enabled_checkbox = QCheckBox("Enabled")
         self.watch_enabled_checkbox.setObjectName("watchEnabledCheckBox")
         self.watch_enabled_checkbox.setChecked(True)
-        grid.addWidget(self.watch_enabled_checkbox, 4, 4)
         self.watch_http_checkbox = QCheckBox("Approve HTTP")
         self.watch_http_checkbox.setObjectName("watchHttpCheckBox")
         self.watch_http_checkbox.setAccessibleDescription(
             "Allow the exact HTTP origin only when the global Hub policy also permits it."
         )
-        grid.addWidget(self.watch_http_checkbox, 4, 5)
 
-        buttons = QHBoxLayout()
+        for label, control in (
+            ("Name (required)", self.watch_name_input),
+            ("Public webpage URL (required)", self.watch_url_input),
+            ("Watch type", self.watch_kind_combo),
+            ("Alert when", self.watch_condition_combo),
+            ("Price threshold or decrease (%)", self.watch_threshold_input),
+            ("Match term (required)", self.watch_term_input),
+            ("Page selector", self.watch_selector_input),
+            ("Check every (minutes)", self.watch_interval_input),
+            ("Wait between alerts (minutes)", self.watch_cooldown_input),
+            ("Notify me", self.watch_notification_combo),
+            ("", self.watch_enabled_checkbox),
+            ("", self.watch_http_checkbox),
+        ):
+            self.watch_form.addRow(label, control)
+        self.watch_kind_combo.currentIndexChanged.connect(self._update_watch_field_visibility)
+        self.watch_condition_combo.currentIndexChanged.connect(self._update_watch_field_visibility)
+        self._update_watch_field_visibility()
+        buttons = QGridLayout()
         self.watch_test_button = QPushButton("Test now")
         self.watch_test_button.setObjectName("watchTestButton")
         self.watch_test_button.clicked.connect(self.request_test_watch)
-        buttons.addWidget(self.watch_test_button)
+        buttons.addWidget(self.watch_test_button, 0, 0)
         self.watch_cancel_button = QPushButton("Cancel")
         self.watch_cancel_button.setObjectName("watchCancelButton")
         self.watch_cancel_button.clicked.connect(self.cancel_watch_edit)
-        buttons.addWidget(self.watch_cancel_button)
+        buttons.addWidget(self.watch_cancel_button, 0, 1)
         self.watch_remove_button = QPushButton("Remove")
         self.watch_remove_button.setObjectName("watchRemoveButton")
         self.watch_remove_button.setEnabled(False)
         self.watch_remove_button.clicked.connect(self.request_delete_watch)
-        buttons.addWidget(self.watch_remove_button)
+        buttons.addWidget(self.watch_remove_button, 1, 0)
         self.watch_save_button = QPushButton("Add watch")
         self.watch_save_button.setObjectName("watchSaveButton")
         self.watch_save_button.clicked.connect(self._request_save_watch)
-        buttons.addWidget(self.watch_save_button)
-        buttons.addStretch(1)
-        grid.addLayout(buttons, 5, 0, 1, 6)
+        buttons.addWidget(self.watch_save_button, 1, 1)
+        grid.addLayout(buttons)
 
-        self.watch_editor_status = QLabel()
+        self.watch_editor_status = StatusLabel()
         self.watch_editor_status.setObjectName("watchEditorStatus")
         self.watch_editor_status.setAccessibleName("Watch validation or test result")
         self.watch_editor_status.setTextFormat(Qt.TextFormat.PlainText)
         self.watch_editor_status.setWordWrap(True)
-        grid.addWidget(self.watch_editor_status, 6, 0, 1, 6)
+        grid.addWidget(self.watch_editor_status)
         self.watch_list = QListWidget()
         self.watch_list.setObjectName("watchList")
         self.watch_list.setAccessibleName("Configured webpage watches")
@@ -7546,14 +7637,24 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_list.itemDoubleClicked.connect(
             lambda item: self.edit_watch(item.data(Qt.ItemDataRole.UserRole))
         )
-        grid.addWidget(self.watch_list, 7, 0, 1, 6)
+        grid.addWidget(self.watch_list)
         self.watch_alerts_label = QLabel("No watch alerts.")
         self.watch_alerts_label.setObjectName("watchAlertsLabel")
         self.watch_alerts_label.setTextFormat(Qt.TextFormat.PlainText)
         self.watch_alerts_label.setWordWrap(True)
-        grid.addWidget(self.watch_alerts_label, 8, 0, 1, 6)
+        grid.addWidget(self.watch_alerts_label)
         layout.addWidget(panel)
         self.web_watch_panel = panel
+
+    def _update_watch_field_visibility(self, *_args: object) -> None:
+        condition = self.watch_condition_combo.currentData()
+        self.watch_form.setRowVisible(
+            self.watch_threshold_input, condition in {"price_below", "percentage_decrease"}
+        )
+        self.watch_form.setRowVisible(self.watch_term_input, condition == "contains")
+        self.watch_form.setRowVisible(
+            self.watch_selector_input, self.watch_kind_combo.currentData() == "page_selector"
+        )
 
     def _validated_watch_payload(
         self,
@@ -8664,7 +8765,9 @@ class PersonalHubMainWindow(QMainWindow):
         alerts_layout.setContentsMargins(4, 8, 4, 4)
         alerts_layout.setSpacing(8)
 
-        self.inbox_status_label = QLabel("No attention items yet.")
+        self.inbox_status_label = QLabel(
+            "No alerts yet. Task reminders, watch changes, and source problems appear here."
+        )
         self.inbox_status_label.setObjectName("pageSubtitle")
         self.inbox_status_label.setAccessibleName("Inbox status")
         self.inbox_status_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -8685,6 +8788,9 @@ class PersonalHubMainWindow(QMainWindow):
         inbox_actions.addWidget(self.inbox_read_button)
         self.inbox_dismiss_button = QPushButton("Dismiss")
         self.inbox_dismiss_button.setAccessibleName("Dismiss selected Inbox item")
+        self.inbox_dismiss_button.setToolTip(
+            "Dismiss this Hub alert. Its task, watch, or source is kept."
+        )
         self.inbox_dismiss_button.setEnabled(False)
         self.inbox_dismiss_button.clicked.connect(
             lambda: self._request_selected_inbox_state("dismissed")
@@ -8846,11 +8952,11 @@ class PersonalHubMainWindow(QMainWindow):
         return page
 
     def _build_sources_page(self) -> QWidget:
-        page, layout = self._new_page("sourcesPage", "Sources page")
+        page, layout = self._new_page("sourcesPage", "Sources page", scrollable=True)
         self._add_page_header(
             layout,
             "Sources",
-            "Manage connected inputs and view their health.",
+            "Select a platform, then Connect / Configure. Connections are optional; local tasks and Logging work offline.",
         )
         self.sources_status_label = QLabel("No sources connected.")
         self.sources_status_label.setObjectName("pageSubtitle")
@@ -8863,43 +8969,48 @@ class PersonalHubMainWindow(QMainWindow):
         self.sources_list.setAccessibleName("Configured sources")
         self.sources_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.sources_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.sources_list.setMinimumHeight(160)
         self.sources_list.currentItemChanged.connect(self._source_selection_changed)
         layout.addWidget(self.sources_list, 1)
-        actions = QHBoxLayout()
+        self.source_guidance_label = QLabel("Select a source to see its status and next step.")
+        self.source_guidance_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.source_guidance_label.setWordWrap(True)
+        self.source_guidance_label.setAccessibleName("Selected source next step")
+        layout.addWidget(self.source_guidance_label)
+        actions = QGridLayout()
         self.source_configure_button = QPushButton("Connect / Configure")
         self.source_configure_button.setObjectName("sourceConfigureButton")
         self.source_configure_button.setAccessibleName("Connect or configure selected platform")
         self.source_configure_button.clicked.connect(
             lambda: self._emit_selected_source(self.platform_configure_requested)
         )
-        actions.addWidget(self.source_configure_button)
+        actions.addWidget(self.source_configure_button, 0, 0)
         self.source_refresh_button = QPushButton("Refresh")
         self.source_refresh_button.setObjectName("sourceRefreshButton")
         self.source_refresh_button.setAccessibleName("Refresh selected source")
         self.source_refresh_button.clicked.connect(
             lambda: self._emit_selected_source(self.source_refresh_requested)
         )
-        actions.addWidget(self.source_refresh_button)
+        actions.addWidget(self.source_refresh_button, 0, 1)
         self.source_reconnect_button = QPushButton("Reconnect")
         self.source_reconnect_button.setObjectName("sourceReconnectButton")
         self.source_reconnect_button.setAccessibleName("Reconnect selected source")
         self.source_reconnect_button.clicked.connect(
             lambda: self._emit_selected_source(self.source_reconnect_requested)
         )
-        actions.addWidget(self.source_reconnect_button)
+        actions.addWidget(self.source_reconnect_button, 1, 0)
         self.source_enable_button = QPushButton("Disable")
         self.source_enable_button.setObjectName("sourceEnableButton")
         self.source_enable_button.setAccessibleName("Disable selected source")
         self.source_enable_button.clicked.connect(self._toggle_selected_source_enabled)
-        actions.addWidget(self.source_enable_button)
+        actions.addWidget(self.source_enable_button, 1, 1)
         self.source_disconnect_button = QPushButton("Disconnect")
         self.source_disconnect_button.setObjectName("sourceDisconnectButton")
         self.source_disconnect_button.setAccessibleName("Disconnect selected source")
         self.source_disconnect_button.clicked.connect(
             lambda: self._emit_selected_source(self.source_disconnect_requested)
         )
-        actions.addWidget(self.source_disconnect_button)
-        actions.addStretch(1)
+        actions.addWidget(self.source_disconnect_button, 2, 0)
         layout.addLayout(actions)
         self._source_selection_changed()
         return page
@@ -8931,6 +9042,13 @@ class PersonalHubMainWindow(QMainWindow):
         settings_card = QFrame()
         settings_card.setObjectName("todayCard")
         settings_card.setAccessibleName("Personal Hub settings summary")
+        self.settings_summary_button = QToolButton()
+        self.settings_summary_button.setText("Current settings")
+        self.settings_summary_button.setAccessibleName("Show or hide current saved settings")
+        self.settings_summary_button.setCheckable(True)
+        self.settings_summary_button.toggled.connect(settings_card.setVisible)
+        layout.addWidget(self.settings_summary_button)
+        settings_card.hide()
         settings_layout = QVBoxLayout(settings_card)
         settings_layout.setContentsMargins(20, 16, 20, 16)
         settings_layout.setSpacing(0)
@@ -9049,7 +9167,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_save_button.setAccessibleName("Save Personal Hub settings")
         self.settings_save_button.clicked.connect(self._request_settings_save)
         settings_actions.addWidget(self.settings_save_button)
-        self.settings_save_status_label = QLabel()
+        self.settings_save_status_label = StatusLabel()
         self.settings_save_status_label.setObjectName("pageSubtitle")
         self.settings_save_status_label.setAccessibleName("Settings save confirmation")
         self.settings_save_status_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -9216,12 +9334,43 @@ class PersonalHubMainWindow(QMainWindow):
     def _set_responsive_mode(self, compact: bool) -> None:
         compact = bool(compact)
         self._compact_navigation = compact
+        self.logging_workspace.set_compact(compact)
         self.brand_title.setText("Hub" if compact else APPLICATION_NAME)
         self.navigation_caption.setVisible(not compact)
         self.workspace_navigation_label.setVisible(not compact)
         self.management_navigation_label.setVisible(not compact)
         self.management_navigation_separator.setVisible(not compact)
         self.workspace_customize_button.setText("Edit" if compact else "Customize")
+        self.task_content_splitter.setOrientation(
+            Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+        )
+        self.watch_form.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapAllRows
+            if compact
+            else QFormLayout.RowWrapPolicy.WrapLongRows
+        )
+        self.calendar_content_splitter.setOrientation(
+            Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+        )
+        calendar_controls = (
+            self.calendar_previous_button,
+            self.calendar_today_button,
+            self.calendar_next_button,
+            self.calendar_period_label,
+            self.calendar_mode_combo,
+            self.calendar_timezone_label,
+            self.calendar_settings_button,
+            self.calendar_view_groups_button,
+        )
+        for widget in calendar_controls:
+            self.calendar_toolbar_layout.removeWidget(widget)
+        positions = (
+            ((0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (2, 1), (3, 0), (3, 1))
+            if compact
+            else tuple((0, index) for index in range(len(calendar_controls)))
+        )
+        for widget, (row, column) in zip(calendar_controls, positions, strict=True):
+            self.calendar_toolbar_layout.addWidget(widget, row, column)
         if hasattr(self, "today_controls_layout"):
             controls = (
                 self.today_date_label,
@@ -9446,6 +9595,7 @@ class PersonalHubMainWindow(QMainWindow):
                 )
         if sync_tray:
             self.tray_controller.set_network_refresh_paused(paused, emit=False)
+        self._source_selection_changed()
         self._update_status()
         if changed:
             self.network_pause_changed.emit(paused)
@@ -9473,6 +9623,7 @@ class PersonalHubMainWindow(QMainWindow):
                 )
         if sync_tray:
             self.tray_controller.set_offline_mode(enabled, emit=False)
+        self._source_selection_changed()
         self._render_mini_calendar()
         self._update_status()
         if changed and emit:
@@ -9599,7 +9750,11 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _open_attention_notification(self) -> None:
         notice = self._attention_notification
-        if notice is None or self._locked:
+        if self._locked:
+            return
+        if notice is None:
+            if self._source_failures:
+                self.show_destination("Sources")
             return
         self.attention_notification_open_requested.emit(notice)
         self.clear_attention_notification()
@@ -9629,7 +9784,9 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.inbox_list.clear()
         if not self._inbox_items:
-            self.inbox_status_label.setText("No attention items yet.")
+            self.inbox_status_label.setText(
+                "No alerts yet. Task reminders, watch changes, and source problems appear here. Select Messages for connected mail and chat summaries."
+            )
             self._inbox_selection_changed(None, None)
             self._update_inbox_tab_labels()
             return
@@ -9900,11 +10057,13 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.sources_list.clear()
         if not self._sources:
-            self.sources_status_label.setText("No sources connected.")
+            self.sources_status_label.setText(
+                "No sources available. You can still use Tasks, local Calendar items, and Logging."
+            )
             self._source_selection_changed()
             return
         self.sources_status_label.setText(
-            f"{len(self._sources)} source{'s' if len(self._sources) != 1 else ''} configured."
+            f"{len(self._sources)} source{'s' if len(self._sources) != 1 else ''} available. Select one to connect or review its status."
         )
         for source in self._sources:
             name = self._display_text(
@@ -9912,7 +10071,7 @@ class PersonalHubMainWindow(QMainWindow):
                 sensitive=source.sensitive,
                 fallback="Source",
             )
-            status = _safe_text(source.status, fallback="unknown", limit=48)
+            status = _safe_text(source.status, fallback="unknown", limit=48).replace("_", " ")
             detail = self._display_text(source.detail, sensitive=source.sensitive)
             rendered = f"{name} · {status}"
             if detail:
@@ -9941,6 +10100,29 @@ class PersonalHubMainWindow(QMainWindow):
     def _source_selection_changed(self, *_args: object) -> None:
         source = self._selected_source()
         enabled = source is not None and not self._locked
+        guidance = "Select a source to see its status and next step."
+        if source is not None:
+            guidance = {
+                "ready": "Ready. Refresh checks for new data.",
+                "empty": "Connected, with no items returned. Review the selected calendars, feeds, or message query.",
+                "stale": "Stale: saved data may be out of date. Refresh to try again.",
+                "offline": "Offline: saved data remains available. Turn off Offline mode in Settings to refresh.",
+                "permission_required": "Permission required. Select Reconnect to review access.",
+                "disconnected": "Disconnected. Select Connect / Configure to set up a platform, or Reconnect for an existing source.",
+                "error": "Refresh failed. Try Refresh; if it persists, review the connection with Reconnect.",
+                "refreshing": "Refreshing. You can keep using local tasks and Logging.",
+            }.get(source.status, "Review this source's status above before refreshing.")
+            if source.status == "disconnected" and not source.source_id.startswith("platform-"):
+                guidance = "Disconnected. Select Reconnect to restore this source's connection."
+            if not source.enabled:
+                guidance = "Disabled. Select Enable to allow this source to refresh again."
+            if self._offline_mode:
+                guidance = "Offline mode is on. Saved data remains available; turn off Offline mode in Settings before refreshing."
+            elif self._network_refresh_paused:
+                guidance = (
+                    "Network refresh is paused. Resume it from the tray menu when you want updates."
+                )
+        self.source_guidance_label.setText(guidance)
         for button in (
             self.source_configure_button,
             self.source_refresh_button,
@@ -10117,8 +10299,9 @@ class PersonalHubMainWindow(QMainWindow):
         """Show save success or failure beside the settings save button."""
 
         text = _safe_text(message, fallback="Settings unchanged.")
-        self.settings_save_status_label.setText(text)
         self.settings_save_status_label.show()
+        self.settings_save_status_label.setText(text)
+        self.settings_status_label.setText(text)
 
     def set_settings_status(self, message: str) -> None:
         self.settings_status_label.setText(_safe_text(message, fallback="Settings unchanged."))
@@ -10154,7 +10337,7 @@ class PersonalHubMainWindow(QMainWindow):
         for key, label in self.settings_value_labels.items():
             label.setText(values.get(key, "Not set"))
         self.settings_status_label.setText(
-            "Hub-owned settings are ready. Changes apply only after Save settings."
+            "Use Apply appearance for theme changes. Use Save settings for other preferences."
         )
         self.settings_save_status_label.clear()
         self.settings_save_status_label.hide()
@@ -10174,7 +10357,8 @@ class PersonalHubMainWindow(QMainWindow):
                 ),
             }
             for key, checked in checkbox_values.items():
-                self.settings_checkboxes[key].setChecked(checked)
+                with QSignalBlocker(self.settings_checkboxes[key]):
+                    self.settings_checkboxes[key].setChecked(checked)
             input_values = {
                 "default_timezone": view.default_timezone,
                 "quiet_hours_start": view.quiet_hours_start,
@@ -10192,15 +10376,17 @@ class PersonalHubMainWindow(QMainWindow):
             }
             for key, value in input_values.items():
                 input_widget = self.settings_inputs[key]
-                if isinstance(input_widget, TimezoneComboBox):
-                    input_widget.set_timezone(value)
-                else:
-                    input_widget.setText(str(value))
+                with QSignalBlocker(input_widget):
+                    if isinstance(input_widget, TimezoneComboBox):
+                        input_widget.set_timezone(value)
+                    else:
+                        input_widget.setText(str(value))
             scale_index = self.settings_text_scale_combo.findData(
                 max(1.0, min(view.text_scale, 1.75))
             )
             if scale_index >= 0:
-                self.settings_text_scale_combo.setCurrentIndex(scale_index)
+                with QSignalBlocker(self.settings_text_scale_combo):
+                    self.settings_text_scale_combo.setCurrentIndex(scale_index)
         if apply_preferences:
             self.set_close_to_tray(view.close_to_tray)
             self._set_network_refresh_paused(view.network_refresh_paused)
@@ -10308,9 +10494,10 @@ class PersonalHubMainWindow(QMainWindow):
         else:
             self.attention_notification_title.setText("Source attention")
             self.attention_notification_body.setText("\n".join(source_lines))
-            self.attention_notification_open_button.setEnabled(False)
+            self.attention_notification_open_button.setText("Review sources")
+            self.attention_notification_open_button.setEnabled(not self._locked)
             self.attention_notification_dismiss_button.setEnabled(False)
-            self.attention_notification_open_button.hide()
+            self.attention_notification_open_button.show()
             self.attention_notification_dismiss_button.hide()
 
         self.attention_notification_panel.show()

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.ui.desktop.status_label import StatusLabel
 
 
 def _label(text: str) -> QLabel:
@@ -44,7 +45,7 @@ def _button(text: str, action, layout) -> QPushButton:
     button = QPushButton(text)
     button.setAccessibleName(text)
     button.clicked.connect(action)
-    layout.addWidget(button)
+    layout.addWidget(button, 0, layout.count())
     return button
 
 
@@ -71,9 +72,15 @@ class LogFilters(QWidget):
         )
         self.search.setAccessibleName("Search Logging")
         grid.addWidget(self.period, 0, 0)
-        grid.addWidget(self.start, 0, 1)
-        grid.addWidget(self.end, 0, 2)
-        grid.addWidget(self.search, 1, 0, 1, 3)
+        self.from_label = _label("From")
+        self.from_label.setBuddy(self.start)
+        self.through_label = _label("Through")
+        self.through_label.setBuddy(self.end)
+        grid.addWidget(self.from_label, 1, 0)
+        grid.addWidget(self.start, 1, 1, 1, 2)
+        grid.addWidget(self.through_label, 2, 0)
+        grid.addWidget(self.end, 2, 1, 1, 2)
+        grid.addWidget(self.search, 3, 0, 1, 3)
         self.kind = QComboBox()
         self.kind.addItem("All activity", None)
         self.kind.addItem("Completed tasks", "task_completion")
@@ -89,10 +96,10 @@ class LogFilters(QWidget):
         self.undone = QCheckBox("Include corrected history (Undone)")
         self.undone.setAccessibleName("Include undone task completions")
         if activity:
-            grid.addWidget(self.kind, 2, 0)
-            grid.addWidget(self.task_list, 2, 1)
-            grid.addWidget(self.tag, 2, 2)
-            grid.addWidget(self.undone, 3, 0, 1, 3)
+            grid.addWidget(self.kind, 4, 0)
+            grid.addWidget(self.task_list, 4, 1)
+            grid.addWidget(self.tag, 4, 2)
+            grid.addWidget(self.undone, 5, 0, 1, 3)
         self.period.currentIndexChanged.connect(self._period_changed)
         self.start.dateChanged.connect(self.changed)
         self.end.dateChanged.connect(self.changed)
@@ -107,7 +114,25 @@ class LogFilters(QWidget):
         custom = self.period.currentIndex() == 2
         self.start.setEnabled(custom)
         self.end.setEnabled(custom)
+        for control in (self.start, self.end, self.from_label, self.through_label):
+            control.setVisible(custom)
         self.changed.emit()
+
+    def set_compact(self, compact: bool) -> None:
+        if self.kind.parent() is None:
+            return
+        grid = self.layout()
+        for control in (self.kind, self.task_list, self.tag, self.undone):
+            grid.removeWidget(control)
+        for index, control in enumerate((self.kind, self.task_list, self.tag)):
+            grid.addWidget(
+                control,
+                4 + index if compact else 4,
+                0 if compact else index,
+                1,
+                3 if compact else 1,
+            )
+        grid.addWidget(self.undone, 7 if compact else 5, 0, 1, 3)
 
     def options(self, timezone: str, *, limit: int = 200) -> LogFilter:
         today = datetime.now(ZoneInfo(timezone)).date()
@@ -148,6 +173,7 @@ class ProgressDialog(QDialog):
         self.setMinimumWidth(400)
         layout = QVBoxLayout(self)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.description = QLineEdit(entry.description if entry else "")
         self.description.setMaxLength(240)
         self.when = QDateTimeEdit()
@@ -182,6 +208,7 @@ class ProgressDialog(QDialog):
             self.task_list.setCurrentIndex(index)
         self.tags = QLineEdit(", ".join(entry.tags) if entry else "")
         self.notes = QPlainTextEdit(entry.notes if entry else "")
+        self.notes.setTabChangesFocus(True)
         self.notes.setMaximumHeight(180)
         self.duration = QSpinBox()
         self.duration.setRange(0, 525_600)
@@ -189,19 +216,22 @@ class ProgressDialog(QDialog):
         self.duration.setSuffix(" minutes")
         self.duration.setValue(entry.duration_minutes or 0 if entry else 0)
         for label, control in (
-            ("Work or result", self.description),
+            ("Work or result (required)", self.description),
             (f"When ({workspace.timezone})", self.when),
             ("Task (optional)", self.task),
             ("List (optional)", self.task_list),
-            ("Tags (comma separated)", self.tags),
-            ("Notes", self.notes),
-            ("Duration you entered", self.duration),
+            ("Tags (optional, comma separated)", self.tags),
+            ("Notes (optional)", self.notes),
+            ("Duration (optional, minutes)", self.duration),
         ):
             control.setAccessibleName(label)
             form.addRow(label, control)
         layout.addLayout(form)
         layout.addWidget(_label("Linking progress never completes or changes the task."))
-        self.status = _label("")
+        self.status = StatusLabel("")
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        self.status.setAccessibleName("Progress save or validation status")
         layout.addWidget(self.status)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -225,6 +255,12 @@ class ProgressDialog(QDialog):
             return
         values = {"notes": self.notes.toPlainText()}
         if not self.entry or self.entry.kind == "manual":
+            if not self.description.text().strip():
+                self.status.setText(
+                    "Enter a short description of the work or result before saving."
+                )
+                self.description.setFocus()
+                return
             wall = self.when.dateTime().toPython().replace(tzinfo=None)
             zone = ZoneInfo(self.workspace.timezone)
             aware = wall.replace(tzinfo=zone)
@@ -272,6 +308,7 @@ class LoggingWorkspace(QObject):
         self.loading = False
         self.dialog: ProgressDialog | None = None
         self.private_draft = None
+        self.action_layouts: list[QGridLayout] = []
         for name in ("Activity", "Reflection", "Summary"):
             page = QWidget()
             page.setObjectName(f"logging{name}Page")
@@ -314,7 +351,8 @@ class LoggingWorkspace(QObject):
                 "Completed tasks appear automatically. Log unplanned work or progress on an open task whenever useful."
             )
         )
-        actions = QHBoxLayout()
+        actions = QGridLayout()
+        self.action_layouts.append(actions)
         self.add_button = _button("Log progress", self.log_progress, actions)
         self.edit_button = _button("Edit entry / note", self.edit_activity, actions)
         self.delete_button = _button("Delete entry", self.delete_activity, actions)
@@ -329,7 +367,8 @@ class LoggingWorkspace(QObject):
         self.activity_detail.setMaximumHeight(150)
         self.activity_detail.setAccessibleName("Activity details and notes")
         layout.addWidget(self.activity_detail)
-        actions = QHBoxLayout()
+        actions = QGridLayout()
+        self.action_layouts.append(actions)
         self.open_task_button = _button("Open linked task", self.open_task, actions)
         self.reflect_button = _button("Reflect on this day", self.reflect_on_day, actions)
         self.more_activity = _button("Load more activity", lambda: self.more("Activity"), actions)
@@ -343,7 +382,8 @@ class LoggingWorkspace(QObject):
                 "Private writing, saved on this device. Prompts are optional; write as much or as little as you like."
             )
         )
-        actions = QHBoxLayout()
+        actions = QGridLayout()
+        self.action_layouts.append(actions)
         self.new_reflection_button = _button("Write a reflection", self.new_reflection, actions)
         self.delete_reflection_button = _button(
             "Delete reflection", self.delete_reflection, actions
@@ -390,10 +430,13 @@ class LoggingWorkspace(QObject):
         self.reflection_task.addItem("No linked task", None)
         self.reflection_task.setAccessibleName("Optional reflection task link")
         edit_layout.addWidget(self.reflection_task)
-        self.saved = _label("Choose Write a reflection to begin.")
+        self.saved = StatusLabel("Choose Write a reflection to begin.")
+        self.saved.setTextFormat(Qt.TextFormat.PlainText)
+        self.saved.setWordWrap(True)
         self.saved.setAccessibleName("Reflection saved state")
         edit_layout.addWidget(self.saved)
-        line = QHBoxLayout()
+        line = QGridLayout()
+        self.action_layouts.append(line)
         _button("View this day's Activity", self.view_reflection_activity, line)
         _button("Link selected Activity entry", self.link_activity, line)
         edit_layout.addLayout(line)
@@ -414,6 +457,16 @@ class LoggingWorkspace(QObject):
         self.summary_text.setReadOnly(True)
         self.summary_text.setAccessibleName("Factual activity summary")
         layout.addWidget(self.summary_text, 1)
+
+    def set_compact(self, compact: bool) -> None:
+        for filters in self.filters.values():
+            filters.set_compact(compact)
+        for layout in self.action_layouts:
+            buttons = [layout.itemAt(index).widget() for index in range(layout.count())]
+            for button in buttons:
+                layout.removeWidget(button)
+            for index, button in enumerate(buttons):
+                layout.addWidget(button, index if compact else 0, 0 if compact else index)
 
     def reload(self, name: str):
         if name == "Reflection" and not self.flush():
