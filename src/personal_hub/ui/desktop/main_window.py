@@ -67,6 +67,7 @@ from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import PageTransition
+from personal_hub.ui.desktop.places_page import PlacesPage
 from personal_hub.ui.desktop.status_label import StatusLabel
 from personal_hub.ui.desktop.workspace_navigation import (
     CalendarViewGroupsDialog,
@@ -90,8 +91,11 @@ NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     "Activity",
     "Reflection",
     "Summary",
+    "Places",
 )
-NAVIGATION_LABELS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS
+NAVIGATION_LABELS: Final[tuple[str, ...]] = tuple(
+    "Daily overview" if name == "Summary" else name for name in NAVIGATION_DESTINATIONS
+)
 PLANNED_NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[1:]
 
 _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
@@ -105,10 +109,11 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Activity": "activityButton",
     "Reflection": "reflectionButton",
     "Summary": "summaryButton",
+    "Places": "placesButton",
 }
 _WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
 _MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = ("Sources", "Settings")
-_LOGGING_DESTINATIONS: Final[tuple[str, ...]] = ("Activity", "Reflection", "Summary")
+_LOGGING_DESTINATIONS: Final[tuple[str, ...]] = ("Summary", "Activity", "Reflection", "Places")
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
 
@@ -3008,6 +3013,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     application = QApplication.instance()
     if application is None:
         arguments = list(argv) if argv is not None else sys.argv
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
         application = QApplication(arguments)
     return _configure_application(application)
 
@@ -3743,8 +3749,9 @@ class PersonalHubMainWindow(QMainWindow):
         self._workspace_task_lists: tuple[tuple[str, str], ...] = ()
         self._workspace_calendar_sources: tuple[CalendarSourceView, ...] = ()
         self._workspace_mode = "Tracking"
-        self._mode_pages = {"Tracking": HOME_DESTINATION, "Logging": "Activity"}
+        self._mode_pages = {"Tracking": HOME_DESTINATION, "Logging": "Summary"}
         self.logging_workspace = LoggingWorkspace(self)
+        self.places_page = PlacesPage(self)
 
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
@@ -3804,6 +3811,8 @@ class PersonalHubMainWindow(QMainWindow):
                 page = self._build_inbox_page()
             elif destination == "Sources":
                 page = self._build_sources_page()
+            elif destination == "Places":
+                page = self.places_page
             elif destination in _LOGGING_DESTINATIONS:
                 page = self.logging_workspace.pages[destination]
             else:
@@ -3914,10 +3923,10 @@ class PersonalHubMainWindow(QMainWindow):
         # Keep selection explicit: Qt button groups remove Tab focus from
         # unchecked actions when focus changes within the group.
         self._static_navigation_buttons: dict[str, QPushButton] = {}
-        for destination in NAVIGATION_DESTINATIONS:
+        for destination, label in zip(NAVIGATION_DESTINATIONS, NAVIGATION_LABELS, strict=True):
             button = self._create_navigation_button(
                 destination,
-                destination,
+                label,
                 _NAVIGATION_OBJECT_NAMES[destination],
             )
             self._static_navigation_buttons[destination] = button
@@ -4059,7 +4068,10 @@ class PersonalHubMainWindow(QMainWindow):
     def _display_workspace_entries(self) -> tuple[WorkspaceNavigationEntry, ...]:
         if self._workspace_mode == "Logging":
             return tuple(
-                WorkspaceNavigationEntry(name, name, name) for name in _LOGGING_DESTINATIONS
+                WorkspaceNavigationEntry(
+                    name, "Daily overview" if name == "Summary" else name, name
+                )
+                for name in _LOGGING_DESTINATIONS
             )
         entries = self._ordered_workspace_entries()
         if not (self._privacy_masked or self._locked):
@@ -9335,6 +9347,7 @@ class PersonalHubMainWindow(QMainWindow):
         compact = bool(compact)
         self._compact_navigation = compact
         self.logging_workspace.set_compact(compact)
+        self.places_page.set_compact(compact)
         self.brand_title.setText("Hub" if compact else APPLICATION_NAME)
         self.navigation_caption.setVisible(not compact)
         self.workspace_navigation_label.setVisible(not compact)
@@ -9456,6 +9469,7 @@ class PersonalHubMainWindow(QMainWindow):
             else None
         )
         self.pages.setCurrentWidget(self.page_widgets[target_destination])
+        self.places_page.set_state(active=target_destination == "Places")
         if target_destination == "Calendar":
             self._render_calendar_sources()
             self._render_calendar_views()
@@ -9587,6 +9601,7 @@ class PersonalHubMainWindow(QMainWindow):
         paused = bool(paused)
         changed = paused != self._network_refresh_paused
         self._network_refresh_paused = paused
+        self.places_page.set_state(offline=paused or self._offline_mode)
         if hasattr(self, "settings_values"):
             self.settings_values["network_refresh_paused"] = "Paused" if paused else "Active"
             if "network_refresh_paused" in self.settings_value_labels:
@@ -9615,6 +9630,7 @@ class PersonalHubMainWindow(QMainWindow):
         enabled = bool(enabled)
         changed = enabled != self._offline_mode
         self._offline_mode = enabled
+        self.places_page.set_state(offline=enabled or self._network_refresh_paused)
         if hasattr(self, "settings_values"):
             self.settings_values["offline_mode"] = "On" if enabled else "Off"
             if "offline_mode" in self.settings_value_labels:
@@ -10562,6 +10578,7 @@ class PersonalHubMainWindow(QMainWindow):
 
     def set_privacy_masked(self, masked: bool) -> None:
         self.logging_workspace.set_private(bool(masked) or self._locked)
+        self.places_page.set_state(private=bool(masked) or self._locked)
         self._privacy_masked = bool(masked)
         if hasattr(self, "settings_values"):
             self.settings_values["privacy_masking"] = "On" if self._privacy_masked else "Off"
@@ -10589,6 +10606,7 @@ class PersonalHubMainWindow(QMainWindow):
 
     def set_locked(self, locked: bool) -> None:
         self.logging_workspace.set_private(bool(locked) or self._privacy_masked)
+        self.places_page.set_state(private=bool(locked) or self._privacy_masked)
         self._locked = bool(locked)
         self.pages.setEnabled(not self._locked)
         if self._locked:

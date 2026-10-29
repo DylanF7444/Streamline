@@ -137,12 +137,17 @@ class LoggingCoordinator:
         if self.controller.is_closed:
             return
         view.timezone = self.controller.settings.default_timezone
+        view.daily.timezone = view.timezone
         if not self._reflection_day_initialized:
             with QSignalBlocker(view.reflection_date):
                 view.reflection_date.setDate(QDate(datetime.now(ZoneInfo(view.timezone)).date()))
             self._reflection_day_initialized = True
         if view.masked:
             return
+        if view.daily.follow_today:
+            today = datetime.now(ZoneInfo(view.timezone)).date()
+            if view.daily.day != today:
+                view.daily.show_today()
         if view.reflection and not view.dirty:
             current = self.controller.reflection_repository.get(view.reflection.reflection_id)
             if current != view.reflection:
@@ -185,6 +190,15 @@ class LoggingCoordinator:
         if self.view.masked:
             return
         try:
+            if name == "Summary":
+                options = self.view.daily.options()
+                self.view.daily.render(
+                    self.controller.activity_summary(options),
+                    self.controller.list_activity(options),
+                    self.controller.list_reflections(options.model_copy(update={"limit": 10_000})),
+                )
+                self.view.statuses[name].setText("")
+                return
             options = self.view.filters[name].options(
                 self.view.timezone, limit=self.view.limits[name]
             )
@@ -192,8 +206,6 @@ class LoggingCoordinator:
                 self.view.render_activity(self.controller.list_activity(options))
             elif name == "Reflection":
                 self.view.render_reflections(self.controller.list_reflections(options))
-            else:
-                self.view.render_summary(self.controller.activity_summary(options))
         except (ValueError, OverflowError):
             self.view.statuses[name].setText("Choose a valid date range and filters.")
 
@@ -221,12 +233,18 @@ class LoggingCoordinator:
             elif action == "save_reflection":
                 self.view.reflection_saved(self.controller.save_reflection(payload))
                 self.query("Reflection")
+                self.query("Summary")
+            elif action == "save_daily_reflection":
+                self.view.daily.reflection_saved(self.controller.save_reflection(payload))
+                self.query("Summary")
+                self.query("Reflection")
             elif action == "delete_reflection":
                 self.controller.delete_reflection(payload)
                 self.view.reflection = None
                 self.view.dirty = False
                 self.view._load_editor()
                 self.query("Reflection")
+                self.query("Summary")
             elif action == "open_task":
                 if self.controller.get_task(payload):
                     self.window.show_destination("Tasks")
@@ -244,5 +262,9 @@ class LoggingCoordinator:
                 )
             elif action == "save_reflection":
                 self.view.saved.setText("Not saved. Your writing remains in the editor; try again.")
+            elif action == "save_daily_reflection":
+                self.view.daily.saved.setText(
+                    "Not saved. Your writing remains in the editor; try again."
+                )
             else:
                 self.view.statuses["Activity"].setText("Logging could not be updated. Try again.")

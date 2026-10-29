@@ -24,6 +24,7 @@ EXPECTED_NAVIGATION = (
     "Activity",
     "Reflection",
     "Summary",
+    "Places",
 )
 
 
@@ -141,7 +142,11 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
 
     assert window.windowTitle() == "Personal Hub"
     texts = _visible_texts(window)
-    assert set(EXPECTED_NAVIGATION).issubset(texts)
+    expected_labels = {
+        "Daily overview" if destination == "Summary" else destination
+        for destination in EXPECTED_NAVIGATION
+    }
+    assert expected_labels.issubset(texts)
     assert window.navigation_caption.text() == "NAVIGATION"
     assert "Plan in Tasks and Calendar" in window.today_subtitle.text()
     assert not window.findChildren(QLabel, "brandSubtitle")
@@ -181,7 +186,8 @@ def test_phase1_navigation_is_enabled_accessible_and_responsive(qtbot):
     assert window.navigation_buttons["Home"].isChecked()
     assert all(button.isEnabled() for button in window.navigation_buttons.values())
     assert all(
-        button.accessibleName() == destination and button.accessibleDescription()
+        button.accessibleName() == ("Daily overview" if destination == "Summary" else destination)
+        and button.accessibleDescription()
         for destination, button in window.navigation_buttons.items()
     )
 

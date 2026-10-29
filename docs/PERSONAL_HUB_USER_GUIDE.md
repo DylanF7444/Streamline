@@ -1,5 +1,35 @@
 # Personal Hub user guide
 
+## Places and visit history
+
+Select **Logging → Places** to browse the online world map. No account or API key is needed.
+Pan/zoom to your campus or use the labeled latitude and longitude fields and **Go**. Choose
+**Set home view** to bookmark the current view, **Home view** to return, or **World** to zoom
+out. The last map position is remembered locally.
+
+Click an empty part of the map, or choose **Add place**, then enter a name, category, optional
+notes and favorite status. Select a saved place or pin and choose **Log visit** to record a
+date and optional visit notes. You can backdate visits and log multiple visits to the same
+place. Green pins indicate visited places, orange pins indicate places without visits, larger
+pins indicate favorites, and numbered clusters expand as you zoom in.
+
+**Search saved places** searches your local names, categories and notes. The category and
+status filters also filter the pins. This release does not search online addresses or place
+names. You can edit places, delete individual visits, or explicitly delete a place and all its
+visits. Places are limited to 5,000 records and visits to 20,000 records per Hub database.
+
+Map browsing needs internet access. **Offline mode** and **Pause network refresh** stop map
+requests; your saved list, notes and visit history remain available. Privacy masking and lock
+hide Places and close its map. **Reload map** retries a failed online map. The page loads the
+graphics engine only when opened online; graphics-driver/WebGL support is required for the
+map, while native place and visit controls remain usable if the renderer is unavailable.
+
+OpenFreeMap receives requests for viewed map areas, including your IP address. Your place
+names, notes and visits stay on this device. Database backups/restores and explicit JSON
+exports include Places; shared-folder sync and the provider relay do not. Map tiles are kept
+only in a bounded memory cache while the renderer is open. There are no offline region
+downloads or automatic location tracking. **Map credits** opens the attribution/license links.
+
 Personal Hub is a separate Windows desktop application for tasks, calendar attention, news,
 web watches, messages, and durable alerts. It is not a conversational assistant: it has no
 prompt, microphone, transcript, command executor, or model requirement.
@@ -122,7 +152,26 @@ active recurring series is kept as its schedule anchor. For Canvas items, Person
 local deletion marker so later feed refreshes do not recreate removed tasks. Canvas itself is
 never modified.
 
-### Logging: Activity, Reflection, and Summary
+### Logging: Daily overview, Activity, and Reflection
+
+**Daily overview** brings the day's completed tasks, logged progress, and reflection together.
+It replaces Summary and is the initial Logging landing page; your remembered Logging page
+still takes precedence. Use **Previous day**, **Next day**, the date picker, or **Today** to
+review any date. Today follows the current day when the Hub refreshes; browsing another date
+keeps that date selected. The overview uses the timezone from Settings, including daylight
+saving changes. Task names, lists, and tags come from their completion snapshots, so later
+task edits or cleanup do not rewrite the report. Undo/reopen removes a completion from its
+totals. Activity lists initially show up to 200 entries; **Load more** reveals additional
+entries up to 10,000, while the totals always include the full day.
+
+Write directly in the overview's **Reflection** space. It uses the same records as the
+Reflection page: select an existing reflection for that date or **New reflection** to add
+another. Simply opening a day does not create an empty reflection. Writing autosaves after
+a short pause and before changing days or leaving the page. Failed saves preserve your
+draft and keep you on the current day. Reflections retain their original date when edited.
+The overview works offline and respects privacy masking, lock, backup, export, and existing
+reflection sync choices. Duration is only the sum of minutes you entered manually; it shows
+as not tracked when no duration was entered. Screen-time collection is not included.
 
 **Activity** shows work grouped by local date, newest first. Choose **Log progress** for an
 unplanned accomplishment or work on an open task. Enter a description and optionally notes,
@@ -145,11 +194,6 @@ Bodies are limited to 20,000 characters. Search titles and text, select an entry
 or delete your own writing. Editing an older entry retains its about-date. Optional task
 links and **Link selected Activity entry** keep the records separate. **View this day's
 Activity** opens its factual timeline. Writing never creates or completes a task.
-
-**Summary** counts completed tasks and manual entries for the selected filters and date range,
-with daily, list, and tag breakdowns. Recurring occurrences count separately; Undone entries
-are excluded. Duration means only the sum of minutes you entered. If none were entered,
-duration is shown as not tracked. There are no scores, inferred hours, streaks, or timers.
 
 Home's optional **Logged today** widget is available through **Add widget**. It shows a compact
 count and opens Activity; it does not show reflection text.

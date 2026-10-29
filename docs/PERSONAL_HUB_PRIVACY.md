@@ -6,6 +6,30 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 ## Data categories
 
+Places and dated visit history are Hub-native local data in schema 15 (`hub_places` and
+`hub_visits`). They are kept until explicit deletion, participate in database backup/restore
+and JSON export, and are excluded from shared-folder sync and the provider relay. Deleting a
+place explicitly deletes its visits; individual visits can also be deleted. Ordinary
+retention and completed-task cleanup do not affect either table. Full data-root deletion
+removes them with the rest of the Hub database.
+
+The online Places map contacts only `tiles.openfreemap.org` for style JSON, tile metadata,
+tiles, glyphs and sprites while the page is open and networking is allowed. It sends an
+application User-Agent but no saved names, notes, visit dates, cookies or credentials.
+Requests reveal the viewed geographic area and client IP to OpenFreeMap. The map center and
+home view are private device-local settings. No geocoding service or geolocation API is used.
+Native place editing and visit history remain available offline.
+
+Bundled MapLibre code executes in a dedicated off-the-record Qt WebEngine profile. The
+browser cannot contact the internet directly or read arbitrary local files. A fixed-origin,
+GET-only Python resource client enforces public-address checks, no redirects, byte/time
+bounds, four worker threads and a 32 MB memory cache; there are no background downloads.
+Offline mode and network pause gate requests before DNS/transport. Leaving Places, hiding
+the app, masking, lock and shutdown cancel pending work and close the renderer. Already
+started requests unwind within bounded reads/timeouts. Masking clears native visible content
+and rejects open place/visit dialogs. Tiles and browser history are not stored on disk or in
+backups/exports. Attribution links open only through the user's Map credits action.
+
 | Category | Examples | Location and lifetime |
 | --- | --- | --- |
 | Hub-native local data | tasks, lists, tags, Activity, reflections, settings, feed subscriptions, watch definitions, Inbox state, imported and manually created calendar items, linked event changes, and provider-task deletion markers | Hub SQLite database under `%LOCALAPPDATA%\PersonalHub`; retained until explicit deletion or configured cleanup |

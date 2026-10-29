@@ -86,6 +86,7 @@ from personal_hub.ui.desktop.main_window import (
     create_application,
     create_main_window,
 )
+from personal_hub.ui.desktop.places_coordinator import PlacesCoordinator
 from personal_hub.watches import WatchObservation, WatchResult, WatchSyncState
 
 if TYPE_CHECKING:
@@ -731,6 +732,7 @@ class HubDesktopCoordinator(QObject):
         self.logging_coordinator = LoggingCoordinator(
             container.controller, window, refresh_home=self.render_task_surfaces
         )
+        self.places_coordinator = PlacesCoordinator(container.controller, window)
         self.render_all()
         window.restore_workspace_mode(container.settings_repository.get("workspace_modes", None))
         window.calendar_mode_changed.connect(self._save_calendar_mode)
@@ -812,6 +814,7 @@ class HubDesktopCoordinator(QObject):
             self.window.set_calendar_mode(saved_calendar_mode)
         self.render_sources()
         self.render_diagnostics()
+        self.places_coordinator.refresh()
 
     def render_task_surfaces(self) -> None:
         self.logging_coordinator.refresh()
@@ -3720,6 +3723,7 @@ class HubDesktopCoordinator(QObject):
         if self._closed:
             return
         self._closed = True
+        self.places_coordinator.close()
         self._scheduler_timer.stop()
         self._system_notification_timer.stop()
         self._pending_system_notifications.clear()

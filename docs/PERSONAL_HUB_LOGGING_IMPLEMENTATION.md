@@ -2,11 +2,38 @@
 
 Implemented October 28, 2026 from `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
 
+## Daily overview extension — October 29, 2026
+
+Summary is now labeled **Daily overview** and is the initial Logging landing page. The
+internal Summary route remains compatible with saved per-mode preferences. The overview
+shows one selected local day: complete task/manual counts, manually entered duration,
+completion title/list/tag snapshots and manual progress, plus an inline reflection editor.
+Previous/next/date/Today navigation supports past-day review. Today follows the configured
+timezone's date on refresh; choosing another date pins it. No screen-time tracking, new
+provider calls, evening notification, schema change, or new dependency is added.
+
+Activity details load 200 entries initially, with Load more up to 10,000 and explicit partial
+list labeling. Counts and duration cover the full day, independently of the displayed list.
+Undone completions are excluded. Local midnight boundaries use the existing timezone-aware
+repository queries, including 23- and 25-hour daylight saving dates.
+
+The inline editor reuses Reflection records and preserves task/Activity links and identity.
+The user can choose among the day's reflections or start another. Opening the overview
+does not create blank entries. Autosave, validation bounds, navigation/close/backup flush,
+failed-save recovery, masking/lock, history deletion, and existing backup/export/sync policy
+apply to daily drafts. Refresh preserves pending writing and the cursor. The full Reflection
+page remains available for search, links, and deletion.
+
+Regression coverage is in `tests/ui/test_logging_ui.py`: local-day/DST boundaries, complete
+totals beyond the display limit, immutable completion snapshots, undo, date browsing,
+existing/multiple reflections, cross-page edits, autosave, privacy, failed-save recovery,
+and text bounds. Validation outcomes are recorded in `PERSONAL_HUB_IMPLEMENTATION_STATUS.md`.
+
 ## Delivered behavior
 
 1. The persistent Tracking / Logging selector changes primary workspace pages. Tracking
    retains Home, Calendar, Tasks, Watchlists, Inbox, and collection shortcuts. Logging has
-   Activity, Reflection, and Summary. Each mode remembers its page across restart; Management
+   Activity, Reflection, and Daily overview. Each mode remembers its page across restart; Management
    remains fixed. Linked tasks open the Tracking task editor.
 2. Schema 14 adds independent Activity and Reflection tables without cascading task foreign
    keys. Migration snapshots existing completed tasks with available timestamps once.
@@ -20,7 +47,7 @@ Implemented October 28, 2026 from `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
    completed-task cleanup, and provider refresh do not erase or rewrite history.
 4. Activity groups by the configured local timezone and supports Today, Last 7 days, custom
    range, all dates, literal text search, type, list, tag, and corrected-history filters.
-   Queries show 200 entries initially with bounded Load more controls. Summary aggregates
+   Queries show 200 entries initially with bounded Load more controls. Daily overview aggregates
    every matching record, independently of the display limit, and excludes undone facts.
    Duration is explicitly the sum of user-entered minutes, or shown as not tracked.
 5. Reflection provides multiple entries per date, an optional title, plain-text paragraphs,

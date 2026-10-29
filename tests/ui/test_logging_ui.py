@@ -1,9 +1,10 @@
 """Offline end-to-end Logging UI and privacy coverage."""
 
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 
 from personal_hub.bootstrap import build_hub_container
 from personal_hub.config import HubSettings
@@ -34,7 +35,9 @@ def test_modes_remember_pages_keep_management_and_open_linked_task(ui):
     assert window.open_workspace_collection("task-list", str(task_list.list_id))
     collection_route = window.active_destination
     window.set_workspace_mode("Logging")
-    assert window.workspace_mode == "Logging" and window.active_destination == "Activity"
+    assert window.workspace_mode == "Logging" and window.active_destination == "Summary"
+    assert window.navigation_buttons["Summary"].text() == "Daily overview"
+    window.show_destination("Activity")
     window.set_workspace_mode("Tracking")
     assert window.active_destination == collection_route
     window.set_workspace_mode("Logging")
@@ -164,6 +167,8 @@ def test_narrow_logging_pages_are_scrollable_and_keyboard_accessible(ui, qtbot):
     qtbot.keyClick(window.mode_selector, Qt.Key.Key_End)
     assert window.workspace_mode == "Logging"
     qtbot.keyClick(window.mode_selector, Qt.Key.Key_Tab)
+    assert window.navigation_buttons["Summary"].hasFocus(), window.focusWidget().objectName()
+    qtbot.keyClick(window.navigation_buttons["Summary"], Qt.Key.Key_Tab)
     assert window.navigation_buttons["Activity"].hasFocus(), window.focusWidget().objectName()
     qtbot.keyClick(window.navigation_buttons["Activity"], Qt.Key.Key_Tab)
     assert window.navigation_buttons["Reflection"].hasFocus(), window.focusWidget().objectName()
@@ -220,3 +225,195 @@ def test_logging_deletion_preview_and_separate_reflection_sync_choice(ui):
     assert hub.list_activity() == hub.list_reflections() == []
     assert len(hub.list_tasks()) == 1
     assert not controls.apply_button.isEnabled()
+
+
+def test_daily_overview_local_day_dst_snapshots_and_complete_totals(ui):
+    hub, window, coordinator = ui
+    hub.update_settings(default_timezone="America/Chicago")
+    task_list = hub.create_task_list("Writing")
+    task = hub.create_task(title="Finished proposal", list_id=task_list.list_id, tags=("draft",))
+    # This local day has 25 hours. The final hour still belongs in November 1.
+    hub.complete_task(str(task.task_id), completed_at=datetime(2026, 11, 2, 5, 59, tzinfo=UTC))
+    hub.update_task(str(task.task_id), title="Later title")
+    hub.task_repository.delete(task.task_id)
+    undone = hub.create_task(title="Accidental completion")
+    hub.complete_task(str(undone.task_id), completed_at=datetime(2026, 11, 1, 7, tzinfo=UTC))
+    hub.undo_task(str(undone.task_id))
+    for description, when in (
+        ("Before the day", datetime(2026, 11, 1, 4, 59, tzinfo=UTC)),
+        ("At local midnight", datetime(2026, 11, 1, 5, tzinfo=UTC)),
+        ("Following day", datetime(2026, 11, 2, 6, tzinfo=UTC)),
+    ):
+        hub.log_progress(description=description, occurred_at=when, duration_minutes=15)
+    window.show_destination("Summary")
+    daily = window.logging_workspace.daily
+    daily.select_day(QDate(2026, 11, 1))
+    daily.limit = 1
+    coordinator.logging_coordinator.query("Summary")
+    assert "Tasks completed: 1" in daily.facts.toPlainText()
+    assert "Manual progress entries: 1" in daily.facts.toPlainText()
+    assert "15 minutes" in daily.facts.toPlainText()
+    assert "Finished proposal" in daily.completed.item(0).text()
+    assert "Writing · #draft" in daily.completed.item(0).text()
+    assert daily.more.isEnabled() and not daily.more.isHidden()
+    daily.more.click()
+    assert daily.progress.count() == 1
+    assert "At local midnight" in daily.progress.item(0).text()
+    assert daily.more.isHidden()
+    daily.next.click()
+    assert daily.day == date(2026, 11, 2)
+    assert "Following day" in daily.progress.item(0).text()
+    daily.previous.click()
+    assert daily.day == date(2026, 11, 1)
+
+
+def test_daily_reflection_autosaves_browses_and_reuses_existing_records(ui, qtbot):
+    hub, window, coordinator = ui
+    day = date(2020, 3, 4)
+    first = hub.save_reflection(
+        ReflectionEntry(display_date=day, title="First", body="First notes")
+    )
+    second = hub.save_reflection(
+        ReflectionEntry(display_date=day, title="Second", body="Second notes")
+    )
+    window.show_destination("Summary")
+    daily = window.logging_workspace.daily
+    daily.select_day(QDate(day))
+    assert daily.reflection.reflection_id == second.reflection_id
+    daily.chooser.setCurrentIndex(daily.chooser.findData(str(first.reflection_id)))
+    assert daily.body.toPlainText() == "First notes"
+    daily.body.setPlainText("Edited from the daily overview")
+    qtbot.waitUntil(lambda: not daily.dirty, timeout=2000)
+    assert daily.saved.text() == "Saved on this device"
+    assert (
+        hub.reflection_repository.get(first.reflection_id).body == "Edited from the daily overview"
+    )
+    assert len(hub.list_reflections()) == 2
+    # Selecting New while a save is pending must leave the chooser and editor consistent.
+    daily.body.setPlainText("Flushed before new reflection")
+    daily.chooser.setCurrentIndex(0)
+    assert daily.reflection is None and daily.chooser.currentData() is None
+    daily.title.setText("Third")
+    daily.body.setPlainText("A separate reflection for this day")
+    daily.next.click()
+    assert len(hub.list_reflections()) == 3
+    assert daily.body.toPlainText() == ""
+    assert "No tasks completed" in daily.completed.item(0).text()
+    daily.previous.click()
+    assert daily.body.toPlainText() == "A separate reflection for this day"
+    cursor = daily.body.textCursor()
+    cursor.setPosition(3)
+    daily.body.setTextCursor(cursor)
+    coordinator.render_all()
+    assert daily.body.textCursor().position() == 3
+    window.show_destination("Reflection")
+    view = window.logging_workspace
+    view.filters["Reflection"].period.setCurrentIndex(3)
+    matching = [
+        index
+        for index in range(view.reflection_list.count())
+        if "Third" in view.reflection_list.item(index).text()
+    ]
+    view.reflection_list.setCurrentRow(matching[0])
+    view.body.setPlainText("Edited in Reflection")
+    window.show_destination("Summary")
+    assert daily.body.toPlainText() == "Edited in Reflection"
+    assert daily.day == day
+
+
+def test_daily_draft_failure_blocks_date_navigation_and_survives_lock(ui, monkeypatch):
+    hub, window, coordinator = ui
+    window.show_destination("Summary")
+    daily = window.logging_workspace.daily
+    daily.select_day(QDate(2020, 3, 4))
+
+    def unavailable(_entry):
+        raise OSError("private filesystem detail")
+
+    monkeypatch.setattr(hub, "save_reflection", unavailable)
+    daily.body.setPlainText("Unsaved daily writing")
+    coordinator.render_all()
+    assert daily.body.toPlainText() == "Unsaved daily writing"
+    daily.next.click()
+    assert daily.day == daily.date.date().toPython() == date(2020, 3, 4)
+    assert not window.show_destination("Tasks")
+    assert window.active_destination == "Summary"
+    quit_requests = []
+    window.quit_requested.connect(lambda: quit_requests.append(True))
+    window.request_quit()
+    assert not quit_requests
+    assert "private filesystem" not in daily.saved.text()
+    window.set_locked(True)
+    assert daily.body.toPlainText() == ""
+    assert daily.completed.count() == daily.progress.count() == daily.chooser.count() == 0
+    window.set_locked(False)
+    assert daily.body.toPlainText() == "Unsaved daily writing"
+    assert daily.dirty
+    monkeypatch.undo()
+    assert window.logging_workspace.flush()
+    (entry,) = hub.list_reflections()
+    assert entry.display_date == date(2020, 3, 4)
+    assert entry.body == "Unsaved daily writing"
+    window.set_privacy_masked(True)
+    assert daily.body.toPlainText() == "" and daily.title.text() == ""
+    window.set_privacy_masked(False)
+    assert daily.body.toPlainText() == entry.body
+
+
+def test_daily_empty_state_bounds_and_today_navigation(ui):
+    hub, window, _ = ui
+    window.show_destination("Summary")
+    daily = window.logging_workspace.daily
+    assert hub.list_reflections() == []
+    assert "Tasks completed: 0" in daily.facts.toPlainText()
+    assert "Duration was not tracked" in daily.facts.toPlainText()
+    assert "No progress logged" in daily.progress.item(0).text()
+    daily.select_day(QDate(2020, 3, 4))
+    daily.body.setPlainText("x" * 20_001)
+    assert not window.logging_workspace.flush()
+    assert "20,000" in daily.saved.text()
+    assert hub.list_reflections() == []
+    daily.body.setPlainText("A bounded reflection")
+    daily.today.click()
+    assert daily.follow_today
+    assert daily.day == datetime.now(ZoneInfo(hub.settings.default_timezone)).date()
+    assert hub.list_reflections()[0].display_date == date(2020, 3, 4)
+
+
+def test_daily_today_rollover_flushes_previous_day_and_preserves_pinned_dates(ui):
+    hub, window, coordinator = ui
+    window.show_destination("Summary")
+    daily = window.logging_workspace.daily
+    today = daily.day
+    yesterday = today - timedelta(days=1)
+    daily.select_day(QDate(yesterday))
+    daily.body.setPlainText("Writing just before midnight")
+    daily.follow_today = True
+    coordinator.render_all()
+    assert daily.day == today and daily.follow_today
+    assert daily.body.toPlainText() == ""
+    (entry,) = hub.list_reflections()
+    assert entry.display_date == yesterday and entry.body == "Writing just before midnight"
+    daily.select_day(QDate(yesterday))
+    coordinator.render_all()
+    assert daily.day == yesterday and not daily.follow_today
+    assert daily.body.toPlainText() == entry.body
+
+
+def test_daily_overview_large_text_reflection_is_reachable_without_horizontal_scroll(ui, qtbot):
+    _, window, _ = ui
+    window.apply_accessibility_preferences(text_scale=1.75, high_contrast=True, reduced_motion=True)
+    window.resize(720, 460)
+    window.show_destination("Summary")
+    window.show()
+    window.activateWindow()
+    daily = window.logging_workspace.daily
+    page = window.logging_workspace.pages["Summary"]
+    daily.body.setFocus()
+    qtbot.waitUntil(daily.body.hasFocus, timeout=2000)
+    page.ensureWidgetVisible(daily.body)
+    qtbot.waitUntil(lambda: not daily.body.visibleRegion().isEmpty())
+    assert page.horizontalScrollBar().maximum() == 0
+    assert daily.body.height() >= 180
+    qtbot.keyClick(daily.body, Qt.Key.Key_Tab)
+    assert not daily.body.hasFocus()

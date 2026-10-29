@@ -226,6 +226,17 @@ behavior, and redacted logs. Never record tokens or real message content.
 
 ## Accessibility review
 
+For Places acceptance, open **Logging → Places** online with a temporary Hub profile; pan
+from world view to a campus, verify attribution, create pins, cluster/expand several nearby
+places, save/return to a home view, edit a place and log/backdate repeat visits. Verify local
+search and all category/status/favorite filters, visit deletion, cascading place deletion,
+restart, backup/restore and JSON export. Confirm no names/notes/visits enter provider requests
+or shared-folder/relay snapshots. Toggle offline, pause, masking and lock while tiles load;
+verify no new resource requests and native offline access. Leave Places, hide to tray and
+quit during loads; check cancellation and shutdown. Test a blocked/unavailable provider and
+unsupported WebGL recovery without losing local data. Review keyboard-only alternatives,
+map graphics, attribution/credits and minimum-size/high-contrast layouts at 100–175% text.
+
 For Tracking/Logging acceptance, also verify mode and per-mode page memory across restart;
 completion/retry/recurrence/undo/recompletion without duplicate active history; preserved
 snapshots after task edits and cleanup; manual progress on open tasks; dated reflection

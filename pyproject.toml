@@ -35,6 +35,9 @@ personal-hub = "personal_hub.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"personal_hub.ui.desktop" = ["map_assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

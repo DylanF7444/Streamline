@@ -97,6 +97,8 @@ from personal_hub.messages import (
     MessageSyncState,
 )
 from personal_hub.messages.categories import MessageCategory
+from personal_hub.places.contracts import Place, Visit
+from personal_hub.places.repository import PlacesRepository
 from personal_hub.reminders import DurableReminderClaimStore, ReminderService
 from personal_hub.sources import (
     SourceDefinition,
@@ -297,6 +299,7 @@ class HubController:
         self.database = selected_database
         self.activity_repository = ActivityRepository(selected_database)
         self.reflection_repository = ReflectionRepository(selected_database)
+        self.places_repository = PlacesRepository(selected_database)
         self._owns_database = owns_database
         self.settings_repository = settings_repository or SettingsRepository(selected_database)
         self.sync_service = sync_service or SyncService(self.settings_repository)
@@ -3333,6 +3336,30 @@ class HubController:
     backup = backup_database
     create_backup = backup_database
 
+    def list_places(self) -> tuple[Place, ...]:
+        self._ensure_open()
+        return self.places_repository.places()
+
+    def save_place(self, place: Place) -> Place:
+        self._ensure_open()
+        return self.places_repository.save(place)
+
+    def delete_place(self, place_id: UUID | str) -> None:
+        self._ensure_open()
+        self.places_repository.delete(place_id)
+
+    def list_visits(self, place_id: UUID | str | None = None) -> tuple[Visit, ...]:
+        self._ensure_open()
+        return self.places_repository.visits(place_id)
+
+    def log_visit(self, visit: Visit) -> Visit:
+        self._ensure_open()
+        return self.places_repository.add_visit(visit)
+
+    def delete_visit(self, visit_id: UUID | str) -> None:
+        self._ensure_open()
+        self.places_repository.delete_visit(visit_id)
+
     def export_local_data(
         self,
         destination: Path | str,
@@ -3375,6 +3402,8 @@ class HubController:
                 item.model_dump(mode="json") for item in self.list_source_connections()
             ],
             "tasks": [item.model_dump(mode="json") for item in tasks],
+            "places": [item.model_dump(mode="json") for item in self.list_places()],
+            "visits": [item.model_dump(mode="json") for item in self.list_visits()],
             "activity": [item.model_dump(mode="json") for item in self.activity_repository.all()],
             "reflections": [
                 item.model_dump(mode="json") for item in self.reflection_repository.all()

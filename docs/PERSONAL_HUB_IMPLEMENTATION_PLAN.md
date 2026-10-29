@@ -147,9 +147,20 @@ new cloud service.
 
 ## Information Architecture
 
+October 29, 2026 extension: **Places** in Logging provides an online worldwide MapLibre
+map backed by OpenFreeMap's OpenStreetMap-derived tiles. The renderer and scripts load only
+when that page is opened online. Saved places and dated repeat visits remain Hub-owned local
+data, usable offline and included in database backup/restore and explicit JSON export. Pin
+creation, coordinate navigation, a saved home view, local search, categories, visited/wanted
+filters, favorites, editing and explicit deletion require no AI or provider account. There is
+no location tracking, geocoding service, region download, or cross-device Places sync in this
+extension. Privacy masking/lock clears its presentation and stops the renderer. Offline mode,
+network pause, leaving the page, hiding the window, and shutdown stop further map requests.
+See `PERSONAL_HUB_PLACES_IMPLEMENTATION.md` for the network and packaging boundary.
+
 October 28, 2026 extension: **Tracking / Logging** is a persistent, accessible mode selector.
 Tracking contains the existing workspace pages below; Logging contains **Activity**,
-**Reflection**, and **Summary**. Each mode remembers its last page locally. Sources and
+**Reflection**, and **Daily overview**. Each mode remembers its last page locally. Sources and
 Settings remain fixed in Management. Opening a task from Logging switches to Tracking;
 returning to Logging restores its previous page. The detailed implemented specification is
 `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
@@ -158,8 +169,13 @@ Activity captures task completions transactionally, with immutable title, list/t
 occurrence snapshots. Undo/reopen retains corrected history and excludes it from totals;
 recompletion creates a new fact. Task deletion and cleanup preserve Logging. Manual progress
 can link an open task without changing it and supports optional explicitly entered duration.
-Reflections are separate dated, bounded plain-text records with local draft autosave. Summary
-reports factual counts, list/tag breakdowns, daily activity, and entered durations only.
+Reflections are separate dated, bounded plain-text records with local draft autosave. Daily
+overview replaces Summary (retaining its saved route), is the initial Logging landing page,
+and combines a selected local day's complete counts, task/progress snapshots, entered
+durations, and an inline editor for existing Reflection records. Previous/next/date/Today
+controls support review of earlier days. Today follows local date changes on refresh;
+historical browsing stays selected. No screen-time collection or evening notification is
+included in this extension. See `PERSONAL_HUB_LOGGING_IMPLEMENTATION.md` for details.
 Home offers an optional **Logged today** widget without reflection text.
 
 Schema 14 adds independent `hub_activity` and `hub_reflections` tables and backfills available

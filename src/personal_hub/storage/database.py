@@ -583,6 +583,25 @@ class HubReflectionRow(HubBase):
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class HubPlaceRow(HubBase):
+    __tablename__ = "hub_places"
+
+    place_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class HubVisitRow(HubBase):
+    __tablename__ = "hub_visits"
+
+    visit_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    place_id: Mapped[str] = mapped_column(
+        ForeignKey("hub_places.place_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    visited_on: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class HubDatabase:
     """Small, explicit database boundary used by the Hub composition root."""
 
@@ -602,7 +621,8 @@ class HubDatabase:
     # Version 13 adds the locally cached, validated provider relay snapshot.
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 14
+    # Version 14 adds Logging; version 15 adds local places and visit history.
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 15
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -726,8 +746,9 @@ class HubDatabase:
         12: frozenset(REQUIRED_TABLES.difference({"hub_provider_relay_cache"})),
         13: REQUIRED_TABLES,
         14: REQUIRED_TABLES | {"hub_activity", "hub_reflections"},
+        15: REQUIRED_TABLES | {"hub_activity", "hub_reflections", "hub_places", "hub_visits"},
     }
-    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[14]
+    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[15]
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path).expanduser().resolve(strict=False)

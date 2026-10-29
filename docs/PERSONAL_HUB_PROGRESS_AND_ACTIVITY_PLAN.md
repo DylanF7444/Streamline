@@ -4,6 +4,12 @@
 - **Date:** October 28, 2026
 - **Related specification:** `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`
 
+October 29, 2026 update: the implemented **Summary** page is now **Daily overview**. It is
+the initial Logging landing page and combines one day's factual activity with an inline
+Reflection editor and previous/next/date/Today navigation. Screen-time tracking is deferred.
+This supersedes the Summary presentation below; record and privacy boundaries remain the
+same. See `PERSONAL_HUB_LOGGING_IMPLEMENTATION.md` for current implementation details.
+
 ## Summary
 
 Personal Hub should have two clearly distinct modes:

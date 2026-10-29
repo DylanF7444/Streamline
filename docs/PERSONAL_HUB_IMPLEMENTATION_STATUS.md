@@ -1,12 +1,79 @@
 # Personal Hub implementation status
 
-Updated October 28, 2026. The current implementation baseline is complete for now, and
+Updated October 29, 2026. The current implementation baseline is complete for now, and
 feature updates can continue without treating release evidence as a blocker. External release
 checks remain pending and should be revisited when release readiness is the focus. The
 authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
+
+## Online Places map — October 29, 2026
+
+Implemented **Logging → Places** with a worldwide MapLibre/OpenFreeMap map, clustered pins,
+click-to-add and coordinate navigation, saved home/last view, and local place/visit history.
+Places support notes, categories, favorites, editing, local search and visited/wanted filters.
+Repeat visits can be backdated and deleted individually; explicitly deleting a place also
+deletes its visits. Schema 15 integrates both record types with backup/restore and JSON export
+while excluding them from shared-folder sync and the provider relay.
+
+The renderer loads only when Places is visible and online. The bounded Python tile client
+uses fixed HTTPS provider paths, public-address checks, redirect rejection, four workers,
+response/read limits and a 32 MB memory cache. The off-the-record browser cannot make direct
+network requests or read arbitrary local files. Offline/consumer mode, pause, masking, lock,
+leaving Places, hiding to tray and shutdown stop requests; native local controls remain
+available offline. Restoring Places while starting hidden in the tray does not start the
+renderer. No API key, geocoder, automatic location tracking or offline-area download is used.
+
+Validation: **277 core tests passed**, and **35 relevant UI tests passed across batches and
+corrected targeted reruns** (Places, renderer boundary, window navigation, accessibility,
+Logging/Daily overview and usability). Early runs exposed inconsistent initial Daily overview
+navigation labels and an existing new Daily overview test calling a nonexistent controller
+method; the label initialization and test's repository deletion call were corrected, and the
+affected cases passed fresh-process reruns. The final Places UI rerun passed all four cases,
+including the hidden-window lifecycle. This is focused UI coverage, not a complete UI-suite
+run. Ruff format/lint (180 Python files), documentation consistency, import isolation and Git
+whitespace checks passed.
+
+Live hidden-window checks on the Windows Qt platform confirmed world-scale clusters,
+city/campus-scale individual pins, selection and click-to-add signals, loaded tiles and no
+resource failures. The map also rendered with unused Qt QML Python modules blocked, matching
+the package exclusions. Native screenshots were inspected at 1200×900 and 720×460 with 175%
+text/high contrast and scrolling to the visit controls. Wheel and unsigned one-file executable
+builds include the map assets/license and WebEngine helper/resources. Package inspection
+passes the existing forbidden-dependency boundary. Installed/signed release, graphics-driver
+matrix and manual screen-reader acceptance remain external release checks. Details and bounds
+are in `PERSONAL_HUB_PLACES_IMPLEMENTATION.md`.
+
+## Daily overview — October 29, 2026
+
+Replaced the Summary presentation with **Logging → Daily overview**, retaining its saved
+route and per-mode page memory. It is the initial Logging landing page and combines a
+selected local day's completed tasks, manual progress, full totals, explicitly entered
+duration, and an inline Reflection editor. Previous/next/date/Today controls support past-day
+review; Today advances on refresh while historical dates remain selected. Completion
+snapshots survive task edits/deletion, and corrected completions are excluded.
+
+The editor reuses existing Reflection records, including multiple entries per date and their
+links. Opening a report creates no empty entry. Autosave and pre-navigation/pre-backup flush
+preserve drafts; failed saves block day changes, navigation, and quitting. Privacy masking
+and lock clear the visible report and preserve unsaved writing for recovery. Existing
+retention, backup, export, and reflection-sync choices apply. No screen-time tracking,
+evening notification, schema migration, runtime dependency, or provider access was added.
+
+Validation: **68 focused tests passed**: 37 core Logging/task/sync/isolation tests and all 31
+tests across Logging, window navigation, accessibility, and usability UI files. The final
+Logging/window-label rerun passed 15 tests; five other window cases and 11 accessibility/
+usability cases passed in earlier batches. Six daily-overview regressions cover DST/local
+boundaries, untruncated totals, multiple reflections and cross-page edits, failed-save/lock
+recovery, text bounds, midnight rollover, pinned dates, and large-text keyboard access.
+Ruff format/lint (180 files), documentation consistency, startup import isolation, and Git
+whitespace checks passed. No build or complete-suite release gate is claimed for this slice.
+
+Visual inspection used synthetic offline reports with loaded Segoe UI fonts at 1100×900 and
+720×460 with 175% text/high contrast. Short lists size to their contents, the reflection editor
+is reachable, and the narrow report has no horizontal overflow. This is offscreen layout
+review; native assistive-technology and signed-release checks remain separate.
 
 ## Desktop usability improvements — October 28, 2026
 

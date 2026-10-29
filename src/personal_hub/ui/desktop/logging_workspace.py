@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.ui.desktop.daily_overview import DailyOverview
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
@@ -312,19 +313,19 @@ class LoggingWorkspace(QObject):
         for name in ("Activity", "Reflection", "Summary"):
             page = QWidget()
             page.setObjectName(f"logging{name}Page")
-            page.setAccessibleName(f"Logging · {name}")
+            label = "Daily overview" if name == "Summary" else name
+            page.setAccessibleName(f"Logging · {label}")
             layout = QVBoxLayout(page)
             layout.setContentsMargins(24, 20, 24, 20)
             layout.setSpacing(12)
-            heading = _label(f"Logging · {name}")
+            heading = _label(f"Logging · {label}")
             heading.setObjectName("pageTitle")
             layout.addWidget(heading)
-            filters = LogFilters(activity=name != "Reflection")
-            if name == "Summary":
-                filters.undone.hide()
-            filters.changed.connect(lambda n=name: self.reload(n))
-            self.filters[name] = filters
-            layout.addWidget(filters)
+            if name != "Summary":
+                filters = LogFilters(activity=name != "Reflection")
+                filters.changed.connect(lambda n=name: self.reload(n))
+                self.filters[name] = filters
+                layout.addWidget(filters)
             status = _label("")
             status.setAccessibleName(f"{name} status")
             self.statuses[name] = status
@@ -453,12 +454,13 @@ class LoggingWorkspace(QObject):
 
     def _build_summary(self):
         layout = self.pages["Summary"].layout()
-        self.summary_text = QPlainTextEdit()
-        self.summary_text.setReadOnly(True)
-        self.summary_text.setAccessibleName("Factual activity summary")
-        layout.addWidget(self.summary_text, 1)
+        self.daily = DailyOverview()
+        self.daily.requested.connect(self.requested)
+        self.summary_text = self.daily.facts
+        layout.addWidget(self.daily, 1)
 
     def set_compact(self, compact: bool) -> None:
+        self.daily.set_compact(compact)
         for filters in self.filters.values():
             filters.set_compact(compact)
         for layout in self.action_layouts:
@@ -618,6 +620,8 @@ class LoggingWorkspace(QObject):
         self.timer.start()
 
     def flush(self) -> bool:
+        if not self.daily.flush():
+            return False
         if self.masked:
             return True
         if not self.dirty or self.loading or self.masked or self.reflection is None:
@@ -700,24 +704,10 @@ class LoggingWorkspace(QObject):
             self.flush()
             self.links.setText(f"Linked Activity entries: {len(self.reflection.activity_ids)}")
 
-    def render_summary(self, facts: dict[str, object]):
-        duration = facts["duration_minutes"]
-        text = [
-            f"Tasks completed: {facts['task_completion']}",
-            f"Manual progress entries: {facts['manual']}",
-            f"Sum of durations you entered: {duration} minutes"
-            if duration is not None
-            else "Duration was not tracked.",
-            "Undone completions are excluded.",
-        ]
-        for heading, key in (("By day", "days"), ("By task list", "lists"), ("By tag", "tags")):
-            text.extend(["", heading])
-            text.extend(f"{label}: {count}" for label, count in sorted(facts[key].items()))
-        self.summary_text.setPlainText("\n".join(text))
-
     def set_private(self, private: bool):
         if private == self.masked:
             return
+        self.daily.set_private(private)
         if private and not self.masked:
             self.flush()
             if self.dirty:
