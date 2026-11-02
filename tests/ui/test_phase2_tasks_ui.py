@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 
 from personal_hub.ui.desktop.main_window import (
     TaskView,
@@ -139,6 +139,46 @@ def test_task_filters_sort_keyboard_completion_archive_and_undo(qtbot):
     assert archived[-1].task_id == "overdue"
     window.undo_task("overdue")
     assert next(task for task in window.tasks if task.task_id == "overdue").state == "open"
+
+
+@pytest.mark.ui
+def test_task_completion_preserves_scroll_across_controller_refresh(qtbot):
+    window = _window(qtbot)
+    window.resize(980, 640)
+    window.show_destination("Tasks")
+    window.render_tasks(
+        [{"task_id": f"task-{index:02}", "title": f"Task {index:02}"} for index in range(30)]
+    )
+    qtbot.wait(20)
+
+    task_list_scroll = window.tasks_list.verticalScrollBar()
+    assert task_list_scroll.maximum() > 0
+    task_list_scroll.setValue(task_list_scroll.maximum() // 2)
+    qtbot.wait(20)
+
+    page_scroll = window.tasks_page.verticalScrollBar()
+    page_scroll.setValue(page_scroll.maximum())
+    qtbot.wait(20)
+    expected_task_list_scroll = task_list_scroll.value()
+    expected_page_scroll = page_scroll.value()
+
+    item = window.tasks_list.itemAt(QPoint(20, 20))
+    assert item is not None
+    row = window.tasks_list.itemWidget(item)
+    assert row is not None
+    task_id = row.task.task_id
+
+    # The application coordinator performs another full task refresh after the
+    # view emits completion. Preserve scroll across both synchronous redraws.
+    window.task_completed.connect(
+        lambda _task: window.render_tasks(window.tasks, preserve_undo=True)
+    )
+    row.complete_button.click()
+    qtbot.wait(20)
+
+    assert task_list_scroll.value() == expected_task_list_scroll
+    assert page_scroll.value() == expected_page_scroll
+    assert next(task for task in window.tasks if task.task_id == task_id).state == "completed"
 
 
 @pytest.mark.ui

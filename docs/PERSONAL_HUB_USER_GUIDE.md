@@ -106,8 +106,9 @@ dashboard opens.
 
 In **Settings → Appearance**, choose a theme preset or customize the accent, background,
 and surface colors with a color picker or `#RRGGBB` value. Choose **Apply appearance** to
-save. The animation toggle controls page fades and widget movement. **Reduced motion**
-in accessibility settings also disables these animations, including any already running.
+save. **Enable animations** controls page fades, Calendar and Inbox view changes, Calendar and
+Tasks panel reveals, and Home dashboard movement. Turn it off for reduced motion; active
+transitions stop immediately.
 High contrast takes precedence over custom colors. Colors, motion preferences, widget order,
 visibility, and sizes survive restart and remain separate from Local Assistant settings.
 

@@ -1,12 +1,26 @@
 # Personal Hub implementation status
 
-Updated October 29, 2026. The current implementation baseline is complete for now, and
+Updated November 2, 2026. The current implementation baseline is complete for now, and
 feature updates can continue without treating release evidence as a blocker. External release
 checks remain pending and should be revisited when release readiness is the focus. The
 authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
+
+## Desktop motion and action overview — November 2, 2026
+
+The action inventory in `PERSONAL_HUB_USABILITY_REVIEW.md` now covers Home, Calendar, Tasks,
+Watchlists/news, Inbox/messages, Sources, Settings, Tracking/Logging, and tray actions. Added
+short eased transitions for Calendar view changes, the Inbox Alerts/Messages switch, the
+Calendar **Calendars** disclosure, and the Tasks **Filters** disclosure. Existing page fades
+and Home dashboard geometry transitions remain in place. The Settings reduced-motion control
+cancels these transitions immediately and keeps later view/disclosure changes immediate.
+Mutations, privacy controls, connection work, refresh, and data-management outcomes remain
+immediate. No storage, provider permission, network, or Local Assistant boundary changed.
+
+Automated UI tests and native assistive-technology review were not run for this motion update;
+the existing manual accessibility release gate remains pending.
 
 ## Online Places map — October 29, 2026
 
