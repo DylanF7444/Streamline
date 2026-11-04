@@ -4271,7 +4271,10 @@ class PersonalHubMainWindow(QMainWindow):
             name = _safe_text(_field(item, "name", _field(item, "display_name", "")), limit=160)
             if list_id and name and not any(existing_id == list_id for existing_id, _ in selected):
                 selected.append((list_id, name))
-        self._workspace_task_lists = tuple(selected[:256])
+        updated_task_lists = tuple(selected[:256])
+        if updated_task_lists == self._workspace_task_lists:
+            return
+        self._workspace_task_lists = updated_task_lists
         self._render_workspace_navigation()
 
     def set_workspace_calendar_views(self, preferences: object) -> None:
@@ -6110,7 +6113,6 @@ class PersonalHubMainWindow(QMainWindow):
         self._render_ical_feeds()
         self._render_calendar_imports()
         self._render_calendar_views()
-        self._render_workspace_navigation()
         freshness_text = _CALENDAR_FRESHNESS_MESSAGES[calendar_view.freshness]
         self.calendar_freshness_label.setText(freshness_text)
         detail = calendar_view.detail
@@ -6135,7 +6137,6 @@ class PersonalHubMainWindow(QMainWindow):
     def _render_calendar_from_state(self) -> None:
         if hasattr(self, "calendar_view_stack"):
             self._workspace_calendar_sources = self._calendar_sources
-            self._render_workspace_navigation()
             self._render_calendar_sources()
             self._render_ical_feeds()
             self._render_calendar_imports()

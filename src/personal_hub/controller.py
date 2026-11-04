@@ -596,9 +596,6 @@ class HubController:
 
     def list_source_results(self) -> tuple[SourceResult, ...]:
         source_ids = set(self.registry.source_ids)
-        source_ids.update(
-            state.connection_id for state in self.source_repository.list_sync_states()
-        )
         values = [
             result
             for source_id in sorted(source_ids)
