@@ -66,7 +66,7 @@ from personal_hub.ui.desktop.dashboard import DashboardBoard
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
-from personal_hub.ui.desktop.motion import PageTransition
+from personal_hub.ui.desktop.motion import DisclosureTransition, PageTransition
 from personal_hub.ui.desktop.places_page import PlacesPage
 from personal_hub.ui.desktop.status_label import StatusLabel
 from personal_hub.ui.desktop.workspace_navigation import (
@@ -3686,6 +3686,10 @@ class PersonalHubMainWindow(QMainWindow):
         self._attention_notification: AttentionNotificationView | None = None
         self._tasks: dict[str, TaskView] = {}
         self._task_undo_stack: list[tuple[str, TaskView]] = []
+        self._pending_task_scroll_positions: tuple[int, int] | None = None
+        self._task_scroll_restore_timer = QTimer(self)
+        self._task_scroll_restore_timer.setSingleShot(True)
+        self._task_scroll_restore_timer.timeout.connect(self._restore_task_scroll_positions)
         self._task_state_filter_value = "all"
         self._task_due_filter_value = "all"
         self._task_sort_value = "due"
@@ -3760,6 +3764,22 @@ class PersonalHubMainWindow(QMainWindow):
         if application is not None:
             application.focusChanged.connect(self._page_focus_changed)
         self.page_transition = PageTransition(self.pages)
+        self.calendar_view_transition = PageTransition(self.calendar_view_stack)
+        inbox_content_stack = self.inbox_mode_tabs.findChild(QStackedWidget)
+        self.inbox_mode_transition = PageTransition(
+            inbox_content_stack if inbox_content_stack is not None else self.inbox_mode_tabs
+        )
+        self._motion_page_transitions = (
+            self.page_transition,
+            self.calendar_view_transition,
+            self.inbox_mode_transition,
+        )
+        self.calendar_settings_transition = DisclosureTransition(self.calendar_settings_panel)
+        self.task_filters_transition = DisclosureTransition(self.task_filters_panel)
+        self._motion_disclosures = (
+            self.calendar_settings_transition,
+            self.task_filters_transition,
+        )
 
         self.tray_controller = PersonalHubTrayController(self, icon=self.windowIcon())
         self.tray = self.tray_controller.tray_icon
@@ -5193,7 +5213,11 @@ class PersonalHubMainWindow(QMainWindow):
 
         if not hasattr(self, "calendar_settings_panel"):
             return
-        self.calendar_settings_panel.setVisible(bool(visible))
+        transition = getattr(self, "calendar_settings_transition", None)
+        if transition is None:
+            self.calendar_settings_panel.setVisible(bool(visible))
+        else:
+            transition.set_visible(visible)
         self.calendar_settings_button.setText("Hide calendars" if visible else "Calendars")
         self.calendar_settings_button.setAccessibleName(
             "Hide calendar sources and feeds" if visible else "Show calendar sources and feeds"
@@ -5759,6 +5783,7 @@ class PersonalHubMainWindow(QMainWindow):
         normalized = _safe_text(mode, fallback="month", limit=32).casefold()
         if normalized not in self.calendar_views:
             return False
+        changed = normalized != self._calendar_mode_value
         self._calendar_mode_value = normalized
         index = self.calendar_mode_combo.findData(normalized)
         if index >= 0 and self.calendar_mode_combo.currentIndex() != index:
@@ -5766,6 +5791,8 @@ class PersonalHubMainWindow(QMainWindow):
             self.calendar_mode_combo.setCurrentIndex(index)
             self.calendar_mode_combo.blockSignals(False)
         self.calendar_view_stack.setCurrentWidget(self.calendar_views[normalized])
+        if changed and hasattr(self, "calendar_view_transition"):
+            self.calendar_view_transition.start()
         self._update_calendar_period_label()
         self.calendar_mode_changed.emit(normalized)
         return True
@@ -6676,7 +6703,11 @@ class PersonalHubMainWindow(QMainWindow):
     def _toggle_task_filters(self, visible: bool) -> None:
         """Keep advanced task filters available without dominating the toolbar."""
 
-        self.task_filters_panel.setVisible(bool(visible))
+        transition = getattr(self, "task_filters_transition", None)
+        if transition is None:
+            self.task_filters_panel.setVisible(bool(visible))
+        else:
+            transition.set_visible(visible)
         self.task_filters_button.setText("Hide filters" if visible else "Filters")
         self.task_filters_button.setAccessibleName(
             "Hide task filters" if visible else "Show task filters"
@@ -6735,7 +6766,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._task_sort_value = str(self.task_sort_combo.currentData() or "due")
         self._task_search_value = self.task_filter_input.text().strip().casefold()
         self._sync_task_quick_view()
-        self._render_task_list()
+        self._render_task_list(preserve_scroll=False)
         self.task_filters_changed.emit(self.task_filters)
 
     def set_task_filters(
@@ -6840,9 +6871,23 @@ class PersonalHubMainWindow(QMainWindow):
             task.task_id,
         )
 
-    def _render_task_list(self) -> None:
+    def _render_task_list(self, *, preserve_scroll: bool = True) -> None:
         if not hasattr(self, "tasks_list"):
             return
+        if preserve_scroll:
+            if (
+                self._task_scroll_restore_timer.isActive()
+                and self._pending_task_scroll_positions is not None
+            ):
+                page_scroll, list_scroll = self._pending_task_scroll_positions
+            else:
+                page_scroll = self.tasks_page.verticalScrollBar().value()
+                list_scroll = self.tasks_list.verticalScrollBar().value()
+            self._pending_task_scroll_positions = (page_scroll, list_scroll)
+        else:
+            self._pending_task_scroll_positions = None
+            self._task_scroll_restore_timer.stop()
+
         visible_tasks = [task for task in self._tasks.values() if self._task_matches(task)]
         filtering = bool(
             self._task_search_value
@@ -6916,6 +6961,20 @@ class PersonalHubMainWindow(QMainWindow):
             item.setSizeHint(row.sizeHint())
             if selected_id == task.task_id:
                 self.tasks_list.setCurrentItem(item)
+        if preserve_scroll:
+            # Completion redraws the list twice: once in the view, then again
+            # when the controller refreshes its task surfaces. Defer restoration
+            # until Qt has laid out both redraws and the focus-reveal callback.
+            self._task_scroll_restore_timer.start(0)
+
+    def _restore_task_scroll_positions(self) -> None:
+        positions = self._pending_task_scroll_positions
+        self._pending_task_scroll_positions = None
+        if positions is None or not hasattr(self, "tasks_list"):
+            return
+        page_scroll, list_scroll = positions
+        self.tasks_page.verticalScrollBar().setValue(page_scroll)
+        self.tasks_list.verticalScrollBar().setValue(list_scroll)
 
     def _quick_add_task(self) -> TaskView | None:
         title = _safe_text(self.task_quick_add_input.text(), limit=240)
@@ -9705,6 +9764,9 @@ class PersonalHubMainWindow(QMainWindow):
         changed = value != self._inbox_mode_value
         self._inbox_mode_value = value
         if changed:
+            transition = getattr(self, "inbox_mode_transition", None)
+            if transition is not None:
+                transition.start()
             self.inbox_mode_changed.emit(value)
 
     def show_inbox_mode(self, mode: str) -> bool:
@@ -10724,8 +10786,10 @@ class PersonalHubMainWindow(QMainWindow):
         self.dashboard.set_reduced_motion(self._reduced_motion)
         self.dashboard.refresh_geometry()
         self.appearance_panel.set_high_contrast(self._high_contrast)
-        if hasattr(self, "page_transition"):
-            self.page_transition.set_reduced_motion(self._reduced_motion)
+        for transition in getattr(self, "_motion_page_transitions", ()):
+            transition.set_reduced_motion(self._reduced_motion)
+        for transition in getattr(self, "_motion_disclosures", ()):
+            transition.set_reduced_motion(self._reduced_motion)
 
     set_accessibility_preferences = apply_accessibility_preferences
 

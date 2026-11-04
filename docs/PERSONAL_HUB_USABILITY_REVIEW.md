@@ -51,3 +51,40 @@ reconnection should be checked with test accounts as part of the existing releas
 
 No provider permissions, external write actions, database schema, saved preference formats,
 retention rules, synchronization boundary, or Local Assistant dependency were added or changed.
+
+## Action inventory and motion review — November 2, 2026
+
+The current desktop action surface is grouped below so each workflow can be reviewed without
+confusing local display changes with provider operations.
+
+| Surface | Available user actions |
+| --- | --- |
+| Navigation and collections | Open the configured Workspace destinations; rename, reorder, show, or hide Workspace pages; open task-list shortcuts; manage named Calendar views; switch Tracking/Logging modes. Sources and Settings stay in fixed Management navigation. |
+| Home | Refresh available sources; jump to task capture or progress logging; open a projected item in its owning page; browse months in the mini calendar, return to today, and open a date in Calendar; add/hide widgets, drag them by the heading, resize by handle, and reset the layout. |
+| Calendar | Refresh sources; move between periods, return to today, choose month/day/week/agenda, choose timezone and calendars, manage named views, iCalendar feeds, and local imports, create/edit/remove local events, complete projected local tasks, open safe provider links, and explicitly sync selected linked local events to Google with conflict review. The **Calendars** disclosure contains source, feed, and import controls; selecting an event opens its inspector. |
+| Tasks | Quick add, import, and create lists; switch quick views; search, filter, sort, and clear filters; create/edit/save/cancel; complete, undo, archive, log progress, and open a safe source link. Row menus expose secondary task actions. |
+| Watchlists and news | Add/edit/remove/enable feeds; choose subscriptions and include/exclude terms; filter unread entries; mark entries read and open safe links; create/edit/remove/enable page and product watches; test a watch and refresh sources. Conditional watch fields follow the selected watch type and condition. |
+| Inbox and messages | Switch between alerts and messages; mark alerts read/unread, dismiss, or archive; open an alert's destination; choose a local message category; explicitly open a sanitized message body or provider link. |
+| Sources | Select a source; connect, refresh, enable/disable, reconnect, disconnect, or clear retained summaries; review granted capabilities, health, refresh interval, retention, and the pages that use the source. |
+| Settings | Edit and save startup, offline, timezone, refresh, notification, quiet-hour, digest, privacy, retention, accessibility, appearance, and update preferences; back up, restore, export, preview/apply history deletion, configure encrypted sync or provider relay, sync now, and review/copy diagnostics. |
+| Tracking and Logging | Return to each mode's remembered page; capture manual progress and filter/search Activity; create, edit, search, or delete Reflections; browse a Daily overview date and edit its existing Reflection; search/filter Places, add/edit/delete places and visits, favorite places, save/return to a home map view, and navigate the map. |
+| Tray | Open the window, open Home or Inbox, refresh, pause/resume network refresh, toggle offline mode, and quit. |
+
+Motion is limited to transitions that help users understand a change of view or reveal a
+secondary surface:
+
+| Interaction | Treatment | Reason |
+| --- | --- | --- |
+| Main destination navigation | Existing 180 ms content fade | Confirms the selected page while keeping the navigation rail stable. |
+| Home widget move, resize, add, or hide | Existing eased geometry transition | Shows how the dashboard reflows around direct layout edits. |
+| Calendar month/day/week/agenda switch | New 180 ms content fade | Softens the change between distinct calendar layouts without animating refreshes. |
+| Calendar **Calendars** disclosure | New 180 ms height reveal/collapse | Makes the source and import controls appear as one coherent group. |
+| Tasks **Filters** disclosure | New 180 ms height reveal/collapse | Keeps advanced filters compact until requested while making their appearance clear. |
+| Inbox Alerts/Messages switch | New 180 ms content fade | Keeps the selected Inbox mode change easy to follow. |
+
+The appearance preference for reduced motion cancels running transitions and makes later
+changes immediate. Data edits, completion, archive, alert state, privacy masking/lock,
+connection, refresh, backup/restore, and deletion outcomes remain immediate; their meaning is
+communicated through existing control state and text. No transition is required to understand
+or finish an action. Automated UI tests and native assistive-technology review were not run for
+this motion update.

@@ -1012,12 +1012,12 @@ class AppearancePanel(QWidget):
         self.animations_checkbox.setObjectName("appearanceAnimationsCheckBox")
         self.animations_checkbox.setAccessibleName("Enable animations")
         self.animations_checkbox.setAccessibleDescription(
-            "Allow subtle page transitions and feedback animations."
+            "Allow brief page and view changes, panel reveals, and Home layout transitions."
         )
         self.reduced_motion_checkbox = self.animations_checkbox
         self.motion_toggle = self.animations_checkbox
         motion_help = QLabel(
-            "Turn this off for reduced motion. The preference applies to page transitions and widget feedback.",
+            "Turn this off for reduced motion. It stops page fades, view changes, panel reveals, and Home layout movement.",
             motion_card,
         )
         motion_help.setObjectName("appearanceMotionHelp")
