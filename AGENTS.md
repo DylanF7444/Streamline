@@ -23,7 +23,7 @@ without AI and must not import, package, or require Local Assistant. Preserve it
 application/process identity, data directory, database, credential namespace, settings,
 logs, installer, startup entry, and update channel. External content is untrusted; retain
 schema validation, minimum read scopes, bounded responses, SSRF defenses, sanitization,
-privacy masking, retention controls, and offline-before-network behavior.
+privacy masking, retention controls, and network-pause-before-network behavior.
 
 Use pytest for tests, 4-space Python indentation, explicit imports, `snake_case` names for
 modules/functions/variables, and `PascalCase` for classes and Pydantic models. Keep tests

@@ -115,10 +115,6 @@ def build_hub_container(
         persisted_settings = settings_repository.load_settings(resolved_settings)
         if not settings_repository.all():
             settings_repository.save_settings(persisted_settings)
-        relay_role = settings_repository.get("sync.provider_relay_role", "local")
-        if relay_role == "consumer" and not persisted_settings.offline_mode:
-            persisted_settings = persisted_settings.model_copy(update={"offline_mode": True})
-            settings_repository.save_settings(persisted_settings)
         lifecycle.settings = persisted_settings
 
         source_repository = SourceRepository(database)
@@ -127,14 +123,13 @@ def build_hub_container(
         notification_repository = NotificationRepository(database)
         secret_vault = HubSecretVault(persisted_settings)
         task_repository = TaskRepository(database)
-        calendar_service = CalendarService(offline=persisted_settings.offline_mode)
+        calendar_service = CalendarService()
         calendar_import_repository = CalendarImportRepository(database)
         ical_feed_manager = IcalFeedManager(
             settings_repository,
             calendar_service,
             fetcher=IcalFeedFetcher(
                 allow_http=persisted_settings.allow_insecure_feed_http,
-                offline=persisted_settings.offline_mode,
             ),
         )
         feed_subscription_repository = FeedSubscriptionRepository(database)
@@ -150,9 +145,7 @@ def build_hub_container(
         feed_service = FeedRefreshService(
             FeedFetcher(
                 allow_http=persisted_settings.allow_insecure_feed_http,
-                offline=persisted_settings.offline_mode,
             ),
-            offline=persisted_settings.offline_mode,
         )
         watch_repository = WatchRepository(
             database,
@@ -165,9 +158,7 @@ def build_hub_container(
             watch_repository,
             PageFetcher(
                 allow_http=persisted_settings.allow_insecure_watch_http,
-                offline=persisted_settings.offline_mode,
             ),
-            offline=persisted_settings.offline_mode,
         )
         message_repository = MessageRepository(
             database,
@@ -175,7 +166,6 @@ def build_hub_container(
         )
         message_service = MessageService(
             message_repository,
-            offline=persisted_settings.offline_mode,
         )
         source_registry = SourceRegistry()
         platform_connections = ExternalPlatformManager(
@@ -195,7 +185,6 @@ def build_hub_container(
         )
         source_service = SourceService(
             source_registry,
-            offline=persisted_settings.offline_mode,
         )
         diagnostics = DiagnosticsAggregator(
             application_version=__version__,
@@ -222,6 +211,7 @@ def build_hub_container(
             watch_service=watch_service,
             message_repository=message_repository,
             message_service=message_service,
+            network_paused_getter=lambda: lifecycle.network_activity_paused,
             diagnostics=diagnostics,
         )
         return HubContainer(

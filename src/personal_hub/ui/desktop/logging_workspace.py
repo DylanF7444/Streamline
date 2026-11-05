@@ -318,7 +318,7 @@ class LoggingWorkspace(QObject):
             layout = QVBoxLayout(page)
             layout.setContentsMargins(24, 20, 24, 20)
             layout.setSpacing(12)
-            heading = _label(f"Logging · {label}")
+            heading = _label(label)
             heading.setObjectName("pageTitle")
             layout.addWidget(heading)
             if name != "Summary":
@@ -329,6 +329,8 @@ class LoggingWorkspace(QObject):
             status = _label("")
             status.setAccessibleName(f"{name} status")
             self.statuses[name] = status
+            if name == "Summary":
+                status.hide()
             layout.addWidget(status)
             self.pages[name] = page
         self._build_activity()
@@ -347,11 +349,6 @@ class LoggingWorkspace(QObject):
 
     def _build_activity(self):
         layout = self.pages["Activity"].layout()
-        layout.addWidget(
-            _label(
-                "Completed tasks appear automatically. Log unplanned work or progress on an open task whenever useful."
-            )
-        )
         actions = QGridLayout()
         self.action_layouts.append(actions)
         self.add_button = _button("Log progress", self.log_progress, actions)
@@ -378,11 +375,6 @@ class LoggingWorkspace(QObject):
 
     def _build_reflection(self):
         layout = self.pages["Reflection"].layout()
-        layout.addWidget(
-            _label(
-                "Private writing, saved on this device. Prompts are optional; write as much or as little as you like."
-            )
-        )
         actions = QGridLayout()
         self.action_layouts.append(actions)
         self.new_reflection_button = _button("Write a reflection", self.new_reflection, actions)
@@ -667,9 +659,7 @@ class LoggingWorkspace(QObject):
             len(entries) >= self.limits["Reflection"] and self.limits["Reflection"] < 10_000
         )
         self.statuses["Reflection"].setText(
-            f"{len(entries)} reflections shown. Multiple entries per date are welcome."
-            if entries
-            else "No reflections in this view. Writing is optional."
+            f"{len(entries)} reflections shown." if entries else "No reflections in this view."
         )
 
     def delete_reflection(self):

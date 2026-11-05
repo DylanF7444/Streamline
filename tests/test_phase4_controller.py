@@ -49,7 +49,7 @@ class _FeedTransport:
 
 
 @pytest.mark.asyncio
-async def test_controller_feed_refresh_is_partial_durable_offline_and_restart_conditional(
+async def test_controller_feed_refresh_is_partial_durable_while_paused_and_restart_conditional(
     tmp_path: Path,
 ) -> None:
     settings = HubSettings(data_dir=tmp_path / "hub")
@@ -94,13 +94,13 @@ async def test_controller_feed_refresh_is_partial_durable_offline_and_restart_co
         assert "Personal Hub release" not in diagnostics
         assert "Bounded release notes" not in diagnostics
 
-        before_offline = len(transport.calls)
-        container.controller.set_offline_mode(True)
-        offline = await container.controller.refresh_feeds(
+        before_pause = len(transport.calls)
+        container.controller.set_network_paused(True)
+        paused = await container.controller.refresh_feeds(
             (healthy.subscription_id,), force=True, now=now
         )
-        assert offline[healthy.subscription_id].state == "offline"
-        assert len(transport.calls) == before_offline
+        assert paused[healthy.subscription_id].state == "paused"
+        assert len(transport.calls) == before_pause
     finally:
         container.close()
 
@@ -108,7 +108,7 @@ async def test_controller_feed_refresh_is_partial_durable_offline_and_restart_co
     conditional = _FeedTransport(not_modified=True)
     restarted.feed_service.fetcher = conditional
     try:
-        restarted.controller.set_offline_mode(False)
+        restarted.controller.set_network_paused(False)
         healthy = restarted.controller.list_feed_subscriptions()[1]
         if "failed" in str(healthy.feed_url):
             healthy = restarted.controller.list_feed_subscriptions()[0]

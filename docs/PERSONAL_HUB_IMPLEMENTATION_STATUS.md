@@ -1,12 +1,42 @@
 # Personal Hub implementation status
 
-Updated November 2, 2026. The current implementation baseline is complete for now, and
+Updated November 4, 2026. The current implementation baseline is complete for now, and
 feature updates can continue without treating release evidence as a blocker. External release
 checks remain pending and should be revisited when release readiness is the focus. The
 authoritative product and technical specification is
 `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`. This record separates implemented, deterministic
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
+
+## Charcoal and mint desktop presentation — November 4, 2026
+
+Implemented the reviewed dashboard style in the native desktop application: charcoal
+surfaces, mint accents, consistent cards and controls, and scalable line icons. Removed
+generic page subtitles and decorative writing prompts. Home now shows exact local counts
+for open tasks, unread alerts, and today's Logging entries; these are masked during privacy
+mode and lock. Default widget positions prioritize due tasks and Agenda. Existing saved
+layouts remain intact, and **Customize dashboard** retains widget, layout, and appearance
+actions. Watchlists uses an explicit **Add watch** disclosure with keyboard editing.
+The legacy `navy` preset key now selects **Charcoal / Mint**, preserving stored preferences
+and custom overrides. Light, sage, custom colors, high contrast, reduced motion, and large
+text remain supported. No schema, provider permission, or application boundary changed.
+
+Validation covered all 112 collected UI tests in fresh-process file batches and corrected
+targeted reruns: **110 passed**, with two existing Places failures. The non-UI suite reported
+**275 passed and two existing failures**. All four remaining failures reproduce against the
+saved pre-change UI: source-pause ordering, the packaging entry-path assertion, Places pause
+copy, and Places renderer resume. Those unrelated behaviors were left unchanged. Fixed
+restyle regressions include parentless status-label flashes, compact high-contrast styling,
+dashboard default-order assertions, and keyboard focus when opening the watch editor. A
+backdated Logging fixture now supplies a matching creation date rather than depending on
+the current date.
+
+Ruff format/lint (183 files), documentation consistency, startup import isolation, and Git
+whitespace checks passed. Synthetic offline screenshots were reviewed across ten primary
+views, light/sage/custom themes, and 720×460 at 175% text/high contrast, including focused
+task saving. Evidence is local under ignored `.benchmark-data/style-implementation/`.
+No build, live-provider, native DPI, or assistive-technology acceptance is claimed for this
+presentation update.
 
 ## Desktop motion and action overview — November 2, 2026
 
@@ -34,10 +64,11 @@ while excluding them from shared-folder sync and the provider relay.
 The renderer loads only when Places is visible and online. The bounded Python tile client
 uses fixed HTTPS provider paths, public-address checks, redirect rejection, four workers,
 response/read limits and a 32 MB memory cache. The off-the-record browser cannot make direct
-network requests or read arbitrary local files. Offline/consumer mode, pause, masking, lock,
-leaving Places, hiding to tray and shutdown stop requests; native local controls remain
-available offline. Restoring Places while starting hidden in the tray does not start the
-renderer. No API key, geocoder, automatic location tracking or offline-area download is used.
+network requests or read arbitrary local files. Snapshot consumer mode, network pause, masking,
+lock, leaving Places, hiding to tray and shutdown stop requests; native local controls remain
+available without connectivity. Restoring Places while starting hidden in the tray does not
+start the renderer. No API key, geocoder, automatic location tracking or offline-area download
+is used.
 
 Validation: **277 core tests passed**, and **35 relevant UI tests passed across batches and
 corrected targeted reruns** (Places, renderer boundary, window navigation, accessibility,
@@ -187,7 +218,7 @@ failure); that full lane was not rerun after the fix.
 | Phase | Status | Evidence |
 | --- | --- | --- |
 | 0. Boundary proof and application skeleton | Complete | Independent package, entry point, data root, database, process/mutex/startup identities, Qt shell, coexistence tests, and measured import boundary. |
-| 1. Hub storage, shell, Inbox, and lifecycle | Complete | Schema migration, repositories, Hub-only encrypted vault, tray/lifecycle/offline/privacy behavior, Inbox/source/settings controls, diagnostics, backup/restore, and credential-free export. |
+| 1. Hub storage, shell, Inbox, and lifecycle | Complete | Schema migration, repositories, Hub-only encrypted vault, tray/lifecycle/network-pause/privacy behavior, Inbox/source/settings controls, diagnostics, backup/restore, and credential-free export. |
 | 2. Native tasks and Today | Complete | Visual CRUD, recurrence, reminders, deterministic digest, timezone-aware Today projection, restart deduplication, and 10,000-task responsiveness coverage. |
 | 3. Calendar | Complete at deterministic source gate | Read-only Google and Outlook adapters, PKCE/vault isolation, bounded multi-account refresh, cached states, Month/Day/Week/Agenda views with an hourly Week grid, and Today projection. Live-account acceptance remains a release check. |
 | 4. News feeds | Complete | Secure RSS/Atom fetch, parsing, conditional requests, filters, retention, read state, deep links, digest grouping, source isolation, and UI authoring. |
@@ -213,7 +244,7 @@ events remain read-only.
 
 The 28 core calendar-item tests and five desktop authoring tests pass with synthetic data.
 They cover restart, backup/restore, export, shared-folder authorization isolation, source
-selection/deduplication, validation, offline/disabled gating, new OAuth grants, bounded
+selection/deduplication, validation, network-pause/disabled gating, new OAuth grants, bounded
 write transport/redirect rejection, round trips, uncertain inserts, version races, ownership,
 conflicts/resolution, and local/remote removal. The desktop tests exercise actual add/edit/remove
 controls and reject ambiguous or nonexistent daylight-saving times. Import-boundary,
@@ -271,14 +302,15 @@ tests.
 
 ## Optional provider collector relay — October 22, 2026
 
-Settings now supports three device roles: local-only (default), provider collector, and offline
+Settings now supports three device roles: local-only (default), provider collector, and snapshot
 consumer. The collector publishes one separate encrypted relay shard alongside local-state sync.
 The allowlist covers bounded calendar snapshots, selected message summaries, retained feed
 entries, and bounded watch observations and alerts. A consumer receives those records into the
 existing Hub display repositories and caches the calendar snapshot locally for up to 30 days.
 Message bodies, provider credentials and connection metadata, private iCalendar URLs, and Google
-write bindings are excluded. Consumer mode forces provider networking off, including explicit
-Google event sync, and keeps the last received content available when the collector is offline.
+write bindings are excluded. Snapshot consumer mode forces provider networking off, including
+explicit Google event sync, and keeps the last received content available when the collector is
+offline.
 
 The collector is not an always-on server: it must be online only when it refreshes providers and
 publishes the encrypted shard. Shared-folder reachability and a cloud folder's own sync client are
@@ -381,7 +413,7 @@ order/visibility preferences are read when no dashboard layout has been saved.
 The October 16, 2026 drag, grid-granularity, and panel-boundary follow-ups have not been run
 through the Qt UI or test suite.
 
-Verification includes offline settings reopen, real Qt mouse-event drag tests, refresh and
+Verification includes settings reopen, real Qt mouse-event drag tests, refresh and
 restart persistence, privacy masking after layout changes, reduced-motion cancellation,
 minimum-size/large-text checks, and synthetic offscreen screenshot review. Windows offscreen
 tests load an installed system font when Qt has no font families, so layout checks measure
@@ -444,7 +476,7 @@ repurposed.
 - Hub configuration rejects any data/database overlap with Local Assistant.
 - The database migrates idempotently through Hub schema version 12. The migration retires and
   clears legacy calendar-event completion rows; task completion remains in the task table.
-- Offline mode is checked before adapter, DNS, or token work in deterministic tests.
+- Network refresh pause is checked before adapter, DNS, or token work in deterministic tests.
 - Source failures become fixed safe states and durable Inbox records without blocking Qt.
 - DPAPI is used for production secrets under the current Windows user and the distinct
   `PersonalHub` namespace; tests inject an offline cipher.

@@ -6,7 +6,7 @@ A local-first Windows desktop app for daily attention management. Streamline bri
 
 - **Today and planning:** Tasks, recurrence, reminders, calendar views, and a durable Inbox in a customizable desktop dashboard.
 - **Useful signals:** RSS/Atom feeds, price and restock alerts, webpage change watches, and selected Gmail, Outlook, and Slack summaries.
-- **Privacy controls:** Offline mode, privacy masking, isolated encrypted credential storage, bounded local data, and explicit source permissions.
+- **Privacy controls:** Session-only network refresh pause, privacy masking, isolated encrypted credential storage, bounded local data, and explicit source permissions.
 - **User-owned sync:** Optional, manual encrypted synchronization through a shared folder selected by the user. Provider integrations are read-only by default; Google Calendar event sync requires separate opt-in and per-item selection.
 
 ## Implementation

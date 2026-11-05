@@ -9,15 +9,15 @@ from collections.abc import Mapping
 from personal_hub.messages.contracts import (
     MessageDisconnectedError,
     MessageInvalidResponseError,
-    MessageOfflineError,
+    MessagePausedError,
     MessagePermissionRequiredError,
     MessageUnavailableError,
 )
 
 
-async def access_token(provider: object, scopes: tuple[str, ...], *, offline: bool) -> str:
-    if offline:
-        raise MessageOfflineError("Message refresh is paused by offline mode.")
+async def access_token(provider: object, scopes: tuple[str, ...], *, network_paused: bool) -> str:
+    if network_paused:
+        raise MessagePausedError("Message refresh is paused.")
     callback = getattr(provider, "get_token", None)
     if callback is None:
         callback = getattr(provider, "access_token", None)
@@ -35,7 +35,7 @@ async def access_token(provider: object, scopes: tuple[str, ...], *, offline: bo
             value = callback()
         if inspect.isawaitable(value):
             value = await value
-    except MessageOfflineError:
+    except MessagePausedError:
         raise
     except Exception as error:
         raise MessageDisconnectedError("Message source is disconnected.") from error
@@ -56,10 +56,10 @@ async def request_json(
     token: str,
     params: Mapping[str, object],
     max_response_bytes: int,
-    offline: bool,
+    network_paused: bool,
 ) -> dict[str, object]:
-    if offline:
-        raise MessageOfflineError("Message refresh is paused by offline mode.")
+    if network_paused:
+        raise MessagePausedError("Message refresh is paused.")
     callback = getattr(transport, "request", None)
     get_only = False
     if callback is None:
@@ -86,7 +86,7 @@ async def request_json(
         value = callback(url, **selected) if get_only else callback("GET", url, **selected)
         if inspect.isawaitable(value):
             value = await value
-    except MessageOfflineError:
+    except MessagePausedError:
         raise
     except Exception as error:
         raise MessageUnavailableError("Message provider request failed safely.") from error

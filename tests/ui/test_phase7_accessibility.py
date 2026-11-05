@@ -84,6 +84,8 @@ def test_settings_and_watchlists_scroll_without_compressing_text_fields(qtbot) -
         ("Settings", window.settings_inputs["default_timezone"]),
     ):
         window.show_destination(destination)
+        if destination == "Watchlists":
+            window.watch_add_button.click()
         qtbot.wait(25)
         page = window.page_widgets[destination]
         assert isinstance(page, QScrollArea)

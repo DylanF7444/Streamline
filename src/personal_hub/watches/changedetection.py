@@ -11,7 +11,7 @@ from personal_hub.feeds.security import origin_for_url
 from personal_hub.watches.contracts import (
     PageResponse,
     WatchDefinition,
-    WatchOfflineError,
+    WatchPausedError,
     WatchPolicyError,
     WatchUnavailableError,
 )
@@ -28,7 +28,8 @@ class ChangedetectionReadAdapter:
         transport: object,
         api_token_getter: object,
         *,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: object | None = None,
         timeout_seconds: float = 20,
         max_response_bytes: int = 2_000_000,
     ) -> None:
@@ -40,12 +41,29 @@ class ChangedetectionReadAdapter:
         self.api_origin = normalized
         self.transport = transport
         self.api_token_getter = api_token_getter
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if callable(self._network_paused_getter)
+            else self._network_paused_value
+        )
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+
+    def set_network_paused_getter(self, getter: object) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def fetch(self, watch: WatchDefinition) -> PageResponse:
         if not isinstance(watch, WatchDefinition) or watch.kind != "changedetection":
@@ -57,8 +75,8 @@ class ChangedetectionReadAdapter:
         return await self.fetch_snapshot(remote_watch_id)
 
     async def fetch_snapshot(self, remote_watch_id: str) -> PageResponse:
-        if self.offline:
-            raise WatchOfflineError("Watch refresh is paused by offline mode.")
+        if self.network_paused:
+            raise WatchPausedError("Watch refresh is paused.")
         if not isinstance(remote_watch_id, str) or not _REMOTE_ID.fullmatch(remote_watch_id):
             raise ValueError("changedetection.io watch identity is invalid")
         token = self.api_token_getter()

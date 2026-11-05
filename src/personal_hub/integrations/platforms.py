@@ -414,7 +414,7 @@ class ExternalPlatformManager:
                 config
                 and config.enabled
                 and config.calendar_sync_enabled
-                and not self.calendar_service.offline
+                and not self.calendar_service.network_paused
             )
 
         async def token() -> str:

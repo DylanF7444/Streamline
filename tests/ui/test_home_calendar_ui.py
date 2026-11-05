@@ -88,8 +88,8 @@ def test_mini_calendar_marks_selected_timezone_and_multiday_data_without_titles(
     assert all("Private" not in label.text() for label in mini.findChildren(QLabel))
     window.set_calendar_selection(())
     assert mini.grid.activity == set()
-    window.set_offline_mode(True)
-    assert "Offline" in mini.status_label.text()
+    window.set_network_refresh_paused(True)
+    assert "Paused" in mini.status_label.text()
 
 
 def test_mini_calendar_month_boundaries_keyboard_open_and_refresh_preserve_state(qtbot):

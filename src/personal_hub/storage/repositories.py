@@ -116,6 +116,7 @@ class SettingsRepository:
     _NON_PERSISTED_SETTINGS = frozenset({"profile", "data_dir", "database_name"})
     _LEGACY_CANVAS_CLEANUP_SETTING = "canvas_remove_completed_assignments"
     _TASK_CLEANUP_SETTING = "remove_completed_tasks_after_due_date"
+    _REMOVED_SETTINGS = frozenset({"offline_mode"})
 
     def __init__(self, database: HubDatabase) -> None:
         self.database = database
@@ -221,6 +222,10 @@ class SettingsRepository:
             legacy_row = session.get(HubSettingRow, self._LEGACY_CANVAS_CLEANUP_SETTING)
             if legacy_row is not None:
                 session.delete(legacy_row)
+            for key in self._REMOVED_SETTINGS:
+                row = session.get(HubSettingRow, key)
+                if row is not None:
+                    session.delete(row)
         return settings
 
     save = save_settings
@@ -228,6 +233,10 @@ class SettingsRepository:
     def load_settings(self, defaults: HubSettings | None = None) -> HubSettings:
         baseline = defaults or HubSettings()
         values = self.all()
+        for key in self._REMOVED_SETTINGS:
+            if key in values:
+                self.delete(key)
+                values.pop(key, None)
         if not values:
             return baseline
         merged = dict(baseline.model_dump())

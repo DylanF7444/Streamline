@@ -10,9 +10,9 @@ from pydantic import ValidationError
 
 from personal_hub.feeds import (
     FeedFetcher,
-    FeedOfflineError,
     FeedParseError,
     FeedParser,
+    FeedPausedError,
     FeedPolicyError,
     FeedRedirectError,
     FeedRefreshService,
@@ -328,11 +328,11 @@ async def test_refresh_service_backoff_is_per_origin_and_force_does_not_bypass_i
 
 
 @pytest.mark.asyncio
-async def test_refresh_service_offline_gate_precedes_fetcher() -> None:
+async def test_refresh_service_network_pause_precedes_fetcher() -> None:
     fetcher = _Fetcher([FeedResponse(200, {}, RSS)])
-    service = FeedRefreshService(fetcher, offline=True)
+    service = FeedRefreshService(fetcher, network_paused=True)
     result = await service.refresh(_subscription())
-    assert result.state == "offline"
+    assert result.state == "paused"
     assert fetcher.calls == []
 
 
@@ -354,7 +354,7 @@ async def test_refresh_all_keeps_failed_feed_independent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetcher_offline_does_not_validate_dns_or_contact_transport() -> None:
-    fetcher = FeedFetcher(_Transport([]), offline=True)
-    with pytest.raises(FeedOfflineError):
+async def test_fetcher_pause_does_not_validate_dns_or_contact_transport() -> None:
+    fetcher = FeedFetcher(_Transport([]), network_paused=True)
+    with pytest.raises(FeedPausedError):
         await fetcher.fetch(_subscription("https://private.invalid/feed"))

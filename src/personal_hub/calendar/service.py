@@ -1,4 +1,4 @@
-"""Offline-aware calendar orchestration with bounded concurrency and stale snapshots."""
+"""Network-pause-aware calendar orchestration with bounded, stale-safe snapshots."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from personal_hub.calendar.contracts import (
     CalendarDisconnectedError,
     CalendarEvent,
     CalendarInvalidResponseError,
-    CalendarOfflineError,
+    CalendarPausedError,
     CalendarPermissionRequiredError,
     CalendarQuery,
     CalendarResult,
@@ -28,7 +28,8 @@ _STATE_MESSAGES: dict[CalendarState, str] = {
     "ready": "Calendar is ready.",
     "empty": "Calendar is ready but has no events.",
     "stale": "Showing the last successful calendar snapshot.",
-    "offline": "Calendar refresh is paused by offline mode.",
+    "paused": "Calendar refresh is paused.",
+    "offline": "Calendar is offline.",
     "permission_required": "Calendar permission is required.",
     "disconnected": "Calendar is disconnected.",
     "error": "Calendar refresh failed safely.",
@@ -42,8 +43,8 @@ def normalize_calendar_error(error: BaseException) -> tuple[CalendarState, str]:
         return "permission_required", _STATE_MESSAGES["permission_required"]
     if isinstance(error, CalendarDisconnectedError):
         return "disconnected", _STATE_MESSAGES["disconnected"]
-    if isinstance(error, CalendarOfflineError):
-        return "offline", _STATE_MESSAGES["offline"]
+    if isinstance(error, CalendarPausedError):
+        return "paused", _STATE_MESSAGES["paused"]
     if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
         return "error", "Calendar refresh timed out."
     if isinstance(error, CalendarUnavailableError):
@@ -66,8 +67,8 @@ class CalendarService:
         max_concurrency: int = 2,
         max_events: int = 1_000,
         max_calendars: int = 50,
-        offline: bool = False,
-        offline_getter: Any | None = None,
+        network_paused: bool = False,
+        network_paused_getter: Any | None = None,
     ) -> None:
         if not 1 <= max_concurrency <= 2:
             raise ValueError("Personal Hub calendar concurrency must be between 1 and 2")
@@ -80,8 +81,12 @@ class CalendarService:
         self.max_concurrency = max_concurrency
         self.max_events = max_events
         self.max_calendars = max_calendars
-        self._offline_getter = offline_getter if callable(offline_getter) else None
-        self._offline_value = bool(offline) if self._offline_getter is None else False
+        self._network_paused_getter = (
+            network_paused_getter if callable(network_paused_getter) else None
+        )
+        self._network_paused_value = (
+            bool(network_paused) if self._network_paused_getter is None else False
+        )
         self._sources: dict[str, CalendarSource] = {}
         self._source_locks: dict[str, asyncio.Lock] = {}
         self._concurrency = asyncio.Semaphore(max_concurrency)
@@ -97,22 +102,25 @@ class CalendarService:
                 self.register(source, source_id=selected_id)
 
     @property
-    def offline(self) -> bool:
+    def network_paused(self) -> bool:
         return (
-            bool(self._offline_getter())
-            if self._offline_getter is not None
-            else self._offline_value
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
         )
 
-    @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
 
-    def set_offline(self, value: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(value)
-
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: Any) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
+        for source in self._sources.values():
+            callback = getattr(source, "set_network_paused_getter", None)
+            if callable(callback):
+                callback(getter)
 
     @property
     def source_ids(self) -> tuple[str, ...]:
@@ -132,6 +140,10 @@ class CalendarService:
             raise TypeError("calendar source must provide async list_events()")
         self._sources[selected_id] = source
         self._source_locks[selected_id] = asyncio.Lock()
+        if self._network_paused_getter is not None:
+            callback = getattr(source, "set_network_paused_getter", None)
+            if callable(callback):
+                callback(self._network_paused_getter)
         return source
 
     add = register
@@ -158,7 +170,7 @@ class CalendarService:
         return self._last_results.get(source_id)
 
     def seed_relay_snapshot(self, snapshot: CalendarSnapshot) -> CalendarResult:
-        """Seed a validated collector snapshot for an offline consumer device."""
+        """Seed a validated provider snapshot for a consumer device."""
 
         if not isinstance(snapshot, CalendarSnapshot):
             raise TypeError("calendar relay cache expects CalendarSnapshot")
@@ -167,7 +179,7 @@ class CalendarService:
         if snapshot.provider_id != provider_id:
             raise ValueError("calendar relay provider identity does not match its source")
         self._last_good[snapshot.source_id] = snapshot
-        state: CalendarState = "offline" if self.offline else "stale"
+        state: CalendarState = "paused" if self.network_paused else "stale"
         result = CalendarResult(
             source_id=snapshot.source_id,
             provider_id=provider_id,
@@ -207,8 +219,8 @@ class CalendarService:
         source = self.source(source_id)
         if len(query.calendar_ids) > self.max_calendars:
             raise ValueError("calendar query selects too many calendars")
-        if self.offline:
-            return self._remember(self._offline_result(source_id, source))
+        if self.network_paused:
+            return self._remember(self._paused_result(source_id, source))
         started = time.monotonic()
         try:
             value = await self._invoke(source_id, source, query, timeout_seconds)
@@ -224,8 +236,8 @@ class CalendarService:
             )
             self._last_good[source_id] = snapshot
             return self._remember(result)
-        except _OfflineGateHit:
-            return self._remember(self._offline_result(source_id, source))
+        except _NetworkPauseGateHit:
+            return self._remember(self._paused_result(source_id, source))
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -311,16 +323,16 @@ class CalendarService:
 
         source = self.source(source_id)
         provider_id = str(getattr(source, "provider_id", "calendar"))
-        if self.offline:
+        if self.network_paused:
             return CalendarStatus(
                 source_id=source_id,
                 provider_id=provider_id,
-                state="offline",
+                state="paused",
                 checked_at=datetime.now(UTC),
                 item_count=(
                     len(self._last_good[source_id].events) if source_id in self._last_good else 0
                 ),
-                safe_message=_STATE_MESSAGES["offline"],
+                safe_message=_STATE_MESSAGES["paused"],
             )
 
         method = getattr(source, "status", None)
@@ -351,14 +363,14 @@ class CalendarService:
             if value.source_id != source_id or value.provider_id != provider_id:
                 raise CalendarInvalidResponseError("calendar status identity mismatch")
             return value
-        except _OfflineGateHit:
+        except _NetworkPauseGateHit:
             return CalendarStatus(
                 source_id=source_id,
                 provider_id=provider_id,
-                state="offline",
+                state="paused",
                 checked_at=datetime.now(UTC),
                 item_count=0,
-                safe_message=_STATE_MESSAGES["offline"],
+                safe_message=_STATE_MESSAGES["paused"],
             )
         except asyncio.CancelledError:
             raise
@@ -391,9 +403,9 @@ class CalendarService:
         )
         async with self._source_locks[source_id], self._concurrency:
             # This second gate is deliberately inside the queue so waiting work
-            # cannot touch a transport after offline mode is enabled.
-            if self.offline:
-                raise _OfflineGateHit
+            # cannot touch a transport after refresh is paused.
+            if self.network_paused:
+                raise _NetworkPauseGateHit
             callback = source.list_events(query)
             if not inspect.isawaitable(callback):
                 raise TypeError("calendar source list_events() must return an awaitable")
@@ -413,8 +425,8 @@ class CalendarService:
             else self._validate_timeout(timeout_seconds)
         )
         async with self._source_locks[source_id], self._concurrency:
-            if self.offline:
-                raise _OfflineGateHit
+            if self.network_paused:
+                raise _NetworkPauseGateHit
             callback = method()
             if not inspect.isawaitable(callback):
                 raise TypeError("calendar source status() must return an awaitable")
@@ -450,15 +462,15 @@ class CalendarService:
             }
         )
 
-    def _offline_result(self, source_id: str, source: CalendarSource) -> CalendarResult:
+    def _paused_result(self, source_id: str, source: CalendarSource) -> CalendarResult:
         snapshot = self._last_good.get(source_id)
         return self._result(
             source_id,
             source,
-            "offline",
+            "paused",
             snapshot=snapshot,
             last_success_at=None if snapshot is None else snapshot.collected_at,
-            safe_message=_STATE_MESSAGES["offline"],
+            safe_message=_STATE_MESSAGES["paused"],
         )
 
     def _result(
@@ -495,8 +507,8 @@ class CalendarService:
         return float(value)
 
 
-class _OfflineGateHit(Exception):
-    """Internal marker for a queued operation that became offline."""
+class _NetworkPauseGateHit(Exception):
+    """Internal marker for a queued operation that became paused."""
 
 
 def _event_sort_key(event: CalendarEvent) -> tuple[object, ...]:

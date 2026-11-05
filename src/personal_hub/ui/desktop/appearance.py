@@ -47,9 +47,9 @@ _COLOR_PREFERENCE_KEYS: Final[tuple[str, ...]] = (
 # hierarchy remains clear on a Windows desktop without looking overly stark.
 THEME_PRESETS: Final[dict[str, dict[str, str]]] = {
     "navy": {
-        "accent_color": "#70b5ff",
-        "background_color": "#0b1421",
-        "surface_color": "#101f32",
+        "accent_color": "#a7dfcf",
+        "background_color": "#171a21",
+        "surface_color": "#21252f",
     },
     "light": {
         "accent_color": "#286a8a",
@@ -64,7 +64,8 @@ THEME_PRESETS: Final[dict[str, dict[str, str]]] = {
 }
 
 THEME_LABELS: Final[dict[str, str]] = {
-    "navy": "Navy / Midnight",
+    # Retain the persisted key so existing layouts and custom colors need no migration.
+    "navy": "Charcoal / Mint",
     "light": "Light / Daylight",
     "sage": "Sage / Quiet green",
 }
@@ -245,12 +246,12 @@ def theme_stylesheet(
         page_text = contrast_text(background)
         surface_text = contrast_text(surface)
         muted_text = _mix(surface_text, surface, 0.38)
-        border = _mix(surface, page_text, 0.24)
+        border = _mix(surface, page_text, 0.14)
         # Keep the navigation rail close to the page background.  Mixing it
         # with the text foreground makes light themes look like a gray slab;
         # a small surface blend gives the rail separation without losing the
         # quiet, polished palette.
-        navigation = _mix(background, surface, 0.28)
+        navigation = _mix(background, surface, 0.48)
         hover = _mix(surface, accent, 0.16)
         selected = _mix(background, accent, 0.34)
         accent_text = contrast_text(accent)
@@ -289,8 +290,16 @@ QMainWindow, QWidget {{
     font-size: 10pt;
 }}
 
-#appearanceTitle {{ font-size: 14pt; font-weight: 650; }}
-#dashboardCardTitle {{ font-size: 12pt; font-weight: 600; }}
+#appearanceTitle {{ font-size: 13pt; font-weight: 600; }}
+#dashboardCardTitle {{ font-size: 11pt; font-weight: 600; }}
+#persistentClockDisplay {{
+    background: {surface};
+    border-bottom: 1px solid {border};
+}}
+#persistentClockWeekday {{ font-size: 9pt; font-weight: 650; }}
+#persistentClockDate {{ font-size: 10pt; font-weight: 400; }}
+#persistentClockTime {{ font-size: 16pt; font-weight: 600; }}
+#persistentClockTimezone {{ font-size: 9pt; }}
 
 QLabel {{
     background: transparent;
@@ -727,6 +736,55 @@ QTabBar::tab:selected, QTabBar::tab:hover {{
     background: {accent};
     color: {accent_text};
 }}
+
+/* Shared desktop geometry and layered surfaces. Children inherit their card. */
+QWidget {{ background: transparent; }}
+QMainWindow, QDialog, #personalHubRoot, #personalHubContent {{ background: {background}; }}
+QScrollArea {{ border: 0; background: {background}; }}
+#personalHubNavigation, #persistentClockDisplay {{ background: {navigation}; }}
+#pageTitle {{ font-size: 19pt; font-weight: 600; }}
+#brandTitle {{ font-size: 14pt; font-weight: 600; }}
+QPushButton, QToolButton {{ min-height: 22px; border-radius: 7px; padding: 5px 10px; }}
+QPushButton[hubNavigation="true"] {{ min-height: 30px; padding: 3px 10px; }}
+QPushButton[hubNavigation="true"]:checked {{
+    background: {accent}; border-color: {accent}; color: {accent_text};
+}}
+QLineEdit, QComboBox, QDateTimeEdit, QDateEdit, QSpinBox, QDoubleSpinBox {{
+    min-height: 22px; padding: 4px 8px;
+}}
+QPlainTextEdit, QTextEdit {{ padding: 8px; }}
+QMenu {{ background: {surface}; color: {surface_text}; border: 1px solid {border}; padding: 4px; }}
+QMenu::item {{ padding: 7px 20px 7px 10px; }}
+QMenu::item:selected {{ background: {selected}; color: {surface_text}; }}
+#homeSummaryCard, QGroupBox {{
+    background: {surface}; color: {surface_text}; border: 1px solid {border}; border-radius: 12px;
+}}
+#webWatchPanel {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+#watchList {{ background: transparent; border: 0; }}
+#watchList::item {{ padding: 10px 4px; border-bottom: 1px solid {border}; }}
+QGroupBox {{ margin-top: 12px; padding: 14px 10px 10px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {surface_text}; }}
+#homeSummaryLabel {{ color: {muted_text}; font-size: 9pt; }}
+#homeSummaryValue {{ color: {accent}; font-size: 21pt; font-weight: 600; }}
+#dashboardWidgetCard {{ border-radius: 12px; }}
+#dashboardGridPanel {{ background: transparent; border-color: {border}; border-radius: 12px; }}
+#dashboardOpenButton {{
+    background: transparent; border: 0; color: {accent}; padding: 2px 5px; font-size: 9pt;
+}}
+#dashboardOpenButton:focus {{ border: 2px solid {focus}; }}
+#dashboardEditControls, #todaySection, #dashboardCardHeader {{ background: transparent; }}
+#todaySectionItems::item {{ padding: 10px 2px; border-bottom: 1px solid {border}; }}
+#loggingActivityPage, #loggingReflectionPage, #loggingSummaryPage {{ background: {background}; }}
+#dailyOverviewFacts {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+#appearanceHeader {{ background: transparent; }}
+#appearancePresetCard, #appearanceColorsCard, #appearanceMotionCard {{
+    border: 1px solid {border}; border-radius: 10px;
+}}
+QScrollBar:vertical {{ width: 10px; }}
+QScrollBar:horizontal {{ height: 10px; }}
+QScrollBar::handle:vertical {{ min-height: 28px; min-width: 0; border-radius: 4px; }}
+QScrollBar::handle:horizontal {{ min-width: 28px; min-height: 0; border-radius: 4px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 """
 
     if high_contrast:
@@ -736,10 +794,10 @@ QTabBar::tab:selected, QTabBar::tab:hover {{
         override += """
 
 /* High contrast reinforcement */
-QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {{
+QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {
     background: #000000;
     color: #ffffff;
-}}
+}
 
 #personalHubNavigation, #todayPage, #calendarPage, #tasksPage,
 #watchlistsPage, #inboxPage, #sourcesPage, #settingsPage,
@@ -752,56 +810,56 @@ QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {{
 #newsSubscriptionEditor, #dashboardCard, #dashboardWidget,
 #dashboardWidgetCard, #dashboardWidgetFrame, #dashboardWidgetHost,
 #dashboardEmptyState,
-QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
+QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {
     background: #000000;
     color: #ffffff;
     border-color: #ffffff;
-}}
+}
 
 #dashboardCardHeader, #dashboardEditControls, #dashboardToolbar,
-#dashboardGrid, #dashboardWidgetCard #todaySection {{
+#dashboardGrid, #dashboardWidgetCard #todaySection {
     background: transparent;
     border: 0;
-}}
+}
 
-#dashboardGridPanel[dashboardEditing="true"] {{
+#dashboardGridPanel[dashboardEditing="true"] {
     border: 3px dashed #ffff00;
-}}
+}
 
 #dashboardResizeGrip, #dashboardResizeGripN, #dashboardResizeGripS,
 #dashboardResizeGripE, #dashboardResizeGripW, #dashboardResizeGripNE,
-#dashboardResizeGripNW, #dashboardResizeGripSW {{
+#dashboardResizeGripNW, #dashboardResizeGripSW {
     background: transparent;
     border: 0;
-}}
+}
 
-#dashboardDropPreview {{
+#dashboardDropPreview {
     background: transparent;
     border: 2px dashed #ffffff;
-}}
+}
 
-#miniCalendarGrid, #miniCalendarGrid QAbstractItemView {{
+#miniCalendarGrid, #miniCalendarGrid QAbstractItemView {
     background: #000000;
     color: #ffffff;
     selection-background-color: #003b5c;
     selection-color: #ffffff;
-}}
+}
 
 QLabel, QCheckBox, QRadioButton, QGroupBox, QAbstractItemView,
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QDateTimeEdit,
-QSpinBox, QDoubleSpinBox {{
+QSpinBox, QDoubleSpinBox {
     color: #ffffff;
-}}
+}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QDateTimeEdit,
 QSpinBox, QDoubleSpinBox, QListWidget, QTreeWidget, QTableView,
-#inboxList, #sourcesList, #diagnosticsList, #calendarAgendaView {{
+#inboxList, #sourcesList, #diagnosticsList, #calendarAgendaView {
     background: #000000;
     color: #ffffff;
     border: 2px solid #ffffff;
     selection-background-color: #003b5c;
     selection-color: #ffffff;
-}}
+}
 
 #newsIncludeKeywordsInput, #newsExcludeKeywordsInput,
 #newsSubscriptionTitleInput, #newsSubscriptionUrlInput,
@@ -809,70 +867,70 @@ QSpinBox, QDoubleSpinBox, QListWidget, QTreeWidget, QTableView,
 #newsSubscriptionExcludeInput, #taskQuickAddInput, #taskSearchInput,
 #taskEditorPanel QLineEdit, #taskEditorPanel QPlainTextEdit,
 #taskEditorPanel QDateTimeEdit, #taskEditorPanel QComboBox,
-#taskFilters QComboBox, #calendarEventDetailsDescription {{
+#taskFilters QComboBox, #calendarEventDetailsDescription {
     background: #000000;
     color: #ffffff;
     border-color: #ffffff;
     selection-background-color: #003b5c;
     selection-color: #ffffff;
-}}
+}
 
-QPushButton, QToolButton {{
+QPushButton, QToolButton {
     background: #000000;
     color: #ffffff;
     border: 2px solid #ffffff;
-}}
+}
 
 QPushButton:hover:enabled, QToolButton:hover:enabled,
-QPushButton[hubNavigation="true"]:hover:enabled {{
+QPushButton[hubNavigation="true"]:hover:enabled {
     background: #003b5c;
     border-color: #00ffff;
     color: #ffffff;
-}}
+}
 
 QPushButton[hubNavigation="true"]:checked,
 QPushButton#primaryButton, QPushButton#applyAppearanceButton,
-QPushButton[hubAccent="true"] {{
+QPushButton[hubAccent="true"] {
     background: #00ffff;
     border-color: #ffffff;
     color: #000000;
-}}
+}
 
 #newsEntryReadButton, #newsEntryOpenButton, #calendarEventButton,
 #calendarEventNativeOpenButton, #calendarEventDetailsCloseButton,
-#taskNativeOpenButton {{
+#taskNativeOpenButton {
     background: #003b5c;
     border-color: #ffffff;
     color: #ffffff;
-}}
+}
 
 QPushButton:focus, QToolButton:focus, QLineEdit:focus,
 QPlainTextEdit:focus, QComboBox:focus, QDateTimeEdit:focus,
 QSpinBox:focus, QDoubleSpinBox:focus, QCheckBox:focus,
-QListWidget:focus, QTableView:focus, QTabBar:focus {{
+QListWidget:focus, QTableView:focus, QTabBar:focus {
     border: 3px solid #ffff00;
-}}
+}
 
-#dashboardCardHeader:focus {{
+#dashboardCardHeader:focus {
     border: 3px solid #ffff00;
-}}
+}
 
 #dashboardResizeGrip:focus, #dashboardResizeGripN:focus,
 #dashboardResizeGripS:focus, #dashboardResizeGripE:focus,
 #dashboardResizeGripW:focus, #dashboardResizeGripNE:focus,
-#dashboardResizeGripNW:focus, #dashboardResizeGripSW:focus {{
+#dashboardResizeGripNW:focus, #dashboardResizeGripSW:focus {
     border: 3px solid #ffff00;
-}}
+}
 
-QCheckBox::indicator, QRadioButton::indicator {{
+QCheckBox::indicator, QRadioButton::indicator {
     background: #000000;
     border: 2px solid #ffffff;
-}}
+}
 
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
     background: #00ffff;
     border-color: #ffffff;
-}}
+}
 """
 
     return f"{base or ''}\n{override}"
@@ -936,15 +994,7 @@ class AppearancePanel(QWidget):
         title = QLabel("Appearance", header)
         title.setObjectName("appearanceTitle")
         title.setAccessibleName("Appearance heading")
-        subtitle = QLabel(
-            "Choose a theme preset, custom colors, and animation settings.",
-            header,
-        )
-        subtitle.setObjectName("appearanceSubtitle")
-        subtitle.setWordWrap(True)
-        subtitle.setAccessibleName("Appearance description")
         header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
         root.addWidget(header)
 
         preset_card = QFrame(self)

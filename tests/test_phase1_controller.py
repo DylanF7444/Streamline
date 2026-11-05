@@ -13,7 +13,6 @@ from personal_hub.contracts import InboxItem
 from personal_hub.controller import HubController
 from personal_hub.sources import SourceRegistry, SourceService, SourceSnapshot
 from personal_hub.storage.database import HubDatabase
-from personal_hub.storage.repositories import SettingsRepository
 
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
 
@@ -78,17 +77,15 @@ def _controller(
 
 
 @pytest.mark.asyncio
-async def test_offline_setting_is_durable_and_gates_provider_calls(tmp_path: Path):
+async def test_network_pause_gates_provider_calls_before_adapter_invocation(tmp_path: Path):
     source = FakeSource()
     controller, database = _controller(tmp_path, source)
     try:
-        updated = controller.set_offline_mode(True)
-        assert updated.offline_mode is True
+        controller.set_network_paused(True)
         result = await controller.refresh_source(source.source_id)
 
-        assert result.state.value == "offline"
+        assert result.state.value == "paused"
         assert source.calls == []
-        assert SettingsRepository(database).load_settings(defaults=updated).offline_mode is True
     finally:
         await controller.shutdown()
         database.close()
@@ -201,9 +198,9 @@ def test_backup_and_restore_are_exposed_without_content_export(tmp_path: Path):
     try:
         backup = controller.backup_database(tmp_path / "backup" / "hub.sqlite")
         assert backup.is_file()
-        controller.set_offline_mode(True)
+        controller.set_network_paused(True)
         assert controller.restore_database(backup) == database.path
-        assert controller.settings.offline_mode is False
+        assert controller.network_refresh_paused
         controller.create_task(title="Exported local task")
         exported = controller.export_local_data(
             tmp_path / "exports" / "hub.json",

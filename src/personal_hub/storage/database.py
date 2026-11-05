@@ -548,7 +548,7 @@ class HubImportedCalendarEventRow(HubBase):
 
 
 class HubProviderRelayCacheRow(HubBase):
-    """Last validated provider relay snapshot cached for offline consumer use."""
+    """Last validated provider relay snapshot cached for snapshot consumer use."""
 
     __tablename__ = "hub_provider_relay_cache"
 

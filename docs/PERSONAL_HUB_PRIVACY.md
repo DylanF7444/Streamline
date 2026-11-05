@@ -24,7 +24,7 @@ Bundled MapLibre code executes in a dedicated off-the-record Qt WebEngine profil
 browser cannot contact the internet directly or read arbitrary local files. A fixed-origin,
 GET-only Python resource client enforces public-address checks, no redirects, byte/time
 bounds, four worker threads and a 32 MB memory cache; there are no background downloads.
-Offline mode and network pause gate requests before DNS/transport. Leaving Places, hiding
+Network refresh pause gates requests before DNS/transport. Leaving Places, hiding
 the app, masking, lock and shutdown cancel pending work and close the renderer. Already
 started requests unwind within bounded reads/timeouts. Masking clears native visible content
 and rejects open place/visit dialogs. Tiles and browser history are not stored on disk or in
@@ -117,9 +117,10 @@ Manually created calendar items and linked Google changes are stored with local 
 calendar items in the Hub database, backups, and explicit exports until local removal.
 Google event IDs, calendar IDs, version markers, and sync fingerprints are device-local
 settings; they contain no tokens or copies of notes. The provider event write scope is broader
-than the app's linked-event policy and is shown at Google consent. Disabling sync or going
-offline prevents credential and provider access by the sync path. Conflicts preserve the local and provider
-versions until the user chooses a resolution. Google removal retains the local copy and
+than the app's linked-event policy and is shown at Google consent. Disabling sync or pausing
+network refresh prevents credential and provider access by the sync path. Conflicts preserve
+both local and provider versions until the user chooses a resolution. Google removal retains
+the local copy and
 stops its outbound sync; local removal or stopping sync retains the Google copy. Ordinary
 provider snapshots remain memory-only. Shared-folder sync includes the local item, but
 excludes these Google bindings and credentials, so receiving another device's item does
@@ -220,13 +221,15 @@ notification content; quiet-hours suppression never erases the durable Inbox ite
 deduplicated across restart. The in-app message attention notice follows the separate
 session-only behavior described above and does not use durable notification claims.
 
-## Offline mode
+## Network refresh pause
 
-Offline mode is persisted and checked before token retrieval, DNS, HTTP, or provider adapter
-work. Local tasks, retained summaries, and the Inbox remain usable. Last-good memory snapshots
-can be marked offline or stale. Turning offline mode off allows later refresh; it does not
-replay every missed interval. An explicit local sync can still run when its shared folder is
-reachable; it does not create a network relay or bypass provider/network gating.
+The session-only **Pause network refresh** control is checked before token retrieval, DNS, HTTP,
+map, or provider adapter work. Local tasks, retained summaries, and the Inbox remain usable.
+Last-good memory snapshots can be marked paused or stale. Resuming allows later refresh; it does
+not replay every missed interval. The pause resets on restart. An explicit sync through a
+user-selected shared folder remains a local file operation when that folder is reachable; it
+does not create an automatic network relay or bypass provider/network gating. Physical loss of
+connectivity is reported separately as an offline or disconnected source state.
 
 ## Deletion and uninstall
 

@@ -24,7 +24,7 @@ PASSPHRASE = "private logging test passphrase"
 
 @pytest.fixture
 def hub(tmp_path):
-    controller = HubController(settings=HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    controller = HubController(settings=HubSettings(data_dir=tmp_path / "hub"))
     yield controller
     controller.close()
 
@@ -314,7 +314,7 @@ def test_backup_export_restore_and_separate_retention(hub, tmp_path):
 
 
 def test_encrypted_sync_activity_reflection_opt_in_and_deletions(hub, tmp_path):
-    second = HubController(settings=HubSettings(data_dir=tmp_path / "second", offline_mode=True))
+    second = HubController(settings=HubSettings(data_dir=tmp_path / "second"))
     folder = tmp_path / "shared"
     hub.configure_sync(folder)
     second.configure_sync(folder)

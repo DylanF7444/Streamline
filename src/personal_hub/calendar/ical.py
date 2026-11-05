@@ -26,7 +26,7 @@ from personal_hub.calendar.contracts import (
     CalendarDisconnectedError,
     CalendarEvent,
     CalendarInvalidResponseError,
-    CalendarOfflineError,
+    CalendarPausedError,
     CalendarPermissionRequiredError,
     CalendarQuery,
     CalendarSnapshot,
@@ -35,8 +35,8 @@ from personal_hub.calendar.contracts import (
 )
 from personal_hub.contracts import HubContract, SourceRef
 from personal_hub.feeds.contracts import (
-    FeedOfflineError,
     FeedParseError,
+    FeedPausedError,
     FeedPolicyError,
     FeedResponse,
     FeedResponseTooLargeError,
@@ -52,6 +52,7 @@ IcalSyncStateValue = Literal[
     "ready",
     "empty",
     "stale",
+    "paused",
     "offline",
     "permission_required",
     "disconnected",
@@ -1084,7 +1085,8 @@ class IcalFeedFetcher:
         *,
         transport: object | None = None,
         allow_http: bool = False,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
         **kwargs: object,
     ) -> None:
         if fetcher is not None and transport is not None:
@@ -1092,13 +1094,14 @@ class IcalFeedFetcher:
         self.fetcher = fetcher or FeedFetcher(
             transport,
             allow_http=allow_http,
-            offline=offline,
+            network_paused=network_paused,
+            network_paused_getter=network_paused_getter,
             **kwargs,
         )
 
     @property
-    def offline(self) -> bool:
-        return self.fetcher.offline
+    def network_paused(self) -> bool:
+        return self.fetcher.network_paused
 
     @property
     def allow_http(self) -> bool:
@@ -1108,10 +1111,11 @@ class IcalFeedFetcher:
     def allow_http(self, value: bool) -> None:
         self.fetcher.allow_http = bool(value)
 
-    def set_offline(self, value: bool) -> None:
-        self.fetcher.set_offline(value)
+    def set_network_paused(self, value: bool) -> None:
+        self.fetcher.set_network_paused(value)
 
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        self.fetcher.set_network_paused_getter(getter)
 
     async def fetch(
         self,
@@ -1189,16 +1193,17 @@ class IcalCalendarSource:
 
     async def status(self) -> CalendarStatus:
         now = self._now()
-        if self.fetcher.offline:
-            state: IcalSyncStateValue = "offline"
-            message = "Calendar refresh is paused by offline mode."
+        if self.fetcher.network_paused:
+            state: IcalSyncStateValue = "paused"
+            message = "Calendar refresh is paused."
         else:
             state = self._state.state
             message = {
                 "ready": "iCalendar feed is ready.",
                 "empty": "iCalendar feed is ready but has no events.",
                 "stale": "Showing the last successful iCalendar snapshot.",
-                "offline": "Calendar refresh is paused by offline mode.",
+                "paused": "Calendar refresh is paused.",
+                "offline": "Calendar feed is offline.",
                 "permission_required": "iCalendar feed permission is required.",
                 "disconnected": "iCalendar feed is disconnected.",
                 "error": "iCalendar feed refresh failed safely.",
@@ -1266,12 +1271,10 @@ class IcalCalendarSource:
         except CalendarDisconnectedError:
             self._mark_failure("disconnected", "iCalendar feed is disconnected.")
             raise
-        except CalendarOfflineError:
-            self._mark_failure("offline", "Calendar refresh is paused by offline mode.")
+        except CalendarPausedError:
             raise
-        except FeedOfflineError as error:
-            self._mark_failure("offline", "Calendar refresh is paused by offline mode.")
-            raise CalendarOfflineError("Calendar refresh is paused by offline mode.") from error
+        except FeedPausedError as error:
+            raise CalendarPausedError("Calendar refresh is paused.") from error
         except (
             FeedParseError,
             FeedPolicyError,
@@ -1461,7 +1464,9 @@ class IcalFeedManager:
             raise TypeError("IcalFeedManager expects a CalendarService")
         self.repository = IcalFeedRepository(settings_repository)
         self.calendar_service = calendar_service
-        self.fetcher = fetcher or IcalFeedFetcher(offline=calendar_service.offline)
+        self.fetcher = fetcher or IcalFeedFetcher(
+            network_paused_getter=lambda: calendar_service.network_paused
+        )
         self._sources: dict[UUID, IcalCalendarSource] = {}
         self._restore()
 
@@ -1590,10 +1595,11 @@ class IcalFeedManager:
 
     set_feed_enabled = set_enabled
 
-    def set_offline(self, value: bool) -> None:
-        self.fetcher.set_offline(value)
+    def set_network_paused(self, value: bool) -> None:
+        self.fetcher.set_network_paused(value)
 
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        self.fetcher.set_network_paused_getter(getter)
 
     def set_allow_http(self, value: bool) -> None:
         self.fetcher.allow_http = bool(value)

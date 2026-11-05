@@ -123,7 +123,7 @@ async def test_controller_refreshes_account_scoped_calendars_and_projects_today(
 
 
 @pytest.mark.asyncio
-async def test_controller_calendar_offline_stale_and_permission_states_are_distinct(
+async def test_controller_calendar_pause_stale_and_permission_states_are_distinct(
     tmp_path: Path,
 ) -> None:
     container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
@@ -134,13 +134,13 @@ async def test_controller_calendar_offline_stale_and_permission_states_are_disti
             "ready"
         )
 
-        container.controller.set_offline_mode(True)
-        offline = (await container.controller.refresh_calendars(_query()))[source.source_id]
-        assert offline.state == "offline"
+        container.controller.set_network_paused(True)
+        paused = (await container.controller.refresh_calendars(_query()))[source.source_id]
+        assert paused.state == "paused"
         assert source.calls == 1
-        assert offline.snapshot is not None
+        assert paused.snapshot is not None
 
-        container.controller.set_offline_mode(False)
+        container.controller.set_network_paused(False)
         source.failure = RuntimeError("private event title from provider")
         stale = (await container.controller.refresh_calendars(_query()))[source.source_id]
         assert stale.state == "stale"

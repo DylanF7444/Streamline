@@ -25,6 +25,7 @@ FeedSyncStateValue = Literal[
     "ready",
     "empty",
     "stale",
+    "paused",
     "offline",
     "permission_required",
     "disconnected",
@@ -56,8 +57,8 @@ class FeedParseError(FeedError):
     """The response was malformed, hostile, or not a supported feed."""
 
 
-class FeedOfflineError(FeedError):
-    """Collection was prevented by the Hub offline gate."""
+class FeedPausedError(FeedError):
+    """Collection was prevented by the Hub network pause."""
 
 
 class FeedUnavailableError(FeedError):
@@ -404,7 +405,7 @@ __all__ = [
     "FeedEntry",
     "FeedEntryRecord",
     "FeedEntryView",
-    "FeedOfflineError",
+    "FeedPausedError",
     "FeedParseError",
     "FeedPermissionRequiredError",
     "FeedPolicyError",

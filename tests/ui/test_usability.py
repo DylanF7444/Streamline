@@ -29,7 +29,7 @@ def window(qtbot):
 
 
 def test_home_shortcuts_capture_local_task_and_progress_offline(window, qtbot, tmp_path):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     coordinator = HubDesktopCoordinator(container, window, QApplication.instance())
     try:
         window.home_add_task_button.click()
@@ -91,9 +91,9 @@ def test_source_guidance_distinguishes_recovery_and_offline_without_requests(win
         window.render_sources([SourceView("platform-google", "Google", status=state)])
         assert next_step in window.source_guidance_label.text()
         assert "permission_required" not in window.sources_list.item(0).text()
-    window.set_offline_mode(True)
-    assert "Offline mode is on" in window.source_guidance_label.text()
-    window.set_offline_mode(False)
+    window.set_network_refresh_paused(True)
+    assert "paused" in window.source_guidance_label.text().casefold()
+    window.set_network_refresh_paused(False)
     window.render_sources([SourceView("platform-google", "Google", enabled=False)])
     assert "Select Enable" in window.source_guidance_label.text()
     assert requests == []

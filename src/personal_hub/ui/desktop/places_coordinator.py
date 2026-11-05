@@ -10,7 +10,7 @@ class PlacesCoordinator:
         self.controller, self.window, self.view = controller, window, window.places_page
         self.view.requested.connect(self.handle)
         self.view.bind(
-            lambda: not controller.is_closed and not controller.offline,
+            lambda: not controller.is_closed and not controller.network_requests_paused,
             self.position("places.position"),
             self.position("places.home"),
         )

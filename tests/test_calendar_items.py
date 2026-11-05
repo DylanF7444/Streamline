@@ -24,7 +24,7 @@ from personal_hub.integrations.platforms import ExternalPlatformConfig
 
 @pytest.fixture
 def container(tmp_path):
-    value = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    value = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     yield value
     value.close()
 
@@ -172,7 +172,7 @@ async def test_linked_event_projection_honors_calendar_selection_without_duplica
                 events=(remote,),
             )
 
-    container.controller.set_offline_mode(False)
+    container.controller.set_network_paused(False)
     container.controller.register_calendar_source(Source())
     await container.controller.refresh_calendars(
         CalendarQuery(starts_at=local.starts_at, ends_at=local.ends_at)
@@ -325,7 +325,7 @@ async def test_remote_cancellation_never_resurrects_and_local_delete_keeps_googl
 
 
 @pytest.mark.asyncio
-async def test_offline_or_disabled_sync_never_reads_credentials_or_transport(container):
+async def test_paused_or_disabled_sync_never_reads_credentials_or_transport(container):
     _create(container, google_calendar_id="primary")
 
     async def token():
@@ -375,7 +375,7 @@ def test_google_write_scope_is_separate_opt_in_and_other_providers_reject_it(con
 @pytest.mark.asyncio
 async def test_google_existing_read_connection_requires_fresh_event_grant(container):
     manager = container.platform_connections
-    container.controller.set_offline_mode(False)
+    container.controller.set_network_paused(False)
     manager.configure(
         "google",
         {"client_id": "desktop", "capabilities": ("calendar",), "calendar_sync_enabled": True},

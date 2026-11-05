@@ -26,7 +26,7 @@ from personal_hub.calendar.contracts import (
     CalendarError,
     CalendarEvent,
     CalendarInvalidResponseError,
-    CalendarOfflineError,
+    CalendarPausedError,
     CalendarPermissionRequiredError,
     CalendarQuery,
     CalendarResult,
@@ -92,7 +92,7 @@ _STATE_MESSAGES = {
     "ready": "Outlook Calendar is ready.",
     "empty": "Outlook Calendar has no events in the selected range.",
     "stale": "Showing the last successful Outlook Calendar snapshot.",
-    "offline": "Outlook Calendar refresh is paused by offline mode.",
+    "paused": "Outlook Calendar refresh is paused.",
     "permission_required": "Outlook Calendar permission is required.",
     "disconnected": "Outlook Calendar is disconnected.",
     "error": "Outlook Calendar refresh failed safely.",
@@ -120,8 +120,8 @@ class OutlookCalendarTransport(Protocol):
     ) -> object: ...
 
 
-class OutlookCalendarOfflineError(CalendarOfflineError):
-    """Raised when a direct event read is attempted while Hub offline mode is enabled."""
+class OutlookCalendarPausedError(CalendarPausedError):
+    """Raised when a direct event read is attempted while Hub refresh is paused."""
 
 
 class OutlookCalendarSource:
@@ -156,8 +156,8 @@ class OutlookCalendarSource:
         max_events_per_page: int = 250,
         max_calendars: int = 50,
         max_window: timedelta = timedelta(days=366),
-        offline: bool = False,
-        offline_getter: Callable[[], bool] | None = None,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         # Google and Microsoft callers commonly choose opposite positional orders.
         # Detect the unambiguous injected boundaries while accepting either order.
@@ -194,28 +194,28 @@ class OutlookCalendarSource:
             raise ValueError("max_window must be positive and at most 366 days")
         self.max_window = max_window
         self.scopes = OUTLOOK_REQUIRED_SCOPES
-        self._offline_getter = offline_getter
-        self._offline_value = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self._last_good: dict[tuple[Any, ...], CalendarSnapshot] = {}
 
     @property
-    def offline(self) -> bool:
+    def network_paused(self) -> bool:
         return (
-            bool(self._offline_getter())
-            if self._offline_getter is not None
-            else self._offline_value
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
         )
 
-    @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def set_network_paused(self, enabled: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(enabled)
 
-    def set_offline(self, enabled: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(enabled)
-
-    set_offline_mode = set_offline
-    set_offline_lock = set_offline
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     def validate_query(self, query: CalendarQuery) -> CalendarQuery:
         """Validate and enforce the adapter's stricter network bounds."""
@@ -234,8 +234,8 @@ class OutlookCalendarSource:
         """Return a safe connection status without exposing provider response text."""
 
         checked_at = datetime.now(UTC)
-        if self.offline:
-            return self._status("offline", checked_at=checked_at)
+        if self.network_paused:
+            return self._status("paused", checked_at=checked_at)
         try:
             token = await self._access_token()
             if not token:
@@ -368,9 +368,9 @@ class OutlookCalendarSource:
         key = self._cache_key(validated)
         checked_at = datetime.now(UTC)
         previous = self._last_good.get(key)
-        if self.offline:
+        if self.network_paused:
             return self._result(
-                "offline",
+                "paused",
                 checked_at=checked_at,
                 snapshot=previous,
                 last_success_at=previous.collected_at if previous is not None else None,
@@ -381,7 +381,7 @@ class OutlookCalendarSource:
             raise
         except BaseException as error:
             state = _state_for_error(error)
-            if state == "offline":
+            if state == "paused":
                 return self._result(
                     state,
                     checked_at=checked_at,
@@ -593,8 +593,8 @@ class OutlookCalendarSource:
         )
 
     def _ensure_online(self) -> None:
-        if self.offline:
-            raise OutlookCalendarOfflineError("Outlook Calendar is offline")
+        if self.network_paused:
+            raise OutlookCalendarPausedError("Outlook Calendar refresh is paused.")
 
 
 # Discoverable aliases for composition roots and provider registries.
@@ -608,8 +608,8 @@ def _state_message(state: str) -> str:
 
 
 def _state_for_error(error: BaseException) -> str:
-    if isinstance(error, OutlookCalendarOfflineError):
-        return "offline"
+    if isinstance(error, OutlookCalendarPausedError):
+        return "paused"
     if isinstance(error, (CalendarPermissionRequiredError, PermissionError)):
         return "permission_required"
     status = getattr(error, "status_code", getattr(error, "status", None))
@@ -638,8 +638,8 @@ def _map_outlook_error(error: Exception) -> CalendarError:
         return CalendarPermissionRequiredError("Outlook Calendar permission is required")
     if state == "disconnected":
         return CalendarDisconnectedError("Outlook Calendar is disconnected")
-    if state == "offline":
-        return OutlookCalendarOfflineError("Outlook Calendar is offline")
+    if state == "paused":
+        return OutlookCalendarPausedError("Outlook Calendar refresh is paused.")
     return CalendarUnavailableError("Outlook Calendar request failed safely")
 
 
@@ -989,7 +989,7 @@ __all__ = [
     "OUTLOOK_REQUIRED_SCOPES",
     "OUTLOOK_SOURCE_ID",
     "OutlookCalendarAdapter",
-    "OutlookCalendarOfflineError",
+    "OutlookCalendarPausedError",
     "OutlookCalendarProvider",
     "OutlookCalendarSource",
     "OutlookCalendarTransport",

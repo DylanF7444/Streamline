@@ -23,6 +23,7 @@ class SourceState(StrEnum):
     READY = "ready"
     EMPTY = "empty"
     STALE = "stale"
+    PAUSED = "paused"
     OFFLINE = "offline"
     PERMISSION_REQUIRED = "permission_required"
     DISCONNECTED = "disconnected"
@@ -33,7 +34,8 @@ _STATE_MESSAGES: dict[SourceState, str] = {
     SourceState.READY: "Source is ready.",
     SourceState.EMPTY: "Source is ready but has no items.",
     SourceState.STALE: "Showing the last successful source snapshot.",
-    SourceState.OFFLINE: "Source refresh is paused by offline mode.",
+    SourceState.PAUSED: "Source refresh is paused.",
+    SourceState.OFFLINE: "Source is offline.",
     SourceState.PERMISSION_REQUIRED: "Permission is required to access this source.",
     SourceState.DISCONNECTED: "Source is disconnected.",
     SourceState.ERROR: "Source refresh failed safely.",
@@ -160,6 +162,10 @@ class SourcePermissionRequiredError(SourceError):
     """The user must grant or renew source permission."""
 
 
+class SourcePausedError(SourceError):
+    """Source work was held because network refresh is paused."""
+
+
 class SourceDisconnectedError(SourceError):
     """The source account or connection is not available."""
 
@@ -197,6 +203,7 @@ __all__ = [
     "SourceDisconnectedError",
     "SourceError",
     "SourceHealth",
+    "SourcePausedError",
     "SourcePermissionRequiredError",
     "SourceProtocol",
     "SourceResult",

@@ -14,8 +14,8 @@ from personal_hub.watches.contracts import (
     AlertEvent,
     WatchDefinition,
     WatchObservation,
-    WatchOfflineError,
     WatchParseError,
+    WatchPausedError,
     WatchPermissionRequiredError,
     WatchPolicyError,
     WatchResult,
@@ -30,7 +30,8 @@ from personal_hub.watches.repository import WatchRepository
 _MESSAGES = {
     "ready": "Watch checked successfully.",
     "stale": "Showing the last successful watch observation.",
-    "offline": "Watch refresh is paused by offline mode.",
+    "paused": "Watch refresh is paused.",
+    "offline": "The watch source is offline.",
     "permission_required": "Watch access requires attention.",
     "disconnected": "The watched origin is unavailable.",
     "error": "Watch refresh failed safely.",
@@ -137,25 +138,44 @@ class WatchService:
         repository: WatchRepository,
         fetcher: PageFetcher | object | None = None,
         *,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter=None,
         concurrency: int = 2,
         random_source: random.Random | None = None,
     ) -> None:
         if not 1 <= concurrency <= 2:
             raise ValueError("watch concurrency must be between 1 and 2")
         self.repository = repository
-        self.fetcher = fetcher or PageFetcher(offline=offline)
-        self.offline = bool(offline)
+        self.fetcher = fetcher or PageFetcher(network_paused=network_paused)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self._semaphore = asyncio.Semaphore(concurrency)
         self._origin_locks: dict[str, asyncio.Lock] = {}
         self._in_flight: set[UUID] = set()
         self._random = random_source or random.Random()
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
-        callback = getattr(self.fetcher, "set_offline", None)
+    @property
+    def network_paused(self) -> bool:
+        if callable(self._network_paused_getter):
+            return bool(self._network_paused_getter())
+        return self._network_paused_value
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+        callback = getattr(self.fetcher, "set_network_paused", None)
         if callable(callback):
             callback(value)
+
+    def set_network_paused_getter(self, getter) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
+        callback = getattr(self.fetcher, "set_network_paused_getter", None)
+        if callable(callback):
+            callback(getter)
 
     def due_watch_ids(self, *, now: datetime | None = None) -> tuple[UUID, ...]:
         timestamp = _now(now)
@@ -193,8 +213,8 @@ class WatchService:
         state = self.repository.sync_state(watch.watch_id) or WatchSyncState(
             watch_id=watch.watch_id
         )
-        if self.offline:
-            return self._failure(watch, state, "offline", timestamp)
+        if self.network_paused:
+            return self._failure(watch, state, "paused", timestamp)
         if state.backoff_until is not None and timestamp < state.backoff_until:
             return self._result(watch, state.state, timestamp)
         if (
@@ -224,8 +244,8 @@ class WatchService:
         """Test extraction without mutating a baseline, observation, alert, or Inbox."""
 
         timestamp = _now(now)
-        if self.offline:
-            raise WatchOfflineError("Watch refresh is paused by offline mode.")
+        if self.network_paused:
+            raise WatchPausedError("Watch refresh is paused.")
         response = await self.fetcher.fetch(watch)
         if response.status_code in {401, 403}:
             raise WatchPermissionRequiredError("Watch access requires attention.")
@@ -246,8 +266,8 @@ class WatchService:
             if response.status_code == 429 or response.status_code >= 500:
                 raise WatchUnavailableError("The watched origin is unavailable.")
             observation = extract_observation(watch, response, checked_at=timestamp)
-        except WatchOfflineError as error:
-            return self._failure(watch, state, "offline", timestamp, error)
+        except WatchPausedError as error:
+            return self._failure(watch, state, "paused", timestamp, error)
         except WatchPermissionRequiredError as error:
             return self._failure(watch, state, "permission_required", timestamp, error)
         except WatchUnavailableError as error:
@@ -332,7 +352,7 @@ class WatchService:
         timestamp: datetime,
         _error: Exception | None = None,
     ) -> WatchResult:
-        failure_count = state.failure_count + (0 if failure_state == "offline" else 1)
+        failure_count = state.failure_count + (0 if failure_state == "paused" else 1)
         backoff = state.backoff_until
         if failure_state in {"disconnected", "error"}:
             seconds = min(21_600, 60 * (2 ** min(failure_count, 8)))

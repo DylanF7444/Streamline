@@ -52,10 +52,10 @@ class GoogleCalendarSync:
 
     async def sync(self) -> CalendarSyncReport:
         report = CalendarSyncReport()
-        # Offline/disabled checks precede credentials and every HTTP operation.
+        # Pause/disabled checks precede credentials and every HTTP operation.
         if not self.allowed():
             report.message = (
-                "Google sync is disabled or paused by offline mode. Local items are saved."
+                "Google sync is disabled or network refresh is paused. Local items are saved."
             )
             return report
         bindings = self.local.bindings()

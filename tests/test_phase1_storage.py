@@ -131,7 +131,7 @@ def test_settings_sources_and_inbox_survive_database_restart(tmp_path: Path):
         deduplication_key="source:calendar-1:auth",
     )
     try:
-        SettingsRepository(database).set("offline_mode", True)
+        SettingsRepository(database).set("test_preference", True)
         source_repository = SourceRepository(database)
         source_repository.save(connection)
         source_repository.save_sync_state(health)
@@ -143,7 +143,7 @@ def test_settings_sources_and_inbox_survive_database_restart(tmp_path: Path):
 
     restarted = _database(tmp_path)
     try:
-        assert SettingsRepository(restarted).get("offline_mode") is True
+        assert SettingsRepository(restarted).get("test_preference") is True
         assert SourceRepository(restarted).get("calendar-1") == connection
         assert SourceRepository(restarted).get_health("calendar-1") == health
         restored = InboxRepository(restarted).get(item.item_id)
@@ -237,13 +237,13 @@ def test_notification_deduplication_is_bounded_and_persistent(tmp_path: Path):
 def test_backup_restore_round_trip_and_corrupt_source_rejection(tmp_path: Path):
     database = _database(tmp_path)
     try:
-        SettingsRepository(database).set("offline_mode", True)
+        SettingsRepository(database).set("test_backup_preference", True)
         backup = database.backup(tmp_path / "backups" / "hub.sqlite")
         assert backup.is_file()
-        SettingsRepository(database).set("offline_mode", False)
-        assert SettingsRepository(database).get("offline_mode") is False
+        SettingsRepository(database).set("test_backup_preference", False)
+        assert SettingsRepository(database).get("test_backup_preference") is False
         assert database.restore(backup) == database.path
-        assert SettingsRepository(database).get("offline_mode") is True
+        assert SettingsRepository(database).get("test_backup_preference") is True
 
         before = database.path.read_bytes()
         corrupt = tmp_path / "corrupt.sqlite"
@@ -260,8 +260,8 @@ def test_databases_are_isolated_and_audit_rejects_private_content(tmp_path: Path
     first = _database(tmp_path / "first")
     second = _database(tmp_path / "second")
     try:
-        SettingsRepository(first).set("offline_mode", True)
-        assert SettingsRepository(second).get("offline_mode") is None
+        SettingsRepository(first).set("test_preference", True)
+        assert SettingsRepository(second).get("test_preference") is None
 
         audit = AuditRepository(first)
         event = AuditEvent(
@@ -314,9 +314,9 @@ def test_settings_restart_never_redirects_hub_identity_paths(tmp_path: Path):
             profile="testing",
             data_dir=tmp_path / "first",
             database_name="first-hub.db",
-            offline_mode=True,
         )
         repository.save_settings(first)
+        repository.set("offline_mode", True)
 
         second_defaults = HubSettings(
             profile="production",
@@ -328,7 +328,7 @@ def test_settings_restart_never_redirects_hub_identity_paths(tmp_path: Path):
         assert loaded.profile == "production"
         assert loaded.data_dir == second_defaults.data_dir
         assert loaded.database_name == "second-hub.db"
-        assert loaded.offline_mode is True
+        assert repository.get("offline_mode") is None
         assert "data_dir" not in repository.all()
     finally:
         database.close()

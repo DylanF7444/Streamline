@@ -18,7 +18,7 @@ pytestmark = pytest.mark.ui
 
 @pytest.fixture
 def ui(qtbot, qapp, tmp_path):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     container.lifecycle.start()
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
@@ -130,7 +130,7 @@ def test_renderer_lazy_online_navigation_pause_privacy_and_view_persistence(ui, 
     monkeypatch.setitem(
         sys.modules, "personal_hub.ui.desktop.map_browser", SimpleNamespace(MapBrowser=FakeBrowser)
     )
-    coordinator.set_offline_mode(False)
+    coordinator.set_network_paused(False)
     view = window.places_page
     assert view.browser is None
     window.show_destination("Places")
@@ -159,7 +159,7 @@ def test_renderer_lazy_online_navigation_pause_privacy_and_view_persistence(ui, 
     assert view.browser is None
     window.set_privacy_masked(False)
     assert view.browser is not None
-    coordinator.set_offline_mode(True)
+    coordinator.set_network_paused(True)
     assert view.browser is None
     view.home_button.click()
     assert view.position == position

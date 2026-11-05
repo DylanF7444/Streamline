@@ -17,6 +17,7 @@ CalendarState = Literal[
     "ready",
     "empty",
     "stale",
+    "paused",
     "offline",
     "permission_required",
     "disconnected",
@@ -51,6 +52,7 @@ class CalendarViewState(StrEnum):
     READY = "ready"
     EMPTY = "empty"
     STALE = "stale"
+    PAUSED = "paused"
     OFFLINE = "offline"
     PERMISSION_REQUIRED = "permission_required"
     DISCONNECTED = "disconnected"
@@ -393,8 +395,8 @@ class CalendarInvalidResponseError(CalendarError):
     """The provider response exceeded bounds or failed schema validation."""
 
 
-class CalendarOfflineError(CalendarError):
-    """The source was deliberately prevented from making external calls."""
+class CalendarPausedError(CalendarError):
+    """The source was prevented from making external calls while refresh is paused."""
 
 
 @runtime_checkable
@@ -426,7 +428,7 @@ __all__ = [
     "CalendarEventRecord",
     "CalendarHealth",
     "CalendarInvalidResponseError",
-    "CalendarOfflineError",
+    "CalendarPausedError",
     "CalendarPermissionRequiredError",
     "CalendarProtocol",
     "CalendarQuery",

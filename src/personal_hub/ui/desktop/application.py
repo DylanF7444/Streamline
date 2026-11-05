@@ -667,7 +667,6 @@ class HubDesktopCoordinator(QObject):
         self.lifecycle_event.connect(self._handle_lifecycle_event)
         window.refresh_requested.connect(self.refresh_all)
         window.network_pause_changed.connect(self.set_network_paused)
-        window.offline_mode_changed.connect(self.set_offline_mode)
         window.quit_requested.connect(application.quit)
         window.task_created.connect(self._task_created)
         window.task_updated.connect(self._task_updated)
@@ -766,7 +765,6 @@ class HubDesktopCoordinator(QObject):
         settings = self.container.controller.settings
         self.window.render_settings(
             SettingsView(
-                offline_mode=settings.offline_mode,
                 privacy_masking=settings.privacy_masking,
                 close_to_tray=settings.close_to_tray,
                 start_at_login=settings.start_at_login,
@@ -906,6 +904,11 @@ class HubDesktopCoordinator(QObject):
                 generated_at=projection.generated_at,
             )
         )
+        self.window.home_summary.set_counts(
+            open_tasks=self.container.task_repository.count(state="open"),
+            unread_alerts=self.container.controller.unread_inbox_count(),
+            activity_entries=activity_count,
+        )
         saved_dashboard = self.container.settings_repository.get("today_dashboard_layout", None)
         saved_layout_version = (
             saved_dashboard.get("version") if isinstance(saved_dashboard, dict) else None
@@ -936,14 +939,14 @@ class HubDesktopCoordinator(QObject):
         """Bounded local projections; dashboard layout never stores content."""
         inbox = self.container.controller.list_inbox(state="unread", limit=30)
         watch_items = []
-        offline = self.container.controller.settings.offline_mode
+        network_paused = self.container.controller.network_requests_paused
         for watch in self.container.controller.list_watches(limit=30):
             state = self.container.watch_repository.sync_state(watch.watch_id)
             status = "Not checked yet" if state is None else state.state.replace("_", " ")
             if not watch.enabled:
                 status = "Paused"
-            elif offline:
-                status = "Offline · showing saved state"
+            elif network_paused:
+                status = "Refresh paused · showing saved state"
             if state is not None and state.last_checked_at is not None:
                 status += " · checked " + state.last_checked_at.astimezone(
                     ZoneInfo(self.container.controller.settings.default_timezone)
@@ -962,7 +965,7 @@ class HubDesktopCoordinator(QObject):
             TodaySectionView(
                 section_id="attention",
                 title="Inbox",
-                body="You're all caught up.",
+                body="No unread alerts.",
                 items=tuple(
                     TodayItemView(
                         item_id=item.item_id,
@@ -1191,11 +1194,11 @@ class HubDesktopCoordinator(QObject):
             state = "ready"
             detail = "Showing Personal Hub to-do due dates."
         if (
-            self.container.controller.settings.offline_mode
+            self.container.controller.network_requests_paused
             and self.container.calendar_service.source_ids
         ):
-            state = "offline"
-            detail = "Calendar refresh is paused by offline mode."
+            state = "paused"
+            detail = "Calendar refresh is paused."
         ical_feeds = tuple(
             IcalFeedView(
                 feed_id=str(feed.feed_id),
@@ -1328,9 +1331,9 @@ class HubDesktopCoordinator(QObject):
             tuple(value for value in sync_states.values() if value is not None),
             has_subscriptions=bool(subscriptions),
         )
-        if self.container.controller.settings.offline_mode and subscriptions:
-            state = "offline"
-            detail = "Feed refresh is paused by offline mode."
+        if self.container.controller.network_requests_paused and subscriptions:
+            state = "paused"
+            detail = "Feed refresh is paused."
         selected_ids = (
             tuple(
                 str(subscription.subscription_id)
@@ -1416,8 +1419,8 @@ class HubDesktopCoordinator(QObject):
             for alert in self.container.controller.watch_alerts(limit=1_000)
         )
         state, detail = _watch_summary(states, has_watches=bool(definitions))
-        if self.container.controller.settings.offline_mode and definitions:
-            state, detail = "offline", "Watch refresh is paused by offline mode."
+        if self.container.controller.network_requests_paused and definitions:
+            state, detail = "paused", "Watch refresh is paused."
         self.window.render_web_watches(
             WebWatchesView(
                 watches=tuple(watches),
@@ -1476,8 +1479,8 @@ class HubDesktopCoordinator(QObject):
             tuple(value for value in states.values() if value is not None),
             has_sources=bool(configs),
         )
-        if self.container.controller.settings.offline_mode and configs:
-            state, detail = "offline", "Message refresh is paused by offline mode."
+        if self.container.controller.network_requests_paused and configs:
+            state, detail = "paused", "Message refresh is paused."
         self.window.render_messages(
             MessagesView(
                 sources=source_views,
@@ -1549,7 +1552,7 @@ class HubDesktopCoordinator(QObject):
             return
         if not self.container.lifecycle.network_refresh_allowed:
             self.window.render_watch_test_result(
-                {"success": False, "message": "Watch testing is paused by offline mode."}
+                {"success": False, "message": "Watch testing is paused by network refresh."}
             )
             return
         worker = _WatchTestThread(self.container, value, self)
@@ -2308,6 +2311,7 @@ class HubDesktopCoordinator(QObject):
         if state not in {"unread", "read", "dismissed", "archived"}:
             return
         self.container.controller.set_inbox_state(item_id, state)
+        self.render_task_surfaces()
         self.window.render_inbox(
             tuple(_inbox_view(item) for item in self.container.controller.list_inbox())
         )
@@ -2410,10 +2414,6 @@ class HubDesktopCoordinator(QObject):
             self.window.render_sync_status(self.container.controller.sync_status())
             return
         self.container.settings = self.container.controller.settings
-        if role == "consumer":
-            self.set_offline_mode(True)
-        else:
-            self.window.set_offline_mode(self.container.settings.offline_mode, emit=False)
         self.window.render_sync_status(self.container.controller.sync_status())
         self.render_all()
         if role == "collector":
@@ -3560,6 +3560,8 @@ class HubDesktopCoordinator(QObject):
                         last_success_at=_format_timestamp(result.last_success_at),
                     )
                 )
+            elif result.state in {SourceState.READY, SourceState.EMPTY}:
+                self.window.clear_source_failures(result.source_id)
         self.window.render_inbox(
             tuple(_inbox_view(item) for item in self.container.controller.list_inbox())
         )
@@ -3590,6 +3592,7 @@ class HubDesktopCoordinator(QObject):
         if self._closed:
             return
         self.container.lifecycle.set_network_paused(paused)
+        self.container.controller.set_network_paused(paused)
         if paused and self._global_refresh_thread is not None:
             self._global_refresh_thread.cancel()
         if paused and self._refresh_thread is not None:
@@ -3607,38 +3610,6 @@ class HubDesktopCoordinator(QObject):
         if paused and self._message_body_thread is not None:
             self._message_body_thread.cancel()
         if paused:
-            self._feed_refresh_pending = False
-            self._feed_refresh_pending_force = False
-            self._watch_refresh_pending = False
-            self._watch_refresh_pending_force = False
-            self._message_refresh_pending = False
-            self._message_refresh_pending_force = False
-
-    @Slot(bool)
-    def set_offline_mode(self, enabled: bool) -> None:
-        if self._closed:
-            return
-        updated = self.container.controller.set_offline_mode(enabled)
-        self.container.settings = updated
-        self.window.set_offline_mode(updated.offline_mode, emit=False)
-        if enabled and self._global_refresh_thread is not None:
-            self._global_refresh_thread.cancel()
-        if enabled and self._refresh_thread is not None:
-            self._refresh_thread.cancel()
-        if enabled and self._calendar_refresh_thread is not None:
-            self._calendar_refresh_thread.cancel()
-        if enabled and self._feed_refresh_thread is not None:
-            self._feed_refresh_thread.cancel()
-        if enabled and self._watch_refresh_thread is not None:
-            self._watch_refresh_thread.cancel()
-        if enabled and self._watch_test_thread is not None:
-            self._watch_test_thread.cancel()
-        if enabled and self._message_refresh_thread is not None:
-            self._message_refresh_thread.cancel()
-        if enabled and self._message_body_thread is not None:
-            self._message_body_thread.cancel()
-        if enabled:
-            self._calendar_refresh_pending = False
             self._feed_refresh_pending = False
             self._feed_refresh_pending_force = False
             self._watch_refresh_pending = False
@@ -4033,9 +4004,10 @@ def _watch_summary(
         return (
             ("stale", "Watches have not been checked yet.")
             if has_watches
-            else ("empty", "Add a typed webpage watch to track changes.")
+            else ("empty", "No watches yet.")
         )
     priority = (
+        "paused",
         "permission_required",
         "disconnected",
         "error",
@@ -4049,7 +4021,8 @@ def _watch_summary(
         "permission_required": "A watch needs permission review.",
         "disconnected": "A watched origin is unavailable.",
         "error": "A watch check failed safely.",
-        "offline": "Watch refresh is paused by offline mode.",
+        "paused": "Watch refresh is paused.",
+        "offline": "The watch source is offline.",
         "stale": "Some watch observations may be stale.",
         "ready": "Watches are up to date.",
     }
@@ -4080,6 +4053,7 @@ def _message_summary(
             else ("empty", "Configure a selected folder, channel, or saved query.")
         )
     priority = (
+        "paused",
         "permission_required",
         "disconnected",
         "error",
@@ -4094,7 +4068,8 @@ def _message_summary(
         "permission_required": "A message source requires read permission.",
         "disconnected": "A message source is disconnected.",
         "error": "A message summary refresh failed safely.",
-        "offline": "Message refresh is paused by offline mode.",
+        "paused": "Message refresh is paused.",
+        "offline": "The message source is offline.",
         "stale": "Some message summaries may be stale.",
         "ready": "Message summaries are up to date.",
         "empty": "No messages match the selected views.",
@@ -4179,6 +4154,7 @@ def _news_summary(
             return "disconnected", "Feeds have not been refreshed yet.", None
         return "empty", "Add an RSS or Atom feed to see news.", None
     priority = (
+        "paused",
         "permission_required",
         "disconnected",
         "error",
@@ -4193,7 +4169,8 @@ def _news_summary(
         "permission_required": "A feed needs permission review.",
         "disconnected": "A feed is disconnected.",
         "error": "A feed refresh failed safely.",
-        "offline": "Feed refresh is paused by offline mode.",
+        "paused": "Feed refresh is paused.",
+        "offline": "The feed source is offline.",
         "stale": "Some feed data may be stale.",
         "ready": "Feeds are up to date.",
         "empty": "No feed entries are available.",
@@ -4277,6 +4254,7 @@ def _calendar_summary(
             return "disconnected", "Calendars have not been refreshed yet.", None
         return "empty", "Connect a read-only calendar to see events.", None
     priority = (
+        "paused",
         "permission_required",
         "disconnected",
         "error",

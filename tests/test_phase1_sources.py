@@ -122,36 +122,38 @@ def _registry(*sources: FakeSource) -> SourceRegistry:
 
 
 @pytest.mark.asyncio
-async def test_offline_gate_blocks_connect_status_and_refresh_before_provider_calls():
-    source = FakeSource("offline-source")
-    service = SourceService(_registry(source), offline=True)
+async def test_network_pause_blocks_connect_status_and_refresh_before_provider_calls():
+    source = FakeSource("paused-source")
+    service = SourceService(_registry(source), network_paused=True)
 
     connect_result = await service.connect(source.source_id)
     status_result = await service.status(source.source_id)
     refresh_result = await service.refresh(source.source_id)
 
-    assert connect_result.state is SourceState.OFFLINE
-    assert status_result.state is SourceState.OFFLINE
-    assert refresh_result.state is SourceState.OFFLINE
+    assert connect_result.state is SourceState.PAUSED
+    assert status_result.state is SourceState.PAUSED
+    assert refresh_result.state is SourceState.PAUSED
     assert source.calls == []
 
 
 @pytest.mark.asyncio
-async def test_offline_getter_is_checked_before_queued_provider_invocation():
+async def test_network_pause_getter_is_checked_before_queued_provider_invocation():
     source = FakeSource("queued-source", delay=0.01)
-    offline = False
-    service = SourceService(_registry(source), max_concurrency=1, offline_getter=lambda: offline)
+    paused = False
+    service = SourceService(
+        _registry(source), max_concurrency=1, network_paused_getter=lambda: paused
+    )
 
     first = asyncio.create_task(service.refresh(source.source_id))
     await source.started.wait()
-    offline = True
+    paused = True
     second = asyncio.create_task(service.refresh(source.source_id))
 
     first_result = await first
     second_result = await second
 
     assert first_result.state is SourceState.READY
-    assert second_result.state is SourceState.OFFLINE
+    assert second_result.state is SourceState.PAUSED
     assert source.calls == ["refresh"]
 
 
@@ -176,7 +178,7 @@ async def test_slow_or_failing_source_does_not_block_independent_sources():
 
 
 @pytest.mark.asyncio
-async def test_last_good_snapshot_is_stale_on_failure_and_preserved_offline():
+async def test_last_good_snapshot_is_stale_on_failure_and_preserved_while_paused():
     source = FakeSource(
         "stale-source",
         refresh_values=[
@@ -188,14 +190,14 @@ async def test_last_good_snapshot_is_stale_on_failure_and_preserved_offline():
 
     ready = await service.refresh(source.source_id)
     failed = await service.refresh(source.source_id)
-    service.set_offline(True)
-    offline = await service.refresh(source.source_id)
+    service.set_network_paused(True)
+    paused_result = await service.refresh(source.source_id)
 
     assert ready.state is SourceState.READY
     assert failed.state is SourceState.STALE
     assert failed.snapshot == ready.snapshot
-    assert offline.state is SourceState.OFFLINE
-    assert offline.snapshot == ready.snapshot
+    assert paused_result.state is SourceState.PAUSED
+    assert paused_result.snapshot == ready.snapshot
     assert source.calls == ["refresh", "refresh"]
 
 
@@ -232,9 +234,9 @@ async def test_disabled_sources_are_skipped_and_disconnect_clears_last_good_stat
     assert enabled.calls[-1] == "disconnect"
     assert service.last_good_snapshot(enabled.source_id) is None
 
-    service.set_offline(True)
+    service.set_network_paused(True)
     before = tuple(disabled.calls)
-    assert (await service.disconnect(disabled.source_id)).state is SourceState.OFFLINE
+    assert (await service.disconnect(disabled.source_id)).state is SourceState.PAUSED
     assert tuple(disabled.calls) == before
 
 

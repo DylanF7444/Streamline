@@ -129,10 +129,10 @@ class _WatchFetcher:
     def __init__(self, prices: list[float]) -> None:
         self.prices = list(prices)
         self.calls = 0
-        self.offline = False
+        self.paused = False
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = value
+    def set_network_paused(self, value: bool) -> None:
+        self.paused = value
 
     async def fetch(self, _watch):
         self.calls += 1
@@ -272,7 +272,7 @@ def test_coordinator_refresh_is_nonblocking_and_renders_only_safe_failure(
 
 
 @pytest.mark.ui
-def test_coordinator_projects_lifecycle_lock_and_durable_offline_setting(qtbot, tmp_path: Path):
+def test_coordinator_projects_lifecycle_lock_and_session_network_pause(qtbot, tmp_path: Path):
     container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     container.lifecycle.start()
     window = create_main_window(close_to_tray=False)
@@ -287,15 +287,16 @@ def test_coordinator_projects_lifecycle_lock_and_durable_offline_setting(qtbot, 
 
     container.lifecycle.handle_session_unlock()
     assert not window.locked
-    coordinator.set_offline_mode(True)
-    assert container.controller.settings.offline_mode
+    coordinator.set_network_paused(True)
+    assert container.controller.network_requests_paused
 
     coordinator.shutdown()
     container.close()
 
     restarted = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     try:
-        assert restarted.controller.settings.offline_mode
+        restarted.lifecycle.start()
+        assert not restarted.controller.network_requests_paused
     finally:
         restarted.close()
 
@@ -462,11 +463,11 @@ def test_coordinator_refreshes_calendar_off_thread_and_persists_calendar_prefere
     qtbot.waitUntil(lambda: coordinator._calendar_refresh_thread is None, timeout=3_000)
     assert [item.title for item in window.calendar_events] == ["Due to-do"]
 
-    coordinator.set_offline_mode(True)
+    coordinator.set_network_paused(True)
     coordinator.refresh_calendars()
     qtbot.wait(50)
     assert source.calls == 4
-    assert window.calendar_freshness == "offline"
+    assert window.calendar_freshness == "paused"
 
     coordinator.shutdown()
     container.close()
@@ -526,11 +527,11 @@ def test_coordinator_persists_visual_news_workflow_and_refreshes_off_thread(
         "unread_only": True,
     }
 
-    coordinator.set_offline_mode(True)
+    coordinator.set_network_paused(True)
     coordinator.refresh_feeds((subscription.subscription_id,), force=True)
     qtbot.wait(50)
     assert fetcher.calls == 1
-    assert window.news_freshness == "offline"
+    assert window.news_freshness == "paused"
 
     coordinator.shutdown()
     container.close()
@@ -614,7 +615,7 @@ def test_coordinator_tests_and_persists_visual_watch_workflow_off_thread(
     section = next(item for item in window.today_sections if item.section_id == "watch_alerts")
     assert [item.title for item in section.items] == ["Visual deal"]
 
-    coordinator.set_offline_mode(True)
+    coordinator.set_network_paused(True)
     calls = fetcher.calls
     coordinator.refresh_watches((watch.watch_id,), force=True)
     qtbot.wait(50)
@@ -730,7 +731,7 @@ def test_settings_backup_restore_and_offline_maintenance_are_functional(
 ):
     from personal_hub.ui.desktop import application as application_module
 
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     now = datetime.now(UTC) - timedelta(minutes=1)
     original = container.controller.create_task(
         title="Included in backup",
@@ -807,7 +808,7 @@ def test_settings_backup_restore_and_offline_maintenance_are_functional(
 def test_refresh_notification_burst_uses_one_native_notification(
     qtbot, monkeypatch, tmp_path: Path
 ):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     container.lifecycle.start()
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
@@ -860,7 +861,7 @@ def test_refresh_notification_burst_uses_one_native_notification(
 
 @pytest.mark.ui
 def test_refresh_notification_batch_waits_for_late_stage(qtbot, monkeypatch, tmp_path: Path):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     container.lifecycle.start()
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
@@ -918,7 +919,7 @@ def test_refresh_notification_batch_waits_for_late_stage(qtbot, monkeypatch, tmp
 
 @pytest.mark.ui
 def test_visible_hub_suppresses_native_refresh_notification(qtbot, monkeypatch, tmp_path: Path):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     container.lifecycle.start()
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
@@ -965,7 +966,7 @@ def test_visible_hub_suppresses_native_refresh_notification(qtbot, monkeypatch, 
 def test_startup_refresh_suppresses_native_notification_when_hub_hidden(
     qtbot, monkeypatch, tmp_path: Path
 ):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     now = datetime.now(UTC) - timedelta(minutes=1)
     container.controller.create_task(
         title="Hidden startup task",

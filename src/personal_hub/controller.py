@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
@@ -262,6 +262,7 @@ class HubController:
         message_service: MessageService | None = None,
         diagnostics: DiagnosticsAggregator | None = None,
         sync_service: SyncService | None = None,
+        network_paused_getter: Callable[[], bool] | None = None,
         application_version: str = __version__,
     ) -> None:
         """Build a controller around a migrated Hub database and source service.
@@ -303,6 +304,8 @@ class HubController:
         self._owns_database = owns_database
         self.settings_repository = settings_repository or SettingsRepository(selected_database)
         self.sync_service = sync_service or SyncService(self.settings_repository)
+        self._network_paused = False
+        self._network_paused_getter = network_paused_getter
         self.source_repository = source_repository or SourceRepository(selected_database)
         self.inbox_repository = inbox_repository or InboxRepository(selected_database)
         self.audit_repository = audit_repository or AuditRepository(selected_database)
@@ -312,25 +315,14 @@ class HubController:
         self.task_repository = task_repository or TaskRepository(selected_database)
         self.task_list_repository = self.task_repository.lists
         self._settings_defaults = initial_settings
-        if self.sync_service.provider_relay_role() == "consumer":
-            initial_settings = initial_settings.model_copy(update={"offline_mode": True})
         self._settings = _load_controller_settings(
             self.settings_repository,
             defaults=initial_settings,
             database_path=selected_database.path,
         )
-        if (
-            self.sync_service.provider_relay_role() == "consumer"
-            and not self._settings.offline_mode
-        ):
-            self._settings = self._settings.model_copy(update={"offline_mode": True})
-            self.settings_repository.save_settings(self._settings)
         self.provider_relay_repository = ProviderRelayRepository(selected_database)
         self._provider_relay_calendar_source_ids: set[str] = set()
-        self.calendar_service = calendar_service or CalendarService(
-            offline=self._settings.offline_mode
-        )
-        self.calendar_service.set_offline(self._settings.offline_mode)
+        self.calendar_service = calendar_service or CalendarService()
         self.calendar_import_repository = calendar_import_repository or CalendarImportRepository(
             selected_database
         )
@@ -343,7 +335,6 @@ class HubController:
             self.calendar_service,
             fetcher=IcalFeedFetcher(
                 allow_http=self._settings.allow_insecure_feed_http,
-                offline=self._settings.offline_mode,
             ),
         )
         self.feed_subscription_repository = (
@@ -358,11 +349,8 @@ class HubController:
         self.feed_service = feed_service or FeedRefreshService(
             FeedFetcher(
                 allow_http=self._settings.allow_insecure_feed_http,
-                offline=self._settings.offline_mode,
             ),
-            offline=self._settings.offline_mode,
         )
-        self.feed_service.set_offline(self._settings.offline_mode)
         self._restore_feed_service()
         self.watch_repository = watch_repository or WatchRepository(
             selected_database,
@@ -373,20 +361,15 @@ class HubController:
             self.watch_repository,
             PageFetcher(
                 allow_http=self._settings.allow_insecure_watch_http,
-                offline=self._settings.offline_mode,
             ),
-            offline=self._settings.offline_mode,
         )
-        self.watch_service.set_offline(self._settings.offline_mode)
         self.message_repository = message_repository or MessageRepository(
             selected_database,
             max_summaries_per_source=self._settings.message_max_summaries_per_source,
         )
         self.message_service = message_service or MessageService(
             self.message_repository,
-            offline=self._settings.offline_mode,
         )
-        self.message_service.set_offline(self._settings.offline_mode)
 
         if source_service is None:
             source_service = cast(
@@ -403,7 +386,6 @@ class HubController:
         if source_service is None:
             source_service = SourceService(
                 selected_registry,
-                offline_getter=lambda: self._settings.offline_mode,
             )
         elif (
             registry is not None
@@ -413,7 +395,16 @@ class HubController:
             raise ValueError("source_service and registry must refer to the same registry")
         self.source_service = source_service
         self.registry = cast(SourceRegistry, getattr(source_service, "registry", selected_registry))
-        _set_service_offline(source_service, self._settings.offline_mode)
+
+        def network_paused_getter() -> bool:
+            return self.network_requests_paused
+
+        _set_service_network_paused_getter(source_service, network_paused_getter)
+        _set_service_network_paused_getter(self.calendar_service, network_paused_getter)
+        _set_service_network_paused_getter(self.ical_feed_manager, network_paused_getter)
+        _set_service_network_paused_getter(self.feed_service, network_paused_getter)
+        _set_service_network_paused_getter(self.watch_service, network_paused_getter)
+        _set_service_network_paused_getter(self.message_service, network_paused_getter)
 
         self._diagnostics = diagnostics or DiagnosticsAggregator(
             application_version=application_version,
@@ -440,12 +431,23 @@ class HubController:
         return self._settings
 
     @property
-    def offline_mode(self) -> bool:
-        return self._settings.offline_mode
+    def network_refresh_paused(self) -> bool:
+        """Return whether local lifecycle state currently pauses network refresh."""
+
+        return self._network_paused or bool(
+            self._network_paused_getter and self._network_paused_getter()
+        )
 
     @property
-    def offline(self) -> bool:
-        return self._settings.offline_mode
+    def network_requests_paused(self) -> bool:
+        """Include the relay consumer's independent provider-network restriction."""
+
+        return self.network_refresh_paused or self.sync_service.provider_relay_role() == "consumer"
+
+    def set_network_paused(self, paused: bool) -> None:
+        """Set the session-only refresh pause for standalone controller use."""
+
+        self._network_paused = bool(paused)
 
     @property
     def is_closed(self) -> bool:
@@ -486,20 +488,12 @@ class HubController:
             values["remove_completed_tasks_after_due_date"] = values.pop(
                 "canvas_remove_completed_assignments"
             )
-        if self.sync_service.provider_relay_role() == "consumer":
-            values["offline_mode"] = True
         updated = HubSettings.model_validate(values)
         if not _same_path(updated.database_path, self.database.path):
             raise ValueError("Hub controller settings cannot change the active database path")
         self.settings_repository.save_settings(updated)
         self._settings = updated
-        _set_service_offline(self.source_service, updated.offline_mode)
-        _set_service_offline(self.calendar_service, updated.offline_mode)
-        self.ical_feed_manager.set_offline(updated.offline_mode)
         self.ical_feed_manager.set_allow_http(updated.allow_insecure_feed_http)
-        _set_service_offline(self.feed_service, updated.offline_mode)
-        _set_service_offline(self.watch_service, updated.offline_mode)
-        _set_service_offline(self.message_service, updated.offline_mode)
         if isinstance(self.feed_service.fetcher, FeedFetcher):
             self.feed_service.fetcher.allow_http = updated.allow_insecure_feed_http
         self.feed_entry_repository.retention = timedelta(days=updated.feed_retention_days)
@@ -530,15 +524,6 @@ class HubController:
         return updated
 
     save_settings = update_settings
-
-    def set_offline_mode(self, enabled: bool) -> HubSettings:
-        """Persist offline mode and gate all subsequent source adapter calls."""
-
-        return self.update_settings(offline_mode=bool(enabled))
-
-    set_offline = set_offline_mode
-    set_offline_lock = set_offline_mode
-    toggle_offline_mode = set_offline_mode
 
     # ------------------------------------------------------------------
     # Source and Inbox projections used by desktop composition.
@@ -2510,12 +2495,11 @@ class HubController:
         return self.sync_service.provider_relay_role()
 
     def set_provider_relay_role(self, role: SyncRole) -> SyncStatus:
-        """Select this device as local-only, provider collector, or offline consumer."""
+        """Select this device as local-only, provider collector, or snapshot consumer."""
 
         self._ensure_open()
         self.sync_service.set_provider_relay_role(role)
         if role == "consumer":
-            self.update_settings(offline_mode=True)
             self._restore_provider_relay_cache()
         else:
             self._clear_provider_relay_calendar_sources()
@@ -3474,19 +3458,8 @@ class HubController:
                 defaults=self._settings_defaults,
                 database_path=self.database.path,
             )
-            if (
-                self.sync_service.provider_relay_role() == "consumer"
-                and not self._settings.offline_mode
-            ):
-                self._settings = self._settings.model_copy(update={"offline_mode": True})
-                self.settings_repository.save_settings(self._settings)
-            _set_service_offline(self.source_service, self._settings.offline_mode)
-            _set_service_offline(self.calendar_service, self._settings.offline_mode)
-            self.ical_feed_manager.set_offline(self._settings.offline_mode)
             self.ical_feed_manager.set_allow_http(self._settings.allow_insecure_feed_http)
             self.ical_feed_manager.reload()
-            _set_service_offline(self.feed_service, self._settings.offline_mode)
-            _set_service_offline(self.watch_service, self._settings.offline_mode)
             self._restore_feed_service(reset=True)
             self._restore_provider_relay_cache()
         return restored
@@ -3572,7 +3545,7 @@ class HubController:
         connection_id = self._ensure_source_connection(result.source_id, result.provider_id)
         previous = self.source_repository.get_sync_state(connection_id)
         success = result.state in self._SUCCESS_STATES
-        offline = result.state is SourceState.OFFLINE
+        not_attempted = result.state in {SourceState.OFFLINE, SourceState.PAUSED}
         collected_at = (
             result.snapshot.collected_at
             if result.snapshot is not None and success
@@ -3591,15 +3564,15 @@ class HubController:
         )
         if success:
             failure_count = 0
-        elif offline:
+        elif not_attempted:
             failure_count = previous.failure_count if previous is not None else 0
         else:
             failure_count = (previous.failure_count if previous is not None else 0) + 1
         last_attempt_at = (
             previous.last_attempt_at
-            if offline and previous is not None
+            if not_attempted and previous is not None
             else None
-            if offline
+            if not_attempted
             else result.checked_at
         )
         backoff_until = (
@@ -3665,7 +3638,7 @@ class HubController:
     def _record_source_audit(self, result: SourceResult) -> AuditEvent:
         if result.state in self._SUCCESS_STATES:
             outcome = "succeeded"
-        elif result.state is SourceState.OFFLINE:
+        elif result.state in {SourceState.OFFLINE, SourceState.PAUSED}:
             outcome = "skipped"
         else:
             outcome = "failed"
@@ -3764,10 +3737,13 @@ def _load_controller_settings(
     return HubSettings.model_validate(values)
 
 
-def _set_service_offline(service: SourceService, enabled: bool) -> None:
-    setter = getattr(service, "set_offline", None)
+def _set_service_network_paused_getter(
+    service: object,
+    getter: Callable[[], bool],
+) -> None:
+    setter = getattr(service, "set_network_paused_getter", None)
     if callable(setter):
-        setter(bool(enabled))
+        setter(getter)
 
 
 def _default_backup_path(settings: HubSettings) -> Path:

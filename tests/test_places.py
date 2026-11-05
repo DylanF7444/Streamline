@@ -23,7 +23,7 @@ from personal_hub.storage.database import HubDatabase
 
 
 def test_places_visits_restart_export_backup_restore_and_cascade(tmp_path):
-    settings = HubSettings(data_dir=tmp_path / "hub", offline_mode=True)
+    settings = HubSettings(data_dir=tmp_path / "hub")
     with build_hub_container(settings) as container:
         hub = container.controller
         place = hub.save_place(
@@ -128,7 +128,7 @@ class Response(io.BytesIO):
         self.headers = headers or {}
 
 
-def test_network_offline_before_dns_transport_or_cache_and_cancel():
+def test_network_gate_runs_before_dns_transport_or_cache_and_cancel():
     calls = []
     online = False
 

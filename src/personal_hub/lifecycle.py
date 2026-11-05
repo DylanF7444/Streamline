@@ -272,6 +272,7 @@ def acquire_single_instance(
 class LifecycleState(StrEnum):
     NEW = "new"
     RUNNING = "running"
+    STOPPING = "stopping"
     STOPPED = "stopped"
 
 
@@ -330,6 +331,17 @@ class HubLifecycle:
             and not self._network_paused
             and not self._sleeping
             and not self._session_locked
+        )
+
+    @property
+    def network_activity_paused(self) -> bool:
+        """Return whether the Hub's outbound work should be held at its adapters."""
+
+        return (
+            self._state in {LifecycleState.STOPPING, LifecycleState.STOPPED}
+            or self._network_paused
+            or self._sleeping
+            or (self.settings.pause_network_while_locked and self._session_locked)
         )
 
     def subscribe(self, listener: Callable[[LifecycleEvent], None]) -> Callable[[], None]:
@@ -398,6 +410,7 @@ class HubLifecycle:
         """Release Hub resources and transition to stopped."""
 
         if self._state != LifecycleState.STOPPED:
+            self._state = LifecycleState.STOPPING
             self._emit(LifecycleEvent.STOPPING)
         instance_lock, self._instance_lock = self._instance_lock, None
         if instance_lock is not None:

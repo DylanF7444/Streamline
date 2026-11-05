@@ -17,6 +17,7 @@ type MessageState = Literal[
     "ready",
     "empty",
     "stale",
+    "paused",
     "offline",
     "permission_required",
     "disconnected",
@@ -30,7 +31,13 @@ class MessageError(RuntimeError):
     pass
 
 
+class MessagePausedError(MessageError):
+    """Raised when message network work is paused."""
+
+
 class MessageOfflineError(MessageError):
+    """Raised when a provider is unreachable because the device is offline."""
+
     pass
 
 
@@ -324,6 +331,7 @@ __all__ = [
     "MessageError",
     "MessageInvalidResponseError",
     "MessageOfflineError",
+    "MessagePausedError",
     "MessagePermissionRequiredError",
     "MessageProvider",
     "MessageQuery",

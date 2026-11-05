@@ -35,6 +35,7 @@ type WatchValue = str | float | bool | None
 type WatchState = Literal[
     "ready",
     "stale",
+    "paused",
     "offline",
     "permission_required",
     "disconnected",
@@ -66,8 +67,8 @@ class WatchPermissionRequiredError(WatchError):
     """A watch needs authentication or permission review."""
 
 
-class WatchOfflineError(WatchError):
-    """Network collection was blocked by offline mode."""
+class WatchPausedError(WatchError):
+    """Network collection was blocked while refresh was paused."""
 
 
 def _aware(value: datetime) -> datetime:
@@ -288,7 +289,7 @@ __all__ = [
     "WatchError",
     "WatchKind",
     "WatchObservation",
-    "WatchOfflineError",
+    "WatchPausedError",
     "WatchParseError",
     "WatchPermissionRequiredError",
     "WatchPolicyError",

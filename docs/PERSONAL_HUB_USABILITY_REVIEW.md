@@ -1,5 +1,28 @@
 # Personal Hub usability improvements
 
+## Charcoal and mint presentation — November 4, 2026
+
+Applied the reviewed dark dashboard direction to the native Qt application: layered charcoal
+surfaces, mint navigation and primary actions, shared rounded controls, scalable native line
+icons, and consistent card surfaces across Tracking and Logging. Removed redundant page
+introductions and decorative writing prompts while retaining validation, privacy, freshness,
+autosave, and recovery guidance. Light/sage presets, custom colors, high contrast, text scaling,
+and reduced motion remain supported.
+
+Home provides database-backed open-task and unread-alert counts plus today's factual Logging
+count, masked on privacy/lock. The local projection timestamp says **Overview updated** rather
+than implying provider synchronization. New default widget positions prioritize due tasks
+and Agenda, while existing saved rectangles and visibility are retained. Customization actions
+remain available under **Customize dashboard**, with an explicit **Done editing** control.
+Watchlists starts with the tracked list and an **Add watch** disclosure; editing by keyboard
+or pointer reveals the existing conditional form. No provider operations, stored content,
+permission scopes, or data schemas changed.
+
+Validation results are recorded in the implementation status after the final checks. Local
+synthetic screenshots and per-file test logs are under ignored
+`.benchmark-data/style-implementation/`. Native DPI and assistive-technology release checks
+remain separate from offscreen layout verification.
+
 Review date: October 28, 2026. Scope: focused desktop presentation and keyboard fixes.
 The implementation plan, handoff, accessibility review, implementation status, progress and
 activity plan, current desktop code, and existing UI tests were reviewed before editing.
@@ -66,9 +89,9 @@ confusing local display changes with provider operations.
 | Watchlists and news | Add/edit/remove/enable feeds; choose subscriptions and include/exclude terms; filter unread entries; mark entries read and open safe links; create/edit/remove/enable page and product watches; test a watch and refresh sources. Conditional watch fields follow the selected watch type and condition. |
 | Inbox and messages | Switch between alerts and messages; mark alerts read/unread, dismiss, or archive; open an alert's destination; choose a local message category; explicitly open a sanitized message body or provider link. |
 | Sources | Select a source; connect, refresh, enable/disable, reconnect, disconnect, or clear retained summaries; review granted capabilities, health, refresh interval, retention, and the pages that use the source. |
-| Settings | Edit and save startup, offline, timezone, refresh, notification, quiet-hour, digest, privacy, retention, accessibility, appearance, and update preferences; back up, restore, export, preview/apply history deletion, configure encrypted sync or provider relay, sync now, and review/copy diagnostics. |
+| Settings | Edit and save startup, timezone, refresh, notification, quiet-hour, digest, privacy, retention, accessibility, appearance, and update preferences; pause network refresh for the session; back up, restore, export, preview/apply history deletion, configure encrypted sync or provider relay, sync now, and review/copy diagnostics. |
 | Tracking and Logging | Return to each mode's remembered page; capture manual progress and filter/search Activity; create, edit, search, or delete Reflections; browse a Daily overview date and edit its existing Reflection; search/filter Places, add/edit/delete places and visits, favorite places, save/return to a home map view, and navigate the map. |
-| Tray | Open the window, open Home or Inbox, refresh, pause/resume network refresh, toggle offline mode, and quit. |
+| Tray | Open the window, open Home or Inbox, refresh, pause/resume network refresh, and quit. |
 
 Motion is limited to transitions that help users understand a change of view or reveal a
 secondary surface:

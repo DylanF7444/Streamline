@@ -19,7 +19,7 @@ from personal_hub.watches import (
     PageResponse,
     WatchCondition,
     WatchDefinition,
-    WatchOfflineError,
+    WatchPausedError,
     WatchPolicyError,
     WatchUnavailableError,
     extract_observation,
@@ -73,14 +73,14 @@ class _Fetcher:
     def __init__(self, responses: list[PageResponse | Exception]) -> None:
         self.responses = list(responses)
         self.calls = 0
-        self.offline = False
+        self.paused = False
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = value
+    def set_network_paused(self, value: bool) -> None:
+        self.paused = value
 
     async def fetch(self, _watch: WatchDefinition) -> PageResponse:
-        if self.offline:
-            raise WatchOfflineError("offline")
+        if self.paused:
+            raise WatchPausedError("paused")
         self.calls += 1
         value = self.responses.pop(0)
         if isinstance(value, Exception):
@@ -344,7 +344,7 @@ async def test_restock_transition_cooldown_and_test_now_are_non_mutating(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_due_scheduler_is_independent_bounded_and_offline_before_fetch(
+async def test_due_scheduler_is_independent_bounded_and_paused_before_fetch(
     tmp_path: Path,
 ) -> None:
     container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
@@ -376,18 +376,18 @@ async def test_due_scheduler_is_independent_bounded_and_offline_before_fetch(
     assert container.watch_repository.latest_observation(first.watch_id) is not None
     assert container.watch_repository.latest_observation(second.watch_id) is None
 
-    container.controller.set_offline_mode(True)
+    container.controller.set_network_paused(True)
     calls = container.watch_service.fetcher.calls
-    offline = await container.controller.refresh_watches(
+    paused = await container.controller.refresh_watches(
         (first.watch_id,), force=True, now=NOW + timedelta(hours=2)
     )
-    assert offline[first.watch_id].state == "offline"
+    assert paused[first.watch_id].state == "paused"
     assert container.watch_service.fetcher.calls == calls
     container.close()
 
 
 @pytest.mark.asyncio
-async def test_changedetection_adapter_is_exact_origin_get_only_and_offline_first() -> None:
+async def test_changedetection_adapter_is_exact_origin_get_only_and_pause_first() -> None:
     transport = _Transport(
         [
             PageResponse(
@@ -412,7 +412,7 @@ async def test_changedetection_adapter_is_exact_origin_get_only_and_offline_firs
     assert not hasattr(adapter, "update_watch")
     assert not hasattr(adapter, "delete_watch")
 
-    adapter.set_offline(True)
-    with pytest.raises(WatchOfflineError):
+    adapter.set_network_paused(True)
+    with pytest.raises(WatchPausedError):
         await adapter.fetch_snapshot("remote-1")
     assert len(transport.calls) == 1

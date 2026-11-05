@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from urllib.parse import quote, urlsplit
 
@@ -76,7 +76,8 @@ class OutlookMessageSource:
         max_messages: int = 200,
         max_pages: int = 10,
         max_response_bytes: int = 2_000_000,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         self.source_id = source_id
         self.account_id = account_id
@@ -85,15 +86,34 @@ class OutlookMessageSource:
         self.max_messages = max_messages
         self.max_pages = max_pages
         self.max_response_bytes = max_response_bytes
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
+        )
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def list_summaries(self, query: MessageQuery) -> MessageSnapshot:
         if not isinstance(query, MessageQuery):
             raise TypeError("Outlook Mail expects MessageQuery")
-        token = await access_token(self.token_provider, self.scopes, offline=self.offline)
+        token = await access_token(
+            self.token_provider, self.scopes, network_paused=self.network_paused
+        )
         summaries: list[MessageSummary] = []
         for folder in query.folders:
             url = f"{OUTLOOK_MAIL_API_ROOT}/me/mailFolders/{quote(folder, safe='')}/messages"
@@ -119,7 +139,7 @@ class OutlookMessageSource:
                         "$orderby": "receivedDateTime desc",
                     },
                     max_response_bytes=self.max_response_bytes,
-                    offline=self.offline,
+                    network_paused=self.network_paused,
                 )
                 raw_values = payload.get("value", [])
                 if not isinstance(raw_values, list):
@@ -200,14 +220,16 @@ class OutlookMessageSource:
         identifier = _id(message_id)
         if identifier is None:
             raise ValueError("Outlook message_id is invalid")
-        token = await access_token(self.token_provider, self.scopes, offline=self.offline)
+        token = await access_token(
+            self.token_provider, self.scopes, network_paused=self.network_paused
+        )
         payload = await request_json(
             self.transport,
             f"{OUTLOOK_MAIL_API_ROOT}/me/messages/{quote(identifier, safe='')}",
             token=token,
             params={"$select": "id,body"},
             max_response_bytes=self.max_response_bytes,
-            offline=self.offline,
+            network_paused=self.network_paused,
         )
         body = payload.get("body", {})
         if not isinstance(body, Mapping):

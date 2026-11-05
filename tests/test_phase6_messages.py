@@ -22,7 +22,7 @@ from personal_hub.integrations import (
 from personal_hub.messages import (
     GmailMessageSource,
     MessageBody,
-    MessageOfflineError,
+    MessagePausedError,
     MessageQuery,
     MessageRepository,
     MessageService,
@@ -130,10 +130,10 @@ class _Source:
         self.body_text = body_text
         self.list_calls = 0
         self.body_calls = 0
-        self.offline = False
+        self.paused = False
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = value
+    def set_network_paused(self, value: bool) -> None:
+        self.paused = value
 
     async def list_summaries(self, query: MessageQuery) -> MessageSnapshot:
         self.list_calls += 1
@@ -419,11 +419,11 @@ async def test_slack_uses_only_selected_channels_or_saved_query_and_read_scopes(
 
 
 @pytest.mark.asyncio
-async def test_offline_mode_prevents_token_and_transport_access() -> None:
+async def test_network_pause_prevents_token_and_transport_access() -> None:
     token = _Token()
     transport = _Transport([])
-    source = GmailMessageSource(token, transport, offline=True)
-    with pytest.raises(MessageOfflineError):
+    source = GmailMessageSource(token, transport, network_paused=True)
+    with pytest.raises(MessagePausedError):
         await source.list_summaries(MessageQuery(folders=("INBOX",)))
     assert token.calls == []
     assert transport.calls == []
@@ -498,16 +498,16 @@ async def test_message_sources_fail_independently_and_keep_last_good_summaries(
     stale = await service.refresh(first.source_id, force=True, now=NOW + timedelta(hours=1))
     assert stale.state == "error"
     assert len(service.summaries(source_id=first.source_id)) == 1
-    service.set_offline(True)
+    service.set_network_paused(True)
     calls = good.list_calls
-    offline = await service.refresh(
+    paused = await service.refresh(
         first.source_id,
         force=True,
         now=NOW + timedelta(hours=2),
     )
-    assert offline.state == "offline"
+    assert paused.state == "paused"
     assert good.list_calls == calls
-    assert offline.snapshot is not None and len(offline.snapshot.summaries) == 1
+    assert paused.snapshot is not None and len(paused.snapshot.summaries) == 1
     database.close()
 
 

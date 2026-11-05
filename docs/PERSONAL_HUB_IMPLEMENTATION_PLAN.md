@@ -28,7 +28,7 @@ The first Personal Hub release is a local-first attention dashboard centered on:
 - deal, restock, and webpage-change watchlists;
 - a read-focused message and email view;
 - a durable alert Inbox and scheduled digests;
-- explicit connection health, privacy, and offline controls.
+- explicit connection health, privacy, and network refresh pause controls.
 
 Personal Hub should remain useful with no AI model installed. Intelligence can be added
 later through a narrow optional interface for summarization and prioritization. A future
@@ -134,7 +134,7 @@ new cloud service.
 - Follow selected topics without opening several news sites.
 - See a bounded list of unread or important messages.
 - Receive one digest instead of many low-value notifications.
-- Understand when a source is stale, disconnected, or blocked by offline mode.
+- Understand when a source is stale, disconnected, or paused by the user.
 - Open the original source when more context or an external action is required.
 
 ### Explicitly unsupported users in the first release
@@ -150,12 +150,13 @@ new cloud service.
 October 29, 2026 extension: **Places** in Logging provides an online worldwide MapLibre
 map backed by OpenFreeMap's OpenStreetMap-derived tiles. The renderer and scripts load only
 when that page is opened online. Saved places and dated repeat visits remain Hub-owned local
-data, usable offline and included in database backup/restore and explicit JSON export. Pin
-creation, coordinate navigation, a saved home view, local search, categories, visited/wanted
-filters, favorites, editing and explicit deletion require no AI or provider account. There is
+data, usable without a network connection and included in database backup/restore and explicit
+JSON export. Pin creation, coordinate navigation, a saved home view, local search, categories,
+visited/wanted filters, favorites, editing and explicit deletion require no AI or provider
+account. There is
 no location tracking, geocoding service, region download, or cross-device Places sync in this
-extension. Privacy masking/lock clears its presentation and stops the renderer. Offline mode,
-network pause, leaving the page, hiding the window, and shutdown stop further map requests.
+extension. Privacy masking/lock clears its presentation and stops the renderer. Network refresh
+pause, leaving the page, hiding the window, and shutdown stop further map requests.
 See `PERSONAL_HUB_PLACES_IMPLEMENTATION.md` for the network and packaging boundary.
 
 October 28, 2026 extension: **Tracking / Logging** is a persistent, accessible mode selector.
@@ -187,8 +188,10 @@ sync. Reflections require a separate device-local opt-in on each participating d
 Provider APIs and the provider collector relay never receive Logging content. No AI, running
 timer, inferred hours, score, or streak is involved.
 
-The main window uses a persistent left navigation rail and a content area. The **Workspace**
-group contains Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
+The main window uses a persistent left navigation rail and a content area. A persistent local
+date and time display sits above the page content on every screen, with the weekday, full date,
+12-hour time, and local UTC offset; it updates every 30 seconds. The **Workspace** group contains
+Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
 or hide these pages. The main Calendar includes all available calendars by default. Users can
 create named calendar views that include chosen combinations of calendars; each view opens the
 existing Calendar page scoped to its chosen set. Local task lists appear as individual shortcuts
@@ -210,6 +213,17 @@ There is no Assistant tab, transcript, prompt box, microphone control, command p
 model status in Personal Hub.
 
 ### Home (Today dashboard)
+
+November 4, 2026 presentation update: the default dark preset uses charcoal surfaces and
+mint accents, with native line icons, shared control sizing, and concise page headings.
+The existing `navy` preference key and custom color overrides remain compatible. Home
+includes exact local counts for open tasks, unread alerts, and today's activity; masking
+and lock hide these counts. **Customize dashboard** groups widget selection, layout editing,
+appearance, and reset. New default layouts place due tasks and Agenda first; saved layouts
+retain their geometry and visibility. The local overview timestamp is labeled separately
+from provider freshness. Watchlists opens on the tracked list; **Add watch** and activating
+a watch disclose its existing editor. No provider permission, persistence schema, or network
+behavior changes accompany this presentation update.
 
 Home is the default screen and contains ordered sections rather than arbitrary monitoring
 metrics:
@@ -362,7 +376,6 @@ Each source shows:
 Settings includes:
 
 - startup and tray behavior;
-- global offline mode;
 - default timezone and week start;
 - refresh and battery behavior;
 - notification and quiet-hour policy;
@@ -387,7 +400,7 @@ It contains no model, voice, planner, command, or assistant settings.
 - RSS/Atom subscriptions and keyword filters.
 - Durable alert Inbox.
 - Windows notifications and quiet hours.
-- Source health and global offline mode.
+- Source health and network refresh pause.
 - Tray operation and start-at-login option.
 - Backup, restore, and local data deletion.
 
@@ -405,7 +418,7 @@ It contains no model, voice, planner, command, or assistant settings.
 - Scheduled morning or evening digest.
 - Full packaging, installer, update, and recovery paths.
 - Optional encrypted shared-folder synchronization for Hub-owned local state, plus a separate
-  opt-in provider relay with one collector and offline consumer devices. Credentials remain
+  opt-in provider relay with one collector and snapshot consumer devices. Credentials remain
   device-local; only bounded selected snapshots are shared.
 
 ### Later candidates
@@ -1001,9 +1014,9 @@ raw exceptions, or unbounded response bodies.
 - Minimum refresh floors enforced below the UI layer.
 - Exponential backoff with jitter after recoverable failures.
 - Authentication failures pause the source and request reconnection.
-- Offline mode prevents network work before DNS or token refresh.
+- Network refresh pause prevents outbound refresh work before DNS or token refresh.
 - Sleep and restart reconciliation does not replay every missed poll.
-- Manual refresh bypasses due time but not permissions, offline mode, backoff safety, or
+- Manual refresh bypasses due time but not permissions, network refresh pause, backoff safety, or
   concurrency limits.
 - Battery-aware policy can suspend non-urgent refresh when configured.
 
@@ -1172,7 +1185,7 @@ prefer authenticated Windows IPC or a loopback-only API with:
 - Schema validation at every provider boundary.
 - HTML and XML hardening.
 - Safe error summaries.
-- Offline mode checked before token refresh or network access.
+- Network refresh pause checked before token refresh or network access.
 - Transactional observation-to-alert persistence.
 - Idempotency keys for recurring tasks, alert delivery, and digest runs.
 - Privacy masking for screen and notifications.
@@ -1195,22 +1208,26 @@ boundaries:
 
 External write scopes should not be requested until a shipping feature requires them.
 
-## Offline Behavior
+## Network Refresh Pause
 
-Personal Hub is local-first, not network-free.
+Personal Hub is local-first and normally connects only for user-configured features. The
+session-only **Pause network refresh** control holds source, provider, and map refresh work.
 
-When offline mode is enabled:
+While refresh is paused:
 
 - local tasks remain fully available;
 - cached feed entries and alert history remain available;
-- last-good calendar and message summaries display as stale if retained;
-- no DNS, token refresh, provider API, feed, page, or update request is attempted;
-- source cards explain that refresh is paused by offline mode;
+- last-good calendar and message summaries remain available with a paused state;
+- no source DNS, token refresh, provider API, feed, page, or map request is attempted;
+- source cards explain that refresh is paused;
 - scheduled network polls advance safely without building an unbounded backlog;
 - local reminders and deterministic digests still run from available data.
 - encrypted shared-folder synchronization is available only as an explicit local file operation
-  when the user-selected folder is reachable; offline mode never creates a Personal Hub network
-  relay or bypasses provider/network gating.
+  when the user-selected folder is reachable; refresh pause does not create an automatic network
+  relay or bypass provider/network gating.
+
+The pause resets when Personal Hub restarts. Physical loss of connectivity is reported as an
+offline or disconnected source state; it is not a separate application mode.
 
 ## Desktop Lifecycle
 
@@ -1236,7 +1253,6 @@ Tray actions:
 - Open Inbox.
 - Refresh enabled sources.
 - Pause or resume network refresh.
-- Toggle offline mode.
 - Quit.
 
 Closing the window hides to tray only when the setting is enabled. Quit shuts down pollers,
@@ -1342,7 +1358,7 @@ private content. Tests remain offline and deterministic.
 - RSS redirects, ETags, malformed XML, and oversize responses.
 - Product structured-data extraction.
 - changedetection.io API mapping.
-- scheduler backoff, sleep/resume, and offline lock.
+- scheduler backoff, sleep/resume, and pause-on-lock.
 - database backup/restore and migration rollback.
 
 ### UI tests
@@ -1443,13 +1459,13 @@ Deliverables:
 - settings, source health, Inbox, audit, and notification repositories.
 - main navigation and responsive shell.
 - tray, startup, lock, sleep/resume, and shutdown behavior.
-- offline mode, privacy masking, quiet hours, and diagnostics skeleton.
+- network refresh pause, privacy masking, quiet hours, and diagnostics skeleton.
 - backup and restore foundation.
 
 Acceptance gate:
 
 - Inbox state survives restart.
-- offline mode prevents all test network adapters before connection.
+- network refresh pause prevents all test network adapters before connection.
 - a fake source failure appears safely without freezing UI.
 - backup and restore round-trip an isolated Hub database.
 
@@ -1478,7 +1494,7 @@ Deliverables:
 - Hub calendar protocol and service.
 - month, day, hourly week, and agenda UI.
 - Google Calendar read-only connection.
-- selected calendars, freshness, masking, and offline behavior.
+- selected calendars, freshness, masking, and network refresh pause behavior.
 - Today event projection.
 - Outlook Calendar read adapter after Google acceptance.
 
@@ -1622,7 +1638,8 @@ Rules:
 3. Sync a bounded week.
 4. Verify events appear in Calendar and Today.
 5. Enable privacy masking and verify titles/locations are hidden.
-6. Enable offline mode and verify the last-good snapshot becomes stale without network work.
+6. Pause network refresh and verify the last-good snapshot remains visible with a paused state
+   and no network work.
 7. Disconnect and verify credentials and source data are cleared according to policy.
 
 ### News digest

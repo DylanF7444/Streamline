@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
@@ -59,7 +59,8 @@ class GmailMessageSource:
         account_id: str = "me",
         max_messages: int = 200,
         max_response_bytes: int = 2_000_000,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         if not 1 <= max_messages <= 200:
             raise ValueError("Gmail summary limit must be between 1 and 200")
@@ -69,15 +70,34 @@ class GmailMessageSource:
         self.transport = transport
         self.max_messages = max_messages
         self.max_response_bytes = max_response_bytes
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
+        )
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def list_summaries(self, query: MessageQuery) -> MessageSnapshot:
         if not isinstance(query, MessageQuery):
             raise TypeError("Gmail expects MessageQuery")
-        token = await access_token(self.token_provider, self.scopes, offline=self.offline)
+        token = await access_token(
+            self.token_provider, self.scopes, network_paused=self.network_paused
+        )
         terms: list[str] = []
         terms.extend(f"in:{folder}" for folder in query.folders)
         if query.query:
@@ -94,7 +114,7 @@ class GmailMessageSource:
             token=token,
             params={"q": " ".join(terms), "maxResults": min(query.limit, self.max_messages)},
             max_response_bytes=self.max_response_bytes,
-            offline=self.offline,
+            network_paused=self.network_paused,
         )
         raw_messages = payload.get("messages", [])
         if not isinstance(raw_messages, list):
@@ -112,7 +132,7 @@ class GmailMessageSource:
                     "metadataHeaders": "From,Subject,Date",
                 },
                 max_response_bytes=self.max_response_bytes,
-                offline=self.offline,
+                network_paused=self.network_paused,
             )
             summary = self._summary(resource, message_id)
             if summary is not None:
@@ -171,14 +191,16 @@ class GmailMessageSource:
         identifier = _message_id(message_id)
         if identifier is None:
             raise ValueError("Gmail message_id is invalid")
-        token = await access_token(self.token_provider, self.scopes, offline=self.offline)
+        token = await access_token(
+            self.token_provider, self.scopes, network_paused=self.network_paused
+        )
         payload = await request_json(
             self.transport,
             f"{GMAIL_API_ROOT}/messages/{quote(identifier, safe='')}",
             token=token,
             params={"format": "full"},
             max_response_bytes=self.max_response_bytes,
-            offline=self.offline,
+            network_paused=self.network_paused,
         )
         selected = _gmail_body(payload.get("payload"))
         if selected is None:

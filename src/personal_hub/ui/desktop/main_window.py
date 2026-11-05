@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from PySide6.QtCore import QDateTime, QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QEvent, QObject, QSignalBlocker, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFontMetrics, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -61,9 +61,16 @@ from personal_hub.messages.categories import (
     is_message_category,
     message_category_label,
 )
-from personal_hub.ui.desktop.appearance import AppearancePanel, theme_stylesheet
+from personal_hub.ui.desktop.appearance import (
+    AppearancePanel,
+    contrast_text,
+    resolved_theme_colors,
+    theme_stylesheet,
+)
 from personal_hub.ui.desktop.dashboard import DashboardBoard
+from personal_hub.ui.desktop.home_summary import HomeSummary
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
+from personal_hub.ui.desktop.icons import hub_icon
 from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
 from personal_hub.ui.desktop.mini_calendar import MiniCalendar
 from personal_hub.ui.desktop.motion import DisclosureTransition, PageTransition
@@ -173,7 +180,6 @@ class SourceView:
 class SettingsView:
     """The small set of settings needed by the Phase 1 shell."""
 
-    offline_mode: bool = False
     privacy_masking: bool = False
     close_to_tray: bool = True
     start_at_login: bool = False
@@ -751,6 +757,7 @@ _NEWS_FRESHNESS_STATES: Final[frozenset[str]] = frozenset(
         "ready",
         "empty",
         "stale",
+        "paused",
         "offline",
         "permission_required",
         "disconnected",
@@ -762,7 +769,8 @@ _NEWS_FRESHNESS_MESSAGES: Final[dict[str, str]] = {
     "ready": "Ready",
     "empty": "No new entries",
     "stale": "Stale · showing the last successful entries",
-    "offline": "Offline · refresh is paused",
+    "paused": "Refresh paused · showing saved entries",
+    "offline": "Offline · saved entries remain available",
     "permission_required": "Permission required · review the connection in Sources",
     "disconnected": "Disconnected · connect a source in Sources",
     "error": "Refresh failed · retry or review the source in Sources",
@@ -776,6 +784,7 @@ _CALENDAR_FRESHNESS_STATES: Final[frozenset[str]] = frozenset(
         "ready",
         "empty",
         "stale",
+        "paused",
         "offline",
         "permission_required",
         "disconnected",
@@ -787,7 +796,8 @@ _CALENDAR_FRESHNESS_MESSAGES: Final[dict[str, str]] = {
     "ready": "Ready",
     "empty": "No events in this view",
     "stale": "Stale · showing the last successful snapshot",
-    "offline": "Offline · refresh is paused",
+    "paused": "Refresh paused · showing saved data",
+    "offline": "Offline · saved data remains available",
     "permission_required": "Permission required · review the connection in Sources",
     "disconnected": "Disconnected · connect an account in Sources, or add a local item",
     "error": "Refresh failed · retry or review the source in Sources",
@@ -1129,7 +1139,6 @@ def _coerce_settings(value: SettingsView | Mapping[str, object] | None) -> Setti
     except (TypeError, ValueError):
         text_scale = 1.0
     return SettingsView(
-        offline_mode=_bool_value(_field(data, "offline_mode", _field(data, "offline", False))),
         privacy_masking=_bool_value(
             _field(data, "privacy_masking", _field(data, "hide_sensitive_display", False))
         ),
@@ -2312,12 +2321,12 @@ def _calendar_display_timezone(value: object) -> str:
 
 
 _DEFAULT_TODAY_SECTIONS: Final[tuple[TodaySectionView, ...]] = (
-    TodaySectionView("mini_calendar", "Mini calendar"),
-    TodaySectionView("schedule", "Agenda", "No calendar events are scheduled."),
     TodaySectionView("today", "Due today", "No tasks are due today."),
-    TodaySectionView("attention", "Inbox", "You're all caught up."),
-    TodaySectionView("watchlist", "Watchlist", "Add a watch to follow what changes."),
+    TodaySectionView("schedule", "Agenda", "No calendar events are scheduled."),
+    TodaySectionView("attention", "Inbox", "No unread alerts."),
     TodaySectionView("overdue", "Overdue tasks", "Nothing is overdue."),
+    TodaySectionView("mini_calendar", "Mini calendar"),
+    TodaySectionView("watchlist", "Watchlist", "No watches configured."),
     TodaySectionView("upcoming", "Upcoming", "No upcoming tasks or events.", visible=False),
     TodaySectionView("inbox", "Unread messages", "No unread messages.", visible=False),
     TodaySectionView("watch_alerts", "Watch alerts", "No watch alerts.", visible=False),
@@ -2351,6 +2360,10 @@ QMainWindow, QWidget { background: #000000; color: #ffffff; }
 QLabel { color: #ffffff; }
 QPushButton[hubNavigation="true"] { color: #ffffff; border: 2px solid #ffffff; }
 QPushButton[hubNavigation="true"]:checked { background: #003b5c; color: #ffffff; border-color: #00ffff; }
+QPushButton[hubNavigation="true"]:checked:enabled,
+QPushButton[hubNavigation="true"]:checked:enabled:hover {
+    background: #003b5c; color: #ffffff; border-color: #00ffff;
+}
 QPushButton[hubNavigation="true"]:disabled { background: #000000; color: #8c8c8c; border-color: #666666; }
 QPushButton[hubNavigation="true"]:focus, QListWidget:focus { border: 3px solid #00ffff; }
 QListWidget, QFrame#todayCard, QFrame#todaySection, QFrame#taskQuickAdd,
@@ -2359,7 +2372,7 @@ QFrame#calendarWeekColumn, QFrame#calendarSourcesPanel,
 QFrame#calendarSettingsPanel, QFrame#inboxRow, QFrame#messageSummaryRow,
 QFrame#sourceFailurePanel, QFrame#attentionNotificationPanel, QFrame#diagnosticsView,
 QFrame#newsSubscriptionsPanel, QFrame#newsEntryRow,
-QFrame#newsFiltersPanel, QFrame#newsSubscriptionEditor,
+QFrame#newsFiltersPanel, QFrame#newsSubscriptionEditor, QFrame#persistentClockDisplay,
 QFrame#newsSubscriptionRow {
     background: #000000; color: #ffffff; border: 2px solid #ffffff;
 }
@@ -3026,13 +3039,11 @@ class PersonalHubTrayController(QObject):
     inbox_requested = Signal()
     refresh_requested = Signal()
     network_pause_changed = Signal(bool)
-    offline_mode_changed = Signal(bool)
     quit_requested = Signal()
 
     # Semantic aliases keep integrations readable while retaining one signal
     # source for each tray control.
     pause_changed = network_pause_changed
-    offline_toggled = offline_mode_changed
     refresh_sources_requested = refresh_requested
 
     def __init__(
@@ -3049,7 +3060,6 @@ class PersonalHubTrayController(QObject):
         super().__init__(parent)
         self._icon = icon or _application_icon()
         self._network_refresh_paused = False
-        self._offline_mode = False
         self._visible = False
 
         self.menu = QMenu(parent if isinstance(parent, QWidget) else None)
@@ -3058,8 +3068,6 @@ class PersonalHubTrayController(QObject):
         self.inbox_action = QAction("Open Inbox", self)
         self.refresh_action = QAction("Refresh enabled sources", self)
         self.network_pause_action = QAction("Pause network refresh", self)
-        self.offline_mode_action = QAction("Offline mode", self)
-        self.offline_mode_action.setCheckable(True)
         self.quit_action = QAction("Quit", self)
         self.menu.addAction(self.open_action)
         self.menu.addAction(self.today_action)
@@ -3067,7 +3075,6 @@ class PersonalHubTrayController(QObject):
         self.menu.addSeparator()
         self.menu.addAction(self.refresh_action)
         self.menu.addAction(self.network_pause_action)
-        self.menu.addAction(self.offline_mode_action)
         self.menu.addSeparator()
         self.menu.addAction(self.quit_action)
 
@@ -3076,7 +3083,6 @@ class PersonalHubTrayController(QObject):
         self.inbox_action.triggered.connect(self.inbox_requested)
         self.refresh_action.triggered.connect(self.refresh_requested)
         self.network_pause_action.triggered.connect(self._toggle_network_pause)
-        self.offline_mode_action.toggled.connect(self._set_offline_from_action)
         self.quit_action.triggered.connect(self.quit_requested)
         if on_open is not None:
             self.open_requested.connect(on_open)
@@ -3107,15 +3113,10 @@ class PersonalHubTrayController(QObject):
 
         # Concise aliases make integration code independent of action naming.
         self.pause_action = self.network_pause_action
-        self.offline_action = self.offline_mode_action
 
     @property
     def network_refresh_paused(self) -> bool:
         return self._network_refresh_paused
-
-    @property
-    def offline_mode(self) -> bool:
-        return self._offline_mode
 
     @property
     def actions(self) -> dict[str, QAction]:
@@ -3125,7 +3126,6 @@ class PersonalHubTrayController(QObject):
             "inbox": self.inbox_action,
             "refresh": self.refresh_action,
             "pause": self.network_pause_action,
-            "offline": self.offline_mode_action,
             "quit": self.quit_action,
         }
 
@@ -3139,9 +3139,6 @@ class PersonalHubTrayController(QObject):
     def _toggle_network_pause(self) -> None:
         self.set_network_refresh_paused(not self._network_refresh_paused)
 
-    def _set_offline_from_action(self, enabled: bool) -> None:
-        self.set_offline_mode(enabled)
-
     def set_network_refresh_paused(self, paused: bool, *, emit: bool = True) -> None:
         paused = bool(paused)
         changed = paused != self._network_refresh_paused
@@ -3154,16 +3151,6 @@ class PersonalHubTrayController(QObject):
             self.network_pause_changed.emit(paused)
 
     set_network_paused = set_network_refresh_paused
-
-    def set_offline_mode(self, enabled: bool, *, emit: bool = True) -> None:
-        enabled = bool(enabled)
-        changed = enabled != self._offline_mode
-        self._offline_mode = enabled
-        self.offline_mode_action.blockSignals(True)
-        self.offline_mode_action.setChecked(enabled)
-        self.offline_mode_action.blockSignals(False)
-        if changed and emit:
-            self.offline_mode_changed.emit(enabled)
 
     def show(self) -> None:
         self._visible = True
@@ -3531,7 +3518,6 @@ class PersonalHubMainWindow(QMainWindow):
     destination_changed = Signal(str)
     refresh_requested = Signal()
     network_pause_changed = Signal(bool)
-    offline_mode_changed = Signal(bool)
     quit_requested = Signal()
     source_failure_received = Signal(object)
     attention_notification_open_requested = Signal(object)
@@ -3666,7 +3652,6 @@ class PersonalHubMainWindow(QMainWindow):
         self._locked = False
         self._privacy_masked = False
         self._network_refresh_paused = False
-        self._offline_mode = False
         self._text_scale = max(1.0, min(float(text_scale), 1.75))
         self._high_contrast = bool(high_contrast)
         self._reduced_motion = bool(reduced_motion)
@@ -3790,7 +3775,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.tray_controller.inbox_requested.connect(self.open_inbox_from_tray)
         self.tray_controller.refresh_requested.connect(self._request_refresh)
         self.tray_controller.network_pause_changed.connect(self._handle_tray_pause)
-        self.tray_controller.offline_mode_changed.connect(self._handle_tray_offline)
         self.tray_controller.quit_requested.connect(self.request_quit)
 
         self.apply_accessibility_preferences(
@@ -3852,6 +3836,8 @@ class PersonalHubMainWindow(QMainWindow):
             self.attention_notification_open_button,
             self.attention_notification_dismiss_button,
         ) = self._build_attention_notification_panel()
+        self.persistent_clock_display = self._build_persistent_clock_display(content)
+        content_layout.addWidget(self.persistent_clock_display)
         self.attention_notice_panel = self.attention_notification_panel
         self.attention_notice_title = self.attention_notification_title
         self.attention_notice_body = self.attention_notification_body
@@ -3877,9 +3863,74 @@ class PersonalHubMainWindow(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
 
         self.privacy_overlay = self._build_privacy_overlay(self.pages)
+        self._update_chrome_icons()
         self._set_responsive_mode(self.width() < self.RESPONSIVE_BREAKPOINT)
         self._set_active_destination(TODAY_DESTINATION, emit=False)
         self._focus_first_available_control()
+
+    def _build_persistent_clock_display(self, parent: QWidget) -> QFrame:
+        display = QFrame(parent)
+        display.setObjectName("persistentClockDisplay")
+        display.setAccessibleName("Current local date and time")
+        layout = QHBoxLayout(display)
+        layout.setContentsMargins(20, 9, 20, 9)
+        layout.setSpacing(12)
+
+        date_group = QVBoxLayout()
+        date_group.setContentsMargins(0, 0, 0, 0)
+        date_group.setSpacing(1)
+        self.clock_weekday_label = QLabel()
+        self.clock_weekday_label.setObjectName("persistentClockWeekday")
+        self.clock_weekday_label.setAccessibleName("Current local weekday")
+        self.clock_weekday_label.setTextFormat(Qt.TextFormat.PlainText)
+        date_group.addWidget(self.clock_weekday_label)
+        self.clock_date_label = QLabel()
+        self.clock_date_label.setObjectName("persistentClockDate")
+        self.clock_date_label.setAccessibleName("Current local date")
+        self.clock_date_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.clock_date_label.setWordWrap(True)
+        date_group.addWidget(self.clock_date_label)
+        layout.addLayout(date_group, 1)
+
+        time_group = QVBoxLayout()
+        time_group.setContentsMargins(0, 0, 0, 0)
+        time_group.setSpacing(0)
+        self.clock_time_label = QLabel()
+        self.clock_time_label.setObjectName("persistentClockTime")
+        self.clock_time_label.setAccessibleName("Current local time")
+        self.clock_time_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.clock_time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        time_group.addWidget(self.clock_time_label)
+        self.clock_timezone_label = QLabel()
+        self.clock_timezone_label.setObjectName("persistentClockTimezone")
+        self.clock_timezone_label.setAccessibleName("Current local time zone")
+        self.clock_timezone_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.clock_timezone_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.clock_timezone_label.setWordWrap(True)
+        time_group.addWidget(self.clock_timezone_label)
+        layout.addLayout(time_group)
+
+        self._update_persistent_clock()
+        self._persistent_clock_timer = QTimer(self)
+        self._persistent_clock_timer.setInterval(30_000)
+        self._persistent_clock_timer.timeout.connect(self._update_persistent_clock)
+        self._persistent_clock_timer.start()
+        return display
+
+    def _update_persistent_clock(self) -> None:
+        local_now = datetime.now().astimezone()
+        self.clock_weekday_label.setText(local_now.strftime("%A"))
+        self.clock_date_label.setText(
+            f"{local_now.strftime('%B')} {local_now.day}, {local_now.year}"
+        )
+        self.clock_time_label.setText(local_now.strftime("%I:%M %p").lstrip("0"))
+        timezone_offset = local_now.strftime("%z")
+        if len(timezone_offset) == 5:
+            timezone_display = f"Local time · UTC{timezone_offset[:3]}:{timezone_offset[3:]}"
+        else:
+            timezone_name = local_now.tzname()
+            timezone_display = f"Local time · {timezone_name}" if timezone_name else "Local time"
+        self.clock_timezone_label.setText(timezone_display)
 
     def _build_navigation(self) -> QFrame:
         navigation = QFrame()
@@ -3901,7 +3952,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.brand_title = brand
         layout.addWidget(brand)
 
-        layout.addSpacing(20)
+        layout.addSpacing(8)
         navigation_label = QLabel("NAVIGATION")
         navigation_label.setObjectName("navigationLabel")
         navigation_label.setAccessibleName("Navigation destinations")
@@ -4008,6 +4059,8 @@ class PersonalHubMainWindow(QMainWindow):
         button.setAutoDefault(False)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setMinimumHeight(38)
+        button.setIcon(hub_icon(route_id))
+        button.setIconSize(QSize(17, 17))
         button.clicked.connect(
             lambda _checked=False, value=route_id: self._set_active_destination(value)
         )
@@ -4203,6 +4256,7 @@ class PersonalHubMainWindow(QMainWindow):
             )
             self._set_active_destination(fallback, emit=False)
         self._update_workspace_page_title(self._active_destination)
+        self._update_chrome_icons()
         if hasattr(self, "status_label"):
             self._update_status()
 
@@ -4477,12 +4531,14 @@ class PersonalHubMainWindow(QMainWindow):
         title.setWordWrap(True)
         header_layout.addWidget(title)
 
-        subtitle = QLabel(description)
+        header.setAccessibleDescription(description)
+        subtitle = QLabel("")
         subtitle.setObjectName("pageSubtitle")
         subtitle.setAccessibleName(f"{destination} page description")
         subtitle.setTextFormat(Qt.TextFormat.PlainText)
         subtitle.setWordWrap(True)
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        subtitle.hide()
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
         return eyebrow, title, subtitle
@@ -4494,10 +4550,9 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_eyebrow, self.today_title, self.today_subtitle = self._add_page_header(
             layout,
             TODAY_DESTINATION,
-            "See what needs attention. Plan in Tasks and Calendar; review alerts in Inbox.",
+            "Tasks, calendar, alerts, and activity.",
         )
         self._workspace_page_title_labels[HOME_DESTINATION] = self.today_title
-        layout.addSpacing(10)
 
         controls = QWidget()
         controls.setObjectName("todayControls")
@@ -4505,24 +4560,24 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_controls_layout = controls_layout
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(10)
-        self.today_date_label = QLabel(date.today().isoformat())
+        self.today_date_label = QLabel(date.today().isoformat(), controls)
         self.today_date_label.setObjectName("todayDateLabel")
         self.today_date_label.setAccessibleName("Today local date")
         self.today_date_label.setTextFormat(Qt.TextFormat.PlainText)
         self.today_date_label.setWordWrap(True)
-        controls_layout.addWidget(self.today_date_label, 0, 0)
-        self.today_timezone_label = QLabel("")
+        self.today_date_label.hide()
+        self.today_timezone_label = QLabel("", controls)
         self.today_timezone_label.setObjectName("todayTimezoneLabel")
         self.today_timezone_label.setAccessibleName("Today timezone")
         self.today_timezone_label.setTextFormat(Qt.TextFormat.PlainText)
         self.today_timezone_label.setWordWrap(True)
-        controls_layout.addWidget(self.today_timezone_label, 0, 1)
-        self.today_last_refresh_label = QLabel("Not refreshed yet")
+        self.today_timezone_label.hide()
+        self.today_last_refresh_label = QLabel("")
         self.today_last_refresh_label.setObjectName("todayRefreshStatus")
-        self.today_last_refresh_label.setAccessibleName("Today refresh status")
+        self.today_last_refresh_label.setAccessibleName("Local overview updated time")
         self.today_last_refresh_label.setTextFormat(Qt.TextFormat.PlainText)
         self.today_last_refresh_label.setWordWrap(True)
-        controls_layout.addWidget(self.today_last_refresh_label, 0, 2)
+        controls_layout.addWidget(self.today_last_refresh_label, 0, 0)
         self.today_refresh_button = QPushButton("Refresh")
         self.today_refresh_button.setObjectName("todayRefreshButton")
         self.today_refresh_button.setAccessibleName("Refresh Home")
@@ -4531,27 +4586,35 @@ class PersonalHubMainWindow(QMainWindow):
         )
         self.today_refresh_button.setAutoDefault(False)
         self.today_refresh_button.clicked.connect(self._request_refresh)
-        controls_layout.addWidget(self.today_refresh_button, 0, 3)
-        self.today_appearance_button = QPushButton("Appearance")
+        self.today_appearance_button = QPushButton("Appearance", controls)
         self.today_appearance_button.setAccessibleName("Customize Hub appearance")
         self.today_appearance_button.clicked.connect(lambda: self.show_destination("Settings"))
-        controls_layout.addWidget(self.today_appearance_button, 0, 4)
-        layout.addWidget(controls)
+        self.today_appearance_button.hide()
 
-        actions = QHBoxLayout()
+        actions = QGridLayout()
+        self.home_actions_layout = actions
         self.home_add_task_button = QPushButton("Add a task")
         self.home_add_task_button.setAccessibleName("Go to Tasks to add a task")
+        self.home_add_task_button.setProperty("hubAccent", True)
         self.home_add_task_button.clicked.connect(self._start_task_from_home)
-        actions.addWidget(self.home_add_task_button)
+        actions.addWidget(self.home_add_task_button, 0, 0)
         self.home_log_progress_button = QPushButton("Log progress")
         self.home_log_progress_button.setAccessibleName("Open Logging to record progress")
         self.home_log_progress_button.clicked.connect(self._start_progress_from_home)
-        actions.addWidget(self.home_log_progress_button)
-        actions.addStretch(1)
+        actions.addWidget(self.home_log_progress_button, 0, 1)
+        actions.setColumnStretch(2, 1)
+        actions.addWidget(self.today_refresh_button, 0, 3)
         layout.addLayout(actions)
+        layout.addWidget(controls)
+
+        self.home_summary = HomeSummary()
+        layout.addWidget(self.home_summary)
 
         self.today_sections_scroll = page
         self.dashboard = DashboardBoard()
+        self.dashboard.appearance_requested.connect(lambda: self.show_destination("Settings"))
+        self.dashboard.layout().removeWidget(self.dashboard.toolbar)
+        actions.addWidget(self.dashboard.toolbar, 0, 4)
         self.today_sections_container = self.dashboard
         self.today_sections_layout = self.dashboard.layout()
         layout.addWidget(self.today_sections_container, 1)
@@ -4575,14 +4638,14 @@ class PersonalHubMainWindow(QMainWindow):
         summary = section.body
         if section.items:
             summary = f"{len(section.items)} item{'s' if len(section.items) != 1 else ''}"
-            if self._offline_mode and section.section_id in {
+            if self._network_refresh_paused and section.section_id in {
                 "schedule",
                 "inbox",
                 "watchlist",
                 "watch_alerts",
                 "news",
             }:
-                summary += " · Offline · showing saved data"
+                summary += " · Refresh paused · showing saved data"
         return summary
 
     def _update_today_section_widget(
@@ -4635,7 +4698,7 @@ class PersonalHubMainWindow(QMainWindow):
         card.setAccessibleName(f"Today section: {section.title}")
         card.setFrameShape(QFrame.Shape.StyledPanel)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(16, 13, 16, 13)
+        card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(5)
 
         title = QLabel(section.title)
@@ -4697,7 +4760,7 @@ class PersonalHubMainWindow(QMainWindow):
             if due is not None:
                 details.append(due.date().isoformat())
         if details:
-            rendered += " — " + " · ".join(details)
+            rendered += "\n" + " · ".join(details)
         return self._display_text(rendered, sensitive=view.sensitive, fallback="Today item")
 
     def _render_today_sections(self) -> None:
@@ -4749,8 +4812,13 @@ class PersonalHubMainWindow(QMainWindow):
             )
             for placement in (*schedule.timed, *schedule.all_day):
                 counts[placement.day] = counts.get(placement.day, 0) + 1
-        freshness = "offline" if self._offline_mode else self._calendar_view.freshness
-        self.mini_calendar.set_activity(counts, status=_CALENDAR_FRESHNESS_MESSAGES[freshness])
+        freshness = self._calendar_view.freshness
+        status = (
+            "Paused · showing saved data"
+            if self._network_refresh_paused
+            else _CALENDAR_FRESHNESS_MESSAGES[freshness]
+        )
+        self.mini_calendar.set_activity(counts, status=status)
         self.dashboard.refresh_geometry()
 
     def _browse_mini_calendar_month(self, year: int, month: int) -> None:
@@ -6589,10 +6657,14 @@ class PersonalHubMainWindow(QMainWindow):
         self._today_view = today
         if "mini_calendar" not in self._today_sections:
             self._today_sections = {
-                "mini_calendar": _DEFAULT_TODAY_SECTIONS[0],
+                "mini_calendar": next(
+                    section
+                    for section in _DEFAULT_TODAY_SECTIONS
+                    if section.section_id == "mini_calendar"
+                ),
                 **self._today_sections,
             }
-            self._today_section_order = ("mini_calendar", *self._today_section_order)
+            self._today_section_order = (*self._today_section_order, "mini_calendar")
         if today.local_date:
             self.today_date_label.setText(today.local_date)
         else:
@@ -6600,13 +6672,20 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_timezone_label.setText(f"· {today.timezone}" if today.timezone else "")
         if today.generated_at is not None:
             generated = _coerce_datetime(today.generated_at)
+            display_timezone = _calendar_display_timezone(today.timezone)
             self.today_last_refresh_label.setText(
-                generated.isoformat(sep=" ", timespec="minutes")
+                "Overview updated "
+                + generated.astimezone(
+                    None if display_timezone == "local" else ZoneInfo(display_timezone)
+                )
+                .strftime("%I:%M %p")
+                .lstrip("0")
+                + f" · {display_timezone if display_timezone != 'local' else 'Local time'}"
                 if generated is not None
                 else _safe_text(today.generated_at, limit=80)
             )
         else:
-            self.today_last_refresh_label.setText("Not refreshed yet")
+            self.today_last_refresh_label.clear()
         self._render_today_sections()
         self.today_changed.emit(today)
 
@@ -7562,18 +7641,34 @@ class PersonalHubMainWindow(QMainWindow):
         return page
 
     def _build_web_watch_panel(self, layout: QVBoxLayout) -> None:
-        panel = QFrame()
+        panel = QFrame(layout.parentWidget())
         panel.setObjectName("webWatchPanel")
         panel.setAccessibleName("Deal, restock, and webpage watches")
         grid = QVBoxLayout(panel)
+        panel_layout = grid
         grid.setContentsMargins(12, 10, 12, 10)
         grid.setSpacing(8)
         title = QLabel("Web watches")
         title.setObjectName("webWatchTitle")
         title.setTextFormat(Qt.TextFormat.PlainText)
-        grid.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        self.watch_add_button = QPushButton("Add watch")
+        self.watch_add_button.setProperty("hubAccent", True)
+        self.watch_add_button.setCheckable(True)
+        self.watch_add_button.setAccessibleName("Add a webpage watch")
+        self.watch_add_button.toggled.connect(self._show_watch_editor)
+        heading.addWidget(self.watch_add_button)
+        grid.addLayout(heading)
+        self.watch_editor_panel = QWidget(panel)
+        self.watch_editor_panel.hide()
+        self.watch_editor_panel.setObjectName("watchEditorPanel")
+        self.watch_editor_panel.setAccessibleName("Watch editor")
+        grid = QVBoxLayout(self.watch_editor_panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(10)
         help_text = QLabel(
-            "Track a public page, price, or restock. The first successful check establishes a baseline; later changes can create Inbox alerts."
+            "The first check establishes a baseline. Later matches create Inbox alerts."
         )
         help_text.setWordWrap(True)
         help_text.setTextFormat(Qt.TextFormat.PlainText)
@@ -7702,11 +7797,15 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_editor_status.setTextFormat(Qt.TextFormat.PlainText)
         self.watch_editor_status.setWordWrap(True)
         grid.addWidget(self.watch_editor_status)
+        grid = panel_layout
         self.watch_list = QListWidget()
         self.watch_list.setObjectName("watchList")
         self.watch_list.setAccessibleName("Configured webpage watches")
         self.watch_list.setMinimumHeight(120)
         self.watch_list.itemDoubleClicked.connect(
+            lambda item: self.edit_watch(item.data(Qt.ItemDataRole.UserRole))
+        )
+        self.watch_list.itemActivated.connect(
             lambda item: self.edit_watch(item.data(Qt.ItemDataRole.UserRole))
         )
         grid.addWidget(self.watch_list)
@@ -7715,8 +7814,16 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_alerts_label.setTextFormat(Qt.TextFormat.PlainText)
         self.watch_alerts_label.setWordWrap(True)
         grid.addWidget(self.watch_alerts_label)
+        grid.addWidget(self.watch_editor_panel)
+        self.watch_editor_panel.hide()
         layout.addWidget(panel)
         self.web_watch_panel = panel
+
+    def _show_watch_editor(self, visible: bool) -> None:
+        visible = visible and not (self._privacy_masked or self._locked)
+        self.watch_editor_panel.setVisible(visible)
+        if visible:
+            self.watch_name_input.setFocus()
 
     def _update_watch_field_visibility(self, *_args: object) -> None:
         condition = self.watch_condition_combo.currentData()
@@ -7867,7 +7974,7 @@ class PersonalHubMainWindow(QMainWindow):
         else:
             payload["watch_id"] = self._watch_editor_id
             self.watch_update_requested.emit(payload)
-        self.watch_editor_status.setText("Watch request sent for durable validation.")
+        self.watch_editor_status.setText("Saving watch…")
 
     def request_create_watch(
         self, values: Mapping[str, object] | None = None
@@ -7898,6 +8005,8 @@ class PersonalHubMainWindow(QMainWindow):
         return identifier
 
     def edit_watch(self, watch_id: object) -> WebWatchView | None:
+        if self._privacy_masked or self._locked:
+            return None
         identifier = _safe_text(watch_id, limit=_MAX_ID_LENGTH)
         watch = next((item for item in self._web_watches if item.watch_id == identifier), None)
         if watch is None:
@@ -7922,9 +8031,11 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_http_checkbox.setChecked(watch.allow_http)
         self.watch_remove_button.setEnabled(True)
         self.watch_save_button.setText("Save watch")
+        self.watch_add_button.setChecked(True)
         return watch
 
     def cancel_watch_edit(self) -> None:
+        self.watch_add_button.setChecked(False)
         self._watch_editor_id = None
         self.watch_name_input.clear()
         self.watch_url_input.clear()
@@ -7959,17 +8070,23 @@ class PersonalHubMainWindow(QMainWindow):
         self._web_watches_view = view
         self._web_watches = view.watches[:1_000]
         self._watch_alerts = view.alerts[:1_000]
+        self.watch_add_button.setEnabled(not (self._privacy_masked or self._locked))
+        if self._privacy_masked or self._locked:
+            self.watch_add_button.setChecked(False)
         self.watch_list.clear()
         for watch in self._web_watches:
             name = self._display_text(watch.name, sensitive=watch.sensitive, fallback="Watch")
             value = self._display_text(watch.last_value, sensitive=watch.sensitive)
-            rendered = f"{name} · {watch.kind.replace('_', ' ')} · {watch.status}"
+            source = self._display_text(watch.source_url, sensitive=watch.sensitive)
+            rendered = f"{name}\n{source} · {watch.status.replace('_', ' ')}"
             if value:
                 rendered += f" — {value}"
             item = QListWidgetItem(rendered)
             item.setData(Qt.ItemDataRole.UserRole, watch.watch_id)
             item.setToolTip(rendered)
             self.watch_list.addItem(item)
+        self.watch_list.setVisible(bool(self._web_watches))
+        self.watch_list.setMaximumHeight(max(120, min(320, len(self._web_watches) * 64 + 8)))
         if self._watch_alerts:
             latest = self._watch_alerts[0]
             self.watch_alerts_label.setText(
@@ -8428,9 +8545,7 @@ class PersonalHubMainWindow(QMainWindow):
             else:
                 message = _NEWS_FRESHNESS_MESSAGES[self._news_view.freshness]
             self.news_entries_status_label.setText(message)
-            self.news_filter_status_label.setText(
-                "Filters apply locally to the bounded entries supplied by the feed service."
-            )
+            self.news_filter_status_label.clear()
             return
         unread = sum(not entry.read for entry in visible)
         self.news_entries_status_label.setText(
@@ -8805,7 +8920,7 @@ class PersonalHubMainWindow(QMainWindow):
         actions.addWidget(open_button)
         dismiss_button = QPushButton("Dismiss", panel)
         dismiss_button.setObjectName("attentionNotificationDismissButton")
-        dismiss_button.setAccessibleName("Dismiss message notification")
+        dismiss_button.setAccessibleName("Dismiss attention notification")
         dismiss_button.setAutoDefault(False)
         dismiss_button.setEnabled(False)
         dismiss_button.hide()
@@ -9125,7 +9240,6 @@ class PersonalHubMainWindow(QMainWindow):
         settings_layout.setContentsMargins(20, 16, 20, 16)
         settings_layout.setSpacing(0)
         for key, label in (
-            ("offline_mode", "Offline mode"),
             ("privacy_masking", "Privacy masking"),
             ("close_to_tray", "Close to tray"),
             ("text_scale", "Text scale"),
@@ -9164,7 +9278,6 @@ class PersonalHubMainWindow(QMainWindow):
         editor_layout.setVerticalSpacing(8)
         self.settings_checkboxes: dict[str, QCheckBox] = {}
         checkbox_fields = (
-            ("offline_mode", "Offline mode"),
             ("privacy_masking", "Privacy masking"),
             ("close_to_tray", "Close to tray"),
             ("start_at_login", "Start at sign-in"),
@@ -9292,7 +9405,7 @@ class PersonalHubMainWindow(QMainWindow):
         for label, value in (
             ("This device only", "local"),
             ("Provider collector", "collector"),
-            ("Offline consumer", "consumer"),
+            ("Snapshot consumer", "consumer"),
         ):
             self.sync_role_combo.addItem(label, value)
         self.sync_role_combo.currentIndexChanged.connect(self._request_sync_role_change)
@@ -9409,7 +9522,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.logging_workspace.set_compact(compact)
         self.places_page.set_compact(compact)
         self.brand_title.setText("Hub" if compact else APPLICATION_NAME)
-        self.navigation_caption.setVisible(not compact)
+        self.navigation_caption.hide()
         self.workspace_navigation_label.setVisible(not compact)
         self.management_navigation_label.setVisible(not compact)
         self.management_navigation_separator.setVisible(not compact)
@@ -9444,26 +9557,24 @@ class PersonalHubMainWindow(QMainWindow):
         )
         for widget, (row, column) in zip(calendar_controls, positions, strict=True):
             self.calendar_toolbar_layout.addWidget(widget, row, column)
-        if hasattr(self, "today_controls_layout"):
+        if hasattr(self, "home_actions_layout"):
             controls = (
-                self.today_date_label,
-                self.today_timezone_label,
-                self.today_last_refresh_label,
+                self.home_add_task_button,
+                self.home_log_progress_button,
                 self.today_refresh_button,
-                self.today_appearance_button,
+                self.dashboard.toolbar,
             )
             for widget in controls:
-                self.today_controls_layout.removeWidget(widget)
+                self.home_actions_layout.removeWidget(widget)
             positions = (
-                ((0, 0), (1, 0), (2, 0), (0, 1), (1, 1))
-                if compact
-                else tuple((0, index) for index in range(len(controls)))
+                ((0, 0), (0, 1), (1, 0), (1, 1)) if compact else ((0, 0), (0, 1), (0, 3), (0, 4))
             )
             for widget, (row, column) in zip(controls, positions, strict=True):
-                self.today_controls_layout.addWidget(widget, row, column)
+                self.home_actions_layout.addWidget(widget, row, column)
             for column in range(5):
-                self.today_controls_layout.setColumnStretch(column, 0)
-            self.today_controls_layout.setColumnStretch(0 if compact else 2, 1)
+                self.home_actions_layout.setColumnStretch(column, 0)
+            self.home_actions_layout.setColumnStretch(0 if compact else 2, 1)
+            self.home_summary.set_compact(compact)
         if compact:
             self.navigation.setMinimumWidth(164)
             self.navigation.setMaximumWidth(210)
@@ -9612,9 +9723,7 @@ class PersonalHubMainWindow(QMainWindow):
         entry = self._workspace_navigation_entries.get(self._active_destination)
         destination_label = entry.label if entry is not None else self._active_destination
         modes: list[str] = [destination_label]
-        if self._offline_mode:
-            modes.append("offline")
-        elif self._network_refresh_paused:
+        if self._network_refresh_paused:
             modes.append("refresh paused")
         if self._locked:
             modes.append("locked")
@@ -9649,19 +9758,16 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _request_refresh(self) -> None:
         self.refresh_requested.emit()
-        self.status_label.setText("Refresh requested · source work remains outside the UI thread")
+        self.status_label.setText("Refresh requested.")
 
     def _handle_tray_pause(self, paused: bool) -> None:
         self._set_network_refresh_paused(paused, sync_tray=False)
-
-    def _handle_tray_offline(self, enabled: bool) -> None:
-        self._set_offline_mode(enabled, sync_tray=False)
 
     def _set_network_refresh_paused(self, paused: bool, *, sync_tray: bool = True) -> None:
         paused = bool(paused)
         changed = paused != self._network_refresh_paused
         self._network_refresh_paused = paused
-        self.places_page.set_state(offline=paused or self._offline_mode)
+        self.places_page.set_state(network_paused=paused)
         if hasattr(self, "settings_values"):
             self.settings_values["network_refresh_paused"] = "Paused" if paused else "Active"
             if "network_refresh_paused" in self.settings_value_labels:
@@ -9671,6 +9777,7 @@ class PersonalHubMainWindow(QMainWindow):
         if sync_tray:
             self.tray_controller.set_network_refresh_paused(paused, emit=False)
         self._source_selection_changed()
+        self._render_mini_calendar()
         self._update_status()
         if changed:
             self.network_pause_changed.emit(paused)
@@ -9683,34 +9790,6 @@ class PersonalHubMainWindow(QMainWindow):
     @property
     def network_refresh_paused(self) -> bool:
         return self._network_refresh_paused
-
-    def _set_offline_mode(
-        self, enabled: bool, *, sync_tray: bool = True, emit: bool = True
-    ) -> None:
-        enabled = bool(enabled)
-        changed = enabled != self._offline_mode
-        self._offline_mode = enabled
-        self.places_page.set_state(offline=enabled or self._network_refresh_paused)
-        if hasattr(self, "settings_values"):
-            self.settings_values["offline_mode"] = "On" if enabled else "Off"
-            if "offline_mode" in self.settings_value_labels:
-                self.settings_value_labels["offline_mode"].setText(
-                    self.settings_values["offline_mode"]
-                )
-        if sync_tray:
-            self.tray_controller.set_offline_mode(enabled, emit=False)
-        self._source_selection_changed()
-        self._render_mini_calendar()
-        self._update_status()
-        if changed and emit:
-            self.offline_mode_changed.emit(enabled)
-
-    def set_offline_mode(self, enabled: bool, *, emit: bool = True) -> None:
-        self._set_offline_mode(enabled, emit=emit)
-
-    @property
-    def offline_mode(self) -> bool:
-        return self._offline_mode
 
     def request_quit(self) -> None:
         if self._quitting:
@@ -9842,10 +9921,13 @@ class PersonalHubMainWindow(QMainWindow):
 
     def _dismiss_attention_notification(self) -> None:
         notice = self._attention_notification
-        if notice is None or self._locked:
+        if self._locked:
             return
-        self.attention_notification_dismissed.emit(notice)
-        self.clear_attention_notification()
+        if notice is not None:
+            self.attention_notification_dismissed.emit(notice)
+            self._attention_notification = None
+        self._source_failures.clear()
+        self._render_notification_bar()
 
     @property
     def inbox_items(self) -> tuple[InboxItemView, ...]:
@@ -10185,7 +10267,8 @@ class PersonalHubMainWindow(QMainWindow):
                 "ready": "Ready. Refresh checks for new data.",
                 "empty": "Connected, with no items returned. Review the selected calendars, feeds, or message query.",
                 "stale": "Stale: saved data may be out of date. Refresh to try again.",
-                "offline": "Offline: saved data remains available. Turn off Offline mode in Settings to refresh.",
+                "offline": "Offline: saved data remains available. Check the network connection before refreshing.",
+                "paused": "Network refresh is paused. Resume it from the tray menu when you want updates.",
                 "permission_required": "Permission required. Select Reconnect to review access.",
                 "disconnected": "Disconnected. Select Connect / Configure to set up a platform, or Reconnect for an existing source.",
                 "error": "Refresh failed. Try Refresh; if it persists, review the connection with Reconnect.",
@@ -10195,9 +10278,7 @@ class PersonalHubMainWindow(QMainWindow):
                 guidance = "Disconnected. Select Reconnect to restore this source's connection."
             if not source.enabled:
                 guidance = "Disabled. Select Enable to allow this source to refresh again."
-            if self._offline_mode:
-                guidance = "Offline mode is on. Saved data remains available; turn off Offline mode in Settings before refreshing."
-            elif self._network_refresh_paused:
+            if self._network_refresh_paused:
                 guidance = (
                     "Network refresh is paused. Resume it from the tray menu when you want updates."
                 )
@@ -10280,7 +10361,7 @@ class PersonalHubMainWindow(QMainWindow):
         role_labels = {
             "local": "This device only",
             "collector": "Provider collector",
-            "consumer": "Offline consumer",
+            "consumer": "Snapshot consumer",
         }
         role_index = self.sync_role_combo.findData(view.relay_role)
         if role_index >= 0 and role_index != self.sync_role_combo.currentIndex():
@@ -10401,7 +10482,6 @@ class PersonalHubMainWindow(QMainWindow):
             {**self._appearance, "ui_reduced_motion": view.reduced_motion}
         )
         values = {
-            "offline_mode": "On" if view.offline_mode else "Off",
             "privacy_masking": "On" if view.privacy_masking else "Off",
             "close_to_tray": "On" if view.close_to_tray else "Off",
             "text_scale": f"{max(1.0, min(view.text_scale, 1.75)):.2g}×",
@@ -10422,7 +10502,6 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_save_status_label.hide()
         if hasattr(self, "settings_checkboxes"):
             checkbox_values = {
-                "offline_mode": view.offline_mode,
                 "privacy_masking": view.privacy_masking,
                 "close_to_tray": view.close_to_tray,
                 "start_at_login": view.start_at_login,
@@ -10469,7 +10548,6 @@ class PersonalHubMainWindow(QMainWindow):
         if apply_preferences:
             self.set_close_to_tray(view.close_to_tray)
             self._set_network_refresh_paused(view.network_refresh_paused)
-            self._set_offline_mode(view.offline_mode)
             self.set_privacy_masked(view.privacy_masking)
             self.apply_accessibility_preferences(
                 text_scale=view.text_scale,
@@ -10575,9 +10653,9 @@ class PersonalHubMainWindow(QMainWindow):
             self.attention_notification_body.setText("\n".join(source_lines))
             self.attention_notification_open_button.setText("Review sources")
             self.attention_notification_open_button.setEnabled(not self._locked)
-            self.attention_notification_dismiss_button.setEnabled(False)
+            self.attention_notification_dismiss_button.setEnabled(not self._locked)
             self.attention_notification_open_button.show()
-            self.attention_notification_dismiss_button.hide()
+            self.attention_notification_dismiss_button.show()
 
         self.attention_notification_panel.show()
 
@@ -10643,6 +10721,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.logging_workspace.set_private(bool(masked) or self._locked)
         self.places_page.set_state(private=bool(masked) or self._locked)
         self._privacy_masked = bool(masked)
+        self.home_summary.set_masked(self._privacy_masked or self._locked)
         if hasattr(self, "settings_values"):
             self.settings_values["privacy_masking"] = "On" if self._privacy_masked else "Off"
             if "privacy_masking" in self.settings_value_labels:
@@ -10671,6 +10750,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.logging_workspace.set_private(bool(locked) or self._privacy_masked)
         self.places_page.set_state(private=bool(locked) or self._privacy_masked)
         self._locked = bool(locked)
+        self.home_summary.set_masked(self._privacy_masked or self._locked)
         self.pages.setEnabled(not self._locked)
         if self._locked:
             self.privacy_overlay.setGeometry(self.pages.rect())
@@ -10779,6 +10859,7 @@ class PersonalHubMainWindow(QMainWindow):
             application.setStyleSheet(rendered)
         if self.styleSheet() != rendered:
             self.setStyleSheet(rendered)
+        self._update_chrome_icons()
         self._refresh_mini_calendar_geometry()
         # Qt polishes the native calendar's internal table on the next event turn.
         # Measure again after its font inherits a new text scale.
@@ -10792,6 +10873,42 @@ class PersonalHubMainWindow(QMainWindow):
             transition.set_reduced_motion(self._reduced_motion)
 
     set_accessibility_preferences = apply_accessibility_preferences
+
+    def _update_chrome_icons(self) -> None:
+        colors = resolved_theme_colors(
+            theme=self._appearance["ui_theme"],
+            accent_color=self._appearance["ui_accent_color"],
+            background_color=self._appearance["ui_background_color"],
+            surface_color=self._appearance["ui_surface_color"],
+        )
+        foreground = "#ffffff" if self._high_contrast else contrast_text(colors["surface_color"])
+        selected = "#ffffff" if self._high_contrast else contrast_text(colors["accent_color"])
+        for route_id, button in self.navigation_buttons.items():
+            button.setIcon(hub_icon(route_id, foreground, selected))
+        for attribute, icon in (
+            ("home_add_task_button", "add"),
+            ("home_log_progress_button", "Activity"),
+            ("today_refresh_button", "refresh"),
+            ("task_quick_add_button", "add"),
+            ("calendar_add_item_button", "add"),
+        ):
+            if button := getattr(self, attribute, None):
+                primary = attribute in {
+                    "home_add_task_button",
+                    "task_quick_add_button",
+                    "calendar_add_item_button",
+                }
+                button.setProperty("hubAccent", primary)
+                button.setIcon(
+                    hub_icon(icon, contrast_text(colors["accent_color"]) if primary else foreground)
+                )
+                button.setIconSize(QSize(16, 16))
+        for attribute in ("task_save_button", "watch_save_button", "settings_save_button"):
+            if button := getattr(self, attribute, None):
+                button.setProperty("hubAccent", True)
+        if hasattr(self, "logging_workspace"):
+            self.logging_workspace.add_button.setProperty("hubAccent", True)
+            self.logging_workspace.new_reflection_button.setProperty("hubAccent", True)
 
     def _refresh_mini_calendar_geometry(self) -> None:
         self.mini_calendar.refresh_style()

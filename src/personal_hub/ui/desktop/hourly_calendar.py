@@ -112,7 +112,6 @@ class HourlyCalendarGrid(QWidget):
         painter = QPainter(self)
         palette = self.palette()
         base = palette.color(QPalette.ColorRole.Base)
-        alternate = palette.color(QPalette.ColorRole.AlternateBase)
         text = palette.color(QPalette.ColorRole.Text)
         grid = palette.color(QPalette.ColorRole.Mid)
         grid.setAlpha(100)
@@ -121,10 +120,10 @@ class HourlyCalendarGrid(QWidget):
             painter.end()
             return
         width = self._day_width * self._layout.day_count
-        painter.fillRect(QRect(self.TIME_COLUMN_WIDTH, 0, width, self.HEADER_HEIGHT), alternate)
+        painter.fillRect(QRect(self.TIME_COLUMN_WIDTH, 0, width, self.HEADER_HEIGHT), base)
         painter.fillRect(
             QRect(self.TIME_COLUMN_WIDTH, self.HEADER_HEIGHT, width, self._all_day_height),
-            alternate,
+            base,
         )
         painter.setPen(grid)
         painter.drawLine(self.TIME_COLUMN_WIDTH, 0, self.TIME_COLUMN_WIDTH, self.height())

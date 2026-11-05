@@ -351,17 +351,17 @@ async def test_google_bounds_calendar_list_and_selection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_offline_gate_blocks_token_and_transport_calls() -> None:
+async def test_network_pause_blocks_token_and_transport_calls() -> None:
     token = FakeTokenProvider()
     transport = FakeTransport(lambda _url, _params: {"items": []})
     adapter = GoogleCalendarAdapter(token, transport)
-    service = CalendarService((adapter,), offline=True)
+    service = CalendarService((adapter,), network_paused=True)
     result = await service.refresh(adapter.source_id, _query("primary"))
-    assert result.state == "offline"
+    assert result.state == "paused"
     assert token.calls == []
     assert transport.calls == []
     status = await service.status(adapter.source_id)
-    assert status.state == "offline"
+    assert status.state == "paused"
     assert token.calls == []
     assert transport.calls == []
 

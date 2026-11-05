@@ -1,4 +1,4 @@
-"""Hub-owned source contracts, registry, and offline-aware service."""
+"""Hub-owned source contracts, registry, and pause-aware service."""
 
 from personal_hub.sources.contracts import (
     HubSource,
@@ -6,6 +6,7 @@ from personal_hub.sources.contracts import (
     SourceDisconnectedError,
     SourceError,
     SourceHealth,
+    SourcePausedError,
     SourcePermissionRequiredError,
     SourceProtocol,
     SourceResult,
@@ -33,6 +34,7 @@ __all__ = [
     "SourceDisconnectedError",
     "SourceError",
     "SourceHealth",
+    "SourcePausedError",
     "SourceManager",
     "SourcePermissionRequiredError",
     "SourceProtocol",

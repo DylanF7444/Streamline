@@ -39,11 +39,11 @@ hyperlink auditing are blocked in the dedicated off-the-record browser profile. 
 Content Security Policy permits only bundled scripts/styles and required blob workers/images.
 MapLibre's worker protocol also uses the bounded Python transport.
 
-The map requests only resources needed by interactive browsing. Offline mode, consumer mode,
-network pause, privacy masking/lock, leaving Places, hiding the window and shutdown stop the
-renderer and prevent further requests. Local saved records remain usable offline. There is
-no background location tracking, geocoder, route service or offline-area download. Provider
-failures and unsupported graphics retain the native controls and offer Reload map.
+The map requests only resources needed by interactive browsing. Network refresh pause, snapshot
+consumer mode, privacy masking/lock, leaving Places, hiding the window and shutdown stop the
+renderer and prevent further requests. Local saved records remain usable without connectivity.
+There is no background location tracking, geocoder, route service or offline-area download.
+Provider failures and unsupported graphics retain the native controls and offer Reload map.
 
 MapLibre is BSD-3-Clause with bundled dependency notices in `map_assets/LICENSE.txt`.
 Upstream assets were obtained from the pinned npm distribution:
@@ -71,9 +71,9 @@ This implementation does not use OpenStreetMap's community raster tile server.
 
 Deterministic core and Qt tests cover storage, migration from schema 14, edits, repeat visits,
 deletion, export, backup/restore/restart, hostile URLs, private DNS, oversize responses,
-offline-before-DNS/cache/transport, and cancellation. Native UI tests use a fake renderer to
-exercise lazy creation, leaving/returning, pause, offline, masking, lock, editor recovery and
-home-view persistence without provider access.
+pause-before-DNS/cache/transport, and cancellation. Native UI tests use a fake renderer to
+exercise lazy creation, leaving/returning, pause, offline connectivity, masking, lock, editor
+recovery and home-view persistence without provider access.
 
 Live development checks used a synthetic map view on the Windows Qt platform, with a hidden
 test widget and no installed Hub profile. A city-scale map rendered and reported loaded

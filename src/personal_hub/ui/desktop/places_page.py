@@ -174,7 +174,7 @@ class PlacesPage(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QScrollArea.Shape.NoFrame)
         self.private = False
-        self.offline = True
+        self.network_paused = True
         self.active = False
         self._visible = False
         self.configured = False
@@ -322,19 +322,19 @@ class PlacesPage(QScrollArea):
             and self.active
             and self._visible
             and not self.private
-            and not self.offline
+            and not self.network_paused
             and self._allowed()
         )
 
-    def set_state(self, *, active=None, offline=None, private=None):
+    def set_state(self, *, active=None, network_paused=None, private=None):
         if active is not None:
             self.active = active
-        if offline is not None:
-            self.offline = offline
+        if network_paused is not None:
+            self.network_paused = network_paused
         if private is not None:
             self.private = private
         self.content.setVisible(not self.private)
-        self.reload_button.setEnabled(not self.offline and not self.private)
+        self.reload_button.setEnabled(not self.network_paused and not self.private)
         if self.private:
             if self.dialog:
                 self.dialog.reject()
@@ -349,8 +349,10 @@ class PlacesPage(QScrollArea):
             self.latitude.setValue(0)
             self.longitude.setValue(0)
             self.status.setText("Places are hidden for privacy.")
-        elif self.offline:
-            self.status.setText("Offline — saved places and visit history remain available.")
+        elif self.network_paused:
+            self.status.setText(
+                "Network refresh is paused. Saved places and visit history remain available."
+            )
         if not self.online_allowed():
             self.stop_map()
         elif self.browser is None:

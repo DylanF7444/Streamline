@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from personal_hub.feeds.contracts import (
     FeedPolicyError,
@@ -22,7 +22,7 @@ from personal_hub.feeds.security import (
 from personal_hub.watches.contracts import (
     PageResponse,
     WatchDefinition,
-    WatchOfflineError,
+    WatchPausedError,
     WatchPolicyError,
     WatchUnavailableError,
 )
@@ -133,7 +133,8 @@ class PageFetcher:
         allow_http: bool = False,
         resolver: HostResolver | None = None,
         resolve_host: bool | None = None,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         if not 0 < timeout_seconds <= 60:
             raise ValueError("watch timeout must be between 0 and 60 seconds")
@@ -141,6 +142,8 @@ class PageFetcher:
             raise ValueError("watch response limit must be below 10 MB")
         if not 0 <= max_redirects <= 10:
             raise ValueError("watch redirect limit must be between 0 and 10")
+        if network_paused_getter is not None and not callable(network_paused_getter):
+            raise TypeError("network_paused_getter must be callable")
         self.transport = transport or UrllibFeedTransport()
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
@@ -148,16 +151,33 @@ class PageFetcher:
         self.allow_http = bool(allow_http)
         self.resolver = resolver
         self.resolve_host = (transport is None) if resolve_host is None else bool(resolve_host)
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
+        )
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def fetch(self, watch: WatchDefinition) -> PageResponse:
         if not isinstance(watch, WatchDefinition):
             raise TypeError("PageFetcher expects a WatchDefinition")
-        if self.offline:
-            raise WatchOfflineError("Watch refresh is paused by offline mode.")
+        if self.network_paused:
+            raise WatchPausedError("Watch refresh is paused.")
         allow_http = self.allow_http and watch.allow_http
         approved = set(normalize_origins(watch.approved_redirect_origins))
         approved.add(watch.reviewed_origin)
@@ -177,8 +197,8 @@ class PageFetcher:
                 "User-Agent": "PersonalHub/1.0 webpage-watch",
             }
             for redirect_count in range(self.max_redirects + 1):
-                if self.offline:
-                    raise WatchOfflineError("Watch refresh is paused by offline mode.")
+                if self.network_paused:
+                    raise WatchPausedError("Watch refresh is paused.")
                 raw = await _call_transport(
                     self.transport,
                     url,
@@ -209,7 +229,7 @@ class PageFetcher:
                     resolver=self.resolver,
                     resolve_host=self.resolve_host,
                 )
-        except WatchOfflineError:
+        except WatchPausedError:
             raise
         except WatchPolicyError:
             raise

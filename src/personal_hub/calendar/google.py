@@ -23,7 +23,7 @@ from personal_hub.calendar.contracts import (
     CalendarError,
     CalendarEvent,
     CalendarInvalidResponseError,
-    CalendarOfflineError,
+    CalendarPausedError,
     CalendarPermissionRequiredError,
     CalendarQuery,
     CalendarSnapshot,
@@ -109,8 +109,8 @@ class GoogleCalendarAdapter:
         max_pages: int = 20,
         max_response_bytes: int = _MAX_RESPONSE_BYTES,
         discover_calendars: bool = False,
-        offline: bool = False,
-        offline_getter: Callable[[], bool] | None = None,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         self.source_id = _bounded_identifier(source_id, "source_id")
         self.provider_id = _bounded_identifier(provider_id, "provider_id")
@@ -148,35 +148,36 @@ class GoogleCalendarAdapter:
         self.max_pages = max_pages
         self.max_response_bytes = max_response_bytes
         self.discover_calendars = discover_calendars
-        self._offline_getter = offline_getter
-        self._offline_value = bool(offline) if offline_getter is None else False
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self._last_state: CalendarState | None = None
         self._last_status_message: str | None = None
 
     @property
-    def offline(self) -> bool:
+    def network_paused(self) -> bool:
         return (
-            bool(self._offline_getter())
-            if self._offline_getter is not None
-            else self._offline_value
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
         )
 
-    @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
 
-    def set_offline(self, value: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(value)
-
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def status(self) -> CalendarStatus:
         """Return adapter health without acquiring a token or calling Google."""
 
-        if self.offline:
-            state: CalendarState = "offline"
-            message = "Calendar refresh is paused by offline mode."
+        if self.network_paused:
+            state: CalendarState = "paused"
+            message = "Calendar refresh is paused."
         else:
             state = self._last_state or "ready"
             message = self._last_status_message or _state_message(state)
@@ -196,7 +197,7 @@ class GoogleCalendarAdapter:
             raise TypeError("Google Calendar expects CalendarQuery")
         if len(query.calendar_ids) > self.max_calendars:
             raise ValueError("Google Calendar query selects too many calendars")
-        self._check_offline()
+        self._check_network_paused()
         try:
             token = await self._access_token()
             metadata: dict[str, _CalendarMetadata] = {}
@@ -257,7 +258,7 @@ class GoogleCalendarAdapter:
             # calendars, even when each fetched calendar is fully paginated.
             is_complete = bool(query.calendar_ids) or len(metadata) < self.max_calendars
             for calendar_id in selected:
-                self._check_offline()
+                self._check_network_paused()
                 calendar_events, calendar_complete = await self._list_calendar_events(
                     token,
                     query,
@@ -311,7 +312,7 @@ class GoogleCalendarAdapter:
         page_token: str | None = None
         seen_tokens: set[str] = set()
         for _page_number in range(self.max_pages):
-            self._check_offline()
+            self._check_network_paused()
             params: dict[str, str | int | bool] = {
                 "maxResults": min(_MAX_REQUEST_ITEMS, self.max_calendars - len(metadata)),
                 "showDeleted": False,
@@ -357,7 +358,7 @@ class GoogleCalendarAdapter:
         seen_tokens: set[str] = set()
         is_complete = True
         for _page_number in range(self.max_pages):
-            self._check_offline()
+            self._check_network_paused()
             remaining = min(query.limit, self.max_events) - len(values)
             if remaining <= 0:
                 is_complete = False
@@ -408,7 +409,7 @@ class GoogleCalendarAdapter:
         return tuple(values), is_complete
 
     async def _access_token(self) -> str:
-        self._check_offline()
+        self._check_network_paused()
         provider = self.token_provider
         callback = getattr(provider, "get_token", None)
         if callback is None and callable(provider):
@@ -428,7 +429,7 @@ class GoogleCalendarAdapter:
             or any(character in normalized for character in "\r\n")
         ):
             raise CalendarDisconnectedError("Google Calendar token is unavailable")
-        self._check_offline()
+        self._check_network_paused()
         return normalized
 
     async def _request_json(
@@ -437,7 +438,7 @@ class GoogleCalendarAdapter:
         url: str,
         params: Mapping[str, str | int | bool],
     ) -> Mapping[str, Any]:
-        self._check_offline()
+        self._check_network_paused()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         transport = self.transport
         callback = getattr(transport, "request", None)
@@ -467,20 +468,20 @@ class GoogleCalendarAdapter:
             raise
         except Exception as error:
             raise _map_google_error(error) from None
-        self._check_offline()
+        self._check_network_paused()
         return await _decode_response(raw_response, self.max_response_bytes)
 
-    def _check_offline(self) -> None:
-        if self.offline:
-            raise CalendarOfflineError("Google Calendar refresh is offline")
+    def _check_network_paused(self) -> None:
+        if self.network_paused:
+            raise CalendarPausedError("Google Calendar refresh is paused.")
 
     def _remember_error(self, error: CalendarError) -> None:
         if isinstance(error, CalendarPermissionRequiredError):
             self._last_state = "permission_required"
         elif isinstance(error, CalendarDisconnectedError):
             self._last_state = "disconnected"
-        elif isinstance(error, CalendarOfflineError):
-            self._last_state = "offline"
+        elif isinstance(error, CalendarPausedError):
+            self._last_state = "paused"
         else:
             self._last_state = "error"
         self._last_status_message = _state_message(self._last_state)
@@ -799,7 +800,7 @@ def _state_message(state: CalendarState) -> str:
         "ready": "Calendar is ready.",
         "empty": "Calendar is ready but has no events.",
         "stale": "Showing the last successful calendar snapshot.",
-        "offline": "Calendar refresh is paused by offline mode.",
+        "paused": "Calendar refresh is paused.",
         "permission_required": "Calendar permission is required.",
         "disconnected": "Calendar is disconnected.",
         "error": "Calendar refresh failed safely.",

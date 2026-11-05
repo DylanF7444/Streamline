@@ -322,7 +322,7 @@ class _DashboardCard(QFrame):
         self.setAccessibleName(f"{title} widget")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setContentsMargins(16, 14, 16, 14)
         outer.setSpacing(8)
 
         self.header = _CardHeader(title, self)
@@ -351,7 +351,7 @@ class _DashboardCard(QFrame):
         self.open_button.setAutoDefault(False)
         self.open_button.setAccessibleName(f"Open {title}")
         self.open_button.clicked.connect(lambda: self.open_requested.emit(self.section_id))
-        footer.addWidget(self.open_button)
+        self.header.layout().addWidget(self.open_button)
 
         footer.addStretch(1)
         self.edit_controls = QWidget(self)
@@ -519,6 +519,7 @@ class DashboardBoard(QWidget):
     layout_changed = Signal(object)
     open_requested = Signal(str)
     editing_changed = Signal(bool)
+    appearance_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -581,7 +582,25 @@ class DashboardBoard(QWidget):
         self.reset_button.setAccessibleName("Reset dashboard layout")
         self.reset_button.clicked.connect(self.reset_layout)
         toolbar_layout.addWidget(self.reset_button)
-        toolbar_layout.addStretch(1)
+        # Keep the same actions and keyboard edit paths behind one named menu.
+        self.add_button.hide()
+        self.edit_button.hide()
+        self.reset_button.hide()
+        self.customize_button = QToolButton(toolbar)
+        self.customize_button.setText("Customize dashboard")
+        self.customize_button.setAccessibleName("Customize dashboard")
+        self.customize_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.customize_menu = QMenu(self.customize_button)
+        self.add_menu.setTitle("Add widget")
+        self.customize_menu.addMenu(self.add_menu)
+        self.edit_action = self.customize_menu.addAction("Edit layout")
+        self.edit_action.setCheckable(True)
+        self.edit_action.triggered.connect(self.set_editing)
+        self.customize_menu.addAction("Appearance", self.appearance_requested.emit)
+        self.customize_menu.addSeparator()
+        self.customize_menu.addAction("Reset layout", self.reset_layout)
+        self.customize_button.setMenu(self.customize_menu)
+        toolbar_layout.addWidget(self.customize_button)
         outer.addWidget(toolbar)
 
         self._grid_panel = QFrame(self)
@@ -613,7 +632,6 @@ class DashboardBoard(QWidget):
         self.toolbar = toolbar
         self.grid = self._grid_host
         self.widgets = self._cards
-        self.customize_button = self.edit_button
         self.edit_toggle = self.edit_button
         self.add_widget_button = self.add_button
         self.widget_catalog = self.add_menu
@@ -792,6 +810,8 @@ class DashboardBoard(QWidget):
         self.edit_button.setChecked(enabled)
         self.edit_button.blockSignals(False)
         self.edit_button.setText("Done editing" if enabled else "Edit layout")
+        self.edit_button.setVisible(enabled)
+        self.edit_action.setChecked(enabled)
         self._grid_panel.setProperty("dashboardEditing", enabled)
         self._grid_panel.style().unpolish(self._grid_panel)
         self._grid_panel.style().polish(self._grid_panel)

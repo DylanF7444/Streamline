@@ -1,4 +1,4 @@
-"""Offline-aware orchestration for Personal Hub source adapters."""
+"""Network-pause-aware orchestration for Personal Hub source adapters."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 
 from personal_hub.sources.contracts import (
     SourceDisconnectedError,
+    SourcePausedError,
     SourcePermissionRequiredError,
     SourceResult,
     SourceSnapshot,
@@ -23,10 +24,10 @@ from personal_hub.sources.contracts import (
 from personal_hub.sources.registry import RegisteredSource, SourceRegistry
 
 _T = TypeVar("_T")
-_OfflineGetter = Callable[[], bool]
+_NetworkPausedGetter = Callable[[], bool]
 
 
-class _OfflineGateHit(Exception):
+class _NetworkPauseGateHit(Exception):
     """Internal sentinel raised before an adapter callback is invoked."""
 
 
@@ -40,6 +41,8 @@ def normalize_source_error(error: BaseException) -> tuple[SourceState, str]:
 
     if isinstance(error, (SourcePermissionRequiredError, PermissionError)):
         return SourceState.PERMISSION_REQUIRED, safe_state_message(SourceState.PERMISSION_REQUIRED)
+    if isinstance(error, SourcePausedError):
+        return SourceState.PAUSED, safe_state_message(SourceState.PAUSED)
     if isinstance(error, SourceDisconnectedError):
         return SourceState.DISCONNECTED, safe_state_message(SourceState.DISCONNECTED)
     if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
@@ -52,7 +55,7 @@ def normalize_source_error(error: BaseException) -> tuple[SourceState, str]:
 
 
 class SourceService:
-    """Coordinate Hub sources with cancellation, timeout, freshness, and offline safety."""
+    """Coordinate Hub sources with cancellation, timeout, freshness, and pause safety."""
 
     def __init__(
         self,
@@ -61,32 +64,22 @@ class SourceService:
         timeout_seconds: float = 30.0,
         max_concurrency: int = 2,
         max_items: int = 1_000,
-        offline: bool = False,
-        offline_getter: _OfflineGetter | None = None,
-        offline_lock: bool | _OfflineGetter | None = None,
+        network_paused: bool = False,
+        network_paused_getter: _NetworkPausedGetter | None = None,
     ) -> None:
         if max_concurrency < 1 or max_concurrency > 2:
             raise ValueError("Personal Hub source concurrency must be between 1 and 2")
         self._validate_timeout(timeout_seconds)
         if max_items < 1 or max_items > 5_000:
             raise ValueError("Personal Hub source max_items must be between 1 and 5000")
-        if offline_getter is not None and offline_lock is not None:
-            raise ValueError("Use only one of offline_getter or offline_lock")
-
         self.registry = registry
         self.timeout_seconds = float(timeout_seconds)
         self.max_concurrency = max_concurrency
         self.max_items = max_items
-        selected_offline = offline_lock if offline_lock is not None else offline
-        if offline_getter is not None:
-            self._offline_getter = offline_getter
-            self._offline_value = False
-        elif callable(selected_offline):
-            self._offline_getter = selected_offline
-            self._offline_value = False
-        else:
-            self._offline_getter = None
-            self._offline_value = bool(selected_offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
 
         self._concurrency = asyncio.Semaphore(max_concurrency)
         self._source_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -95,21 +88,19 @@ class SourceService:
         self._last_results: dict[str, SourceResult] = {}
 
     @property
-    def offline(self) -> bool:
-        if self._offline_getter is not None:
-            return bool(self._offline_getter())
-        return self._offline_value
+    def network_paused(self) -> bool:
+        if self._network_paused_getter is not None:
+            return bool(self._network_paused_getter())
+        return self._network_paused_value
 
-    @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
 
-    def set_offline(self, value: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(value)
-
-    set_offline_mode = set_offline
-    set_offline_lock = set_offline
+    def set_network_paused_getter(self, getter: _NetworkPausedGetter) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     def last_good_snapshot(self, source_id: str) -> SourceSnapshot | None:
         return self._last_good.get(source_id)
@@ -136,8 +127,8 @@ class SourceService:
         """Connect one adapter if it exposes a connect operation."""
 
         entry = self.registry.get(source_id)
-        if self.offline:
-            return self._remember_result(self._offline_result(entry))
+        if self.network_paused:
+            return self._remember_result(self._paused_result(entry))
         method = getattr(entry.adapter, "connect", None)
         if method is None:
             return self._remember_result(self._result(entry, SourceState.READY))
@@ -147,8 +138,8 @@ class SourceService:
             if isinstance(value, (SourceStatus, Mapping)):
                 return self._remember_result(self._status_result(entry, value, started))
             return self._remember_result(self._result(entry, SourceState.READY, started=started))
-        except _OfflineGateHit:
-            return self._remember_result(self._offline_result(entry, started=started))
+        except _NetworkPauseGateHit:
+            return self._remember_result(self._paused_result(entry, started=started))
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -163,15 +154,15 @@ class SourceService:
         """Disconnect one adapter without discarding its registered definition."""
 
         entry = self.registry.get(source_id)
-        if self.offline:
-            return self._remember_result(self._offline_result(entry))
+        if self.network_paused:
+            return self._remember_result(self._paused_result(entry))
         method = getattr(entry.adapter, "disconnect", None)
         started = time.monotonic()
         if method is not None:
             try:
                 await self._invoke(entry, method, timeout_seconds)
-            except _OfflineGateHit:
-                return self._remember_result(self._offline_result(entry, started=started))
+            except _NetworkPauseGateHit:
+                return self._remember_result(self._paused_result(entry, started=started))
             except asyncio.CancelledError:
                 raise
             except BaseException as error:
@@ -189,8 +180,8 @@ class SourceService:
         """Read one adapter's status without refreshing source data."""
 
         entry = self.registry.get(source_id)
-        if self.offline:
-            return self._remember_result(self._offline_result(entry))
+        if self.network_paused:
+            return self._remember_result(self._paused_result(entry))
         method = getattr(entry.adapter, "status", None)
         if method is None:
             return self._remember_result(self._result(entry, SourceState.READY))
@@ -198,8 +189,8 @@ class SourceService:
         try:
             value = await self._invoke(entry, method, timeout_seconds)
             return self._remember_result(self._status_result(entry, value, started))
-        except _OfflineGateHit:
-            return self._remember_result(self._offline_result(entry, started=started))
+        except _NetworkPauseGateHit:
+            return self._remember_result(self._paused_result(entry, started=started))
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -214,8 +205,8 @@ class SourceService:
         """Refresh one source, preserving its last good snapshot on failure."""
 
         entry = self.registry.get(source_id)
-        if self.offline:
-            return self._remember_result(self._offline_result(entry))
+        if self.network_paused:
+            return self._remember_result(self._paused_result(entry))
         method = getattr(entry.adapter, "refresh", None)
         if method is None:
             return self._remember_result(
@@ -232,8 +223,8 @@ class SourceService:
                 self._last_good[source_id] = result.snapshot
                 self._last_success_at[source_id] = result.checked_at
             return self._remember_result(result)
-        except _OfflineGateHit:
-            return self._remember_result(self._offline_result(entry, started=started))
+        except _NetworkPauseGateHit:
+            return self._remember_result(self._paused_result(entry, started=started))
         except asyncio.CancelledError:
             raise
         except BaseException as error:
@@ -275,7 +266,7 @@ class SourceService:
         method: Callable[[], Awaitable[_T]],
         timeout_seconds: float | None,
     ) -> _T:
-        """Invoke one adapter method only after all offline gates have passed."""
+        """Invoke one adapter only after the network-pause gate has passed."""
 
         timeout = (
             self.timeout_seconds
@@ -283,15 +274,17 @@ class SourceService:
             else self._validate_timeout(timeout_seconds)
         )
         async with self._source_locks[entry.source_id], self._concurrency:
-            # Recheck after waiting for both locks.  This prevents a queued call from
-            # touching the provider when offline mode was enabled while it waited.
-            if self.offline:
-                raise _OfflineGateHit
+            # Recheck after waiting for both locks so paused work cannot touch a provider.
+            if self.network_paused:
+                raise _NetworkPauseGateHit
             callback_result = method()
             if not inspect.isawaitable(callback_result):
                 raise TypeError("Source adapter operations must return awaitables")
             async with asyncio.timeout(timeout):
-                return await callback_result
+                result = await callback_result
+            if self.network_paused:
+                raise _NetworkPauseGateHit
+            return result
 
     def _snapshot_result(
         self,
@@ -404,7 +397,7 @@ class SourceService:
             last_success_at=self._last_success_at.get(entry.source_id),
         )
 
-    def _offline_result(
+    def _paused_result(
         self,
         entry: RegisteredSource,
         *,
@@ -413,11 +406,11 @@ class SourceService:
         snapshot = self._last_good.get(entry.source_id)
         return self._result(
             entry,
-            SourceState.OFFLINE,
+            SourceState.PAUSED,
             snapshot=snapshot,
             started=started,
             item_count=len(snapshot.items) if snapshot is not None else 0,
-            safe_message=safe_state_message(SourceState.OFFLINE),
+            safe_message=safe_state_message(SourceState.PAUSED),
             last_success_at=self._last_success_at.get(entry.source_id),
         )
 

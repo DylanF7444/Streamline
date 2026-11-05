@@ -17,7 +17,7 @@ pytestmark = pytest.mark.ui
 
 @pytest.fixture
 def ui(qtbot, qapp, tmp_path):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
     coordinator = HubDesktopCoordinator(container, window, qapp)
@@ -231,12 +231,22 @@ def test_daily_overview_local_day_dst_snapshots_and_complete_totals(ui):
     hub, window, coordinator = ui
     hub.update_settings(default_timezone="America/Chicago")
     task_list = hub.create_task_list("Writing")
-    task = hub.create_task(title="Finished proposal", list_id=task_list.list_id, tags=("draft",))
+    task = hub.create_task(
+        title="Finished proposal",
+        list_id=task_list.list_id,
+        tags=("draft",),
+        created_at=datetime(2026, 10, 31, tzinfo=UTC),
+        updated_at=datetime(2026, 10, 31, tzinfo=UTC),
+    )
     # This local day has 25 hours. The final hour still belongs in November 1.
     hub.complete_task(str(task.task_id), completed_at=datetime(2026, 11, 2, 5, 59, tzinfo=UTC))
     hub.update_task(str(task.task_id), title="Later title")
     hub.task_repository.delete(task.task_id)
-    undone = hub.create_task(title="Accidental completion")
+    undone = hub.create_task(
+        title="Accidental completion",
+        created_at=datetime(2026, 10, 31, tzinfo=UTC),
+        updated_at=datetime(2026, 10, 31, tzinfo=UTC),
+    )
     hub.complete_task(str(undone.task_id), completed_at=datetime(2026, 11, 1, 7, tzinfo=UTC))
     hub.undo_task(str(undone.task_id))
     for description, when in (

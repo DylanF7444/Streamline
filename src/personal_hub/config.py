@@ -131,7 +131,6 @@ class HubSettings(BaseModel):
     # These are intentionally small local-first controls.  They do not include
     # assistant, model, voice, planner, router, or transcript settings.
     default_timezone: str = "UTC"
-    offline_mode: bool = False
     start_in_tray: bool = False
     close_to_tray: bool = True
     start_at_login: bool = False

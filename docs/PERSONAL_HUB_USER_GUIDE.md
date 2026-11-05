@@ -18,9 +18,9 @@ status filters also filter the pins. This release does not search online address
 names. You can edit places, delete individual visits, or explicitly delete a place and all its
 visits. Places are limited to 5,000 records and visits to 20,000 records per Hub database.
 
-Map browsing needs internet access. **Offline mode** and **Pause network refresh** stop map
-requests; your saved list, notes and visit history remain available. Privacy masking and lock
-hide Places and close its map. **Reload map** retries a failed online map. The page loads the
+Map browsing needs internet access. **Pause network refresh** stops map requests; your saved
+list, notes and visit history remain available. Privacy masking and lock hide Places and close
+its map. **Reload map** retries a failed online map. The page loads the
 graphics engine only when opened online; graphics-driver/WebGL support is required for the
 map, while native place and visit controls remain usable if the renderer is unavailable.
 
@@ -82,7 +82,9 @@ through one background worker and shows one stable refresh state; repeat clicks 
 The main panel is a widget dashboard, including a mini calendar, Agenda, task sections, Inbox, Watchlist,
 attention messages, news, and watch alerts. Each widget opens its corresponding full page.
 Mini calendar, Agenda, due and overdue tasks, Inbox, and Watchlist start on the board; the other widgets
-are available from **Add widget**.
+are available from **Customize dashboard → Add widget**. The count cards show all open tasks,
+unread Hub alerts, and today's recorded activity. Privacy masking and lock hide these counts.
+**Overview updated** refers to the local overview; each source retains its own freshness state.
 
 The **Mini calendar** shows a compact month grid with an outline around today and dots on
 dates with loaded events or due tasks from selected calendars. Use the arrows to browse months
@@ -90,7 +92,7 @@ or **Today** to return to the current date. Select a date (or press Enter on a s
 to open its full Calendar day view. The widget shows calendar freshness and offline status;
 markers reflect available data. The separate **Agenda** widget retains the event list.
 
-Use **Edit layout** to arrange your space. Drag the visible move handle in a widget heading
+Use **Customize dashboard → Edit layout** to arrange your space. Drag the visible move handle in a widget heading
 to place it on the 48-step horizontal grid. Vertical positions and heights snap in 6-pixel
 increments. The main widget panel has a visible border, which changes to an accent dashed
 outline while editing to show the available bounds. In wider layouts, drag any edge to
@@ -106,7 +108,8 @@ dashboard opens.
 
 In **Settings → Appearance**, choose a theme preset or customize the accent, background,
 and surface colors with a color picker or `#RRGGBB` value. Choose **Apply appearance** to
-save. **Enable animations** controls page fades, Calendar and Inbox view changes, Calendar and
+save. The default **Charcoal / Mint** preset replaces the earlier navy palette; saved layouts
+and custom colors remain intact. **Enable animations** controls page fades, Calendar and Inbox view changes, Calendar and
 Tasks panel reveals, and Home dashboard movement. Turn it off for reduced motion; active
 transitions stop immediately.
 High contrast takes precedence over custom colors. Colors, motion preferences, widget order,
@@ -270,6 +273,9 @@ the extraction before saving. The first observation is a baseline; only a later 
 transition alerts. The collector does not run page scripts, submit forms, automate logins, or
 make purchases.
 
+Choose **Add watch** to open the editor, or activate an existing watch to edit it. **Cancel**
+closes the editor. The tracked list stays visible above it; privacy masking closes the editor.
+
 ### Inbox and messages
 
 Inbox contains safe, durable task reminders, news digests, watch alerts, and source failures.
@@ -308,12 +314,12 @@ reconnect, enable/disable, or disconnect the source. Disabled sources are exclud
 refresh across restart; disconnect clears provider tokens and connector-owned local message state
 without changing provider data.
 
-Settings provides editable Hub-owned offline, privacy, tray/startup, notification, quiet-hour,
-digest, refresh, retention, Canvas cleanup, and accessibility controls plus redacted diagnostics.
-Offline mode can also be toggled from the tray menu and is persisted before later refreshes.
-Database backup,
-integrity-checked restore, and credential-free JSON export are user-facing actions. Restore is
-refused while refresh or maintenance work is active.
+Settings provides privacy, tray/startup, notification, quiet-hour, digest, refresh, retention,
+Canvas cleanup, and accessibility controls plus redacted diagnostics. Use **Pause network
+refresh** in the tray menu to temporarily hold source and map refreshes; Settings shows its
+current state. The pause lasts for the current session. Database backup, integrity-checked
+restore, and credential-free JSON export are user-facing actions. Restore is refused while
+refresh or maintenance work is active.
 
 The connection composition and setup UI are present. Publishing a release still requires a
 rotated non-production Canvas feed, project-owned Google and Microsoft OAuth registrations, and
@@ -337,10 +343,10 @@ Personal Hub credential namespace. Project-owned OAuth client IDs and test accou
 required for live-provider release acceptance. Never put client secrets or tokens in repository
 configuration.
 
-## Offline, privacy, and lock behavior
+## Network refresh pause, privacy, and lock behavior
 
-- Global offline mode prevents provider adapters from reaching tokens, DNS, or transports.
-- Last-good in-memory calendar/provider snapshots may be shown as stale/offline; local tasks
+- Network refresh pause prevents provider adapters from reaching tokens, DNS, or transports.
+- Last-good in-memory calendar/provider snapshots may be shown as paused or stale; local tasks
   and already retained items remain usable.
 - Privacy masking replaces sensitive calendar, message, and Inbox text with a fixed label.
 - Windows session lock clears message bodies and hides sensitive previews. Network work can
@@ -362,7 +368,7 @@ explicitly imported local calendar items remain until the named import is remove
 event completion state is not stored; task completion remains part of each local task record.
 Credentials remain until disconnect and are not included in ordinary database backup/export.
 
-Retention cleanup runs once per local calendar day, including while global offline mode is on.
+Retention cleanup runs once per local calendar day, including while network refresh is paused.
 It removes eligible archived/dismissed Inbox history, audit metadata, feed entries, watch
 history, message summaries, and old notification claims. One watch observation is retained as
 the comparison baseline so cleanup cannot manufacture a false transition.
@@ -403,7 +409,7 @@ watch history, Inbox history, or private iCalendar feed URLs.
 To share provider snapshots, set one device to **Provider collector** and select the categories
 to publish: Calendars, Message summaries, News entries, and Watch results. Use **Sync now** on
 that device to replace its encrypted collector shard with the latest bounded snapshots already
-loaded in Personal Hub. Set other devices to **Offline consumer**. Consumer mode turns provider
+loaded in Personal Hub. Set other devices to **Snapshot consumer**. Consumer mode turns provider
 access off on those devices; **Sync now** reads the collector shard and adds its snapshots to the
 usual Calendar, Messages, News, Watchlists, Home, and Inbox views. Unchecking a category stops
 future imports for that category. Previously received content follows its normal local retention.
@@ -433,7 +439,8 @@ your local data. Keep a separate backup before changing or removing a shared fol
 
 ## Troubleshooting
 
-- **Offline:** turn off Offline mode before retrying a remote source.
+- **Refresh paused:** resume network refresh before retrying a remote source.
+- **Offline or disconnected:** check the device's network connection, then retry the source.
 - **Permission required:** reconnect with only the scope shown above.
 - **Stale:** the last successful snapshot is being shown after a safe refresh failure.
 - **Disconnected:** select the provider under Sources, choose **Connect / Configure**, enter the

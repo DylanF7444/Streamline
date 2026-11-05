@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from urllib.parse import quote
 
@@ -67,7 +67,8 @@ class SlackMessageSource:
         account_id: str,
         max_messages: int = 200,
         max_response_bytes: int = 2_000_000,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
     ) -> None:
         self.source_id = source_id
         self.account_id = account_id
@@ -75,10 +76,27 @@ class SlackMessageSource:
         self.transport = transport
         self.max_messages = max_messages
         self.max_response_bytes = max_response_bytes
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
+        )
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def list_summaries(self, query: MessageQuery) -> MessageSnapshot:
         if not isinstance(query, MessageQuery):
@@ -86,7 +104,9 @@ class SlackMessageSource:
         summaries: list[MessageSummary] = []
         if query.channels:
             token = await access_token(
-                self.token_provider, (SLACK_CHANNEL_HISTORY_SCOPE,), offline=self.offline
+                self.token_provider,
+                (SLACK_CHANNEL_HISTORY_SCOPE,),
+                network_paused=self.network_paused,
             )
             for channel in query.channels:
                 if not _ID.fullmatch(channel):
@@ -97,7 +117,7 @@ class SlackMessageSource:
                     token=token,
                     params={"channel": channel, "limit": min(query.limit, 100)},
                     max_response_bytes=self.max_response_bytes,
-                    offline=self.offline,
+                    network_paused=self.network_paused,
                 )
                 _validate_response(payload)
                 raw_messages = payload.get("messages", [])
@@ -110,7 +130,9 @@ class SlackMessageSource:
                             break
         elif query.query:
             token = await access_token(
-                self.token_provider, (SLACK_SEARCH_SCOPE,), offline=self.offline
+                self.token_provider,
+                (SLACK_SEARCH_SCOPE,),
+                network_paused=self.network_paused,
             )
             payload = await request_json(
                 self.transport,
@@ -118,7 +140,7 @@ class SlackMessageSource:
                 token=token,
                 params={"query": query.query, "count": min(query.limit, 100)},
                 max_response_bytes=self.max_response_bytes,
-                offline=self.offline,
+                network_paused=self.network_paused,
             )
             _validate_response(payload)
             matches = payload.get("messages", {})
@@ -183,7 +205,9 @@ class SlackMessageSource:
         if not _ID.fullmatch(channel) or len(timestamp) > 32:
             raise ValueError("Slack message identity is invalid")
         token = await access_token(
-            self.token_provider, (SLACK_CHANNEL_HISTORY_SCOPE,), offline=self.offline
+            self.token_provider,
+            (SLACK_CHANNEL_HISTORY_SCOPE,),
+            network_paused=self.network_paused,
         )
         payload = await request_json(
             self.transport,
@@ -191,7 +215,7 @@ class SlackMessageSource:
             token=token,
             params={"channel": channel, "ts": timestamp, "limit": 1},
             max_response_bytes=self.max_response_bytes,
-            offline=self.offline,
+            network_paused=self.network_paused,
         )
         _validate_response(payload)
         values = payload.get("messages", [])

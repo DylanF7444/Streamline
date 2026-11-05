@@ -146,7 +146,7 @@ the same temporary shared folder:
 1. Set the first device to **Provider collector**, enable the calendar, message-summary, feed, and
    watch categories, connect test accounts, then refresh its configured sources and choose **Sync
    now**. Confirm exactly one `collector-<device-id>.relay` file is atomically replaced.
-2. Set the second device to **Offline consumer** and choose **Sync now**. Verify the selected
+2. Set the second device to **Snapshot consumer** and choose **Sync now**. Verify the selected
    calendar events, bounded message summaries, retained feed entries, watch observations/alerts,
    and alert Inbox rows appear. Verify message bodies, credentials, provider connection metadata,
    private iCalendar feed URLs, and Google write bindings are absent from decrypted relay data.
@@ -196,7 +196,7 @@ verify read-only setup by default, explicitly enable local-event sync and reauth
 one local-only and one linked item offline, restart, then use **Sync Google**. Confirm only
 the linked item uploads. Edit it at Google and sync to verify local persistence; edit it in
 both places to verify conflict review and each resolution choice. Retry an uncertain insert
-without duplicates, disable sync and go offline to verify no token or API access, and remove
+without duplicates, pause network refresh to verify no token or API access, and remove
 items in each direction to confirm the documented retained-copy behavior. Capture consent
 for `calendar.events` and fixed event POST/PATCH requests with `sendUpdates=none`; confirm
 no invitation, response, or remote DELETE request. This manual account check is distinct
@@ -231,7 +231,7 @@ from world view to a campus, verify attribution, create pins, cluster/expand sev
 places, save/return to a home view, edit a place and log/backdate repeat visits. Verify local
 search and all category/status/favorite filters, visit deletion, cascading place deletion,
 restart, backup/restore and JSON export. Confirm no names/notes/visits enter provider requests
-or shared-folder/relay snapshots. Toggle offline, pause, masking and lock while tiles load;
+or shared-folder/relay snapshots. Pause network refresh, mask, and lock while tiles load;
 verify no new resource requests and native offline access. Leave Places, hide to tray and
 quit during loads; check cancellation and shutdown. Test a blocked/unavailable provider and
 unsupported WebGL recovery without losing local data. Review keyboard-only alternatives,

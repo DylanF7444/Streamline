@@ -16,8 +16,8 @@ from personal_hub.calendar.ical import (
     parse_ical_calendar_items,
 )
 from personal_hub.feeds.contracts import (
-    FeedOfflineError,
     FeedParseError,
+    FeedPausedError,
     FeedPolicyError,
     FeedResponseTooLargeError,
     FeedUnavailableError,
@@ -26,6 +26,7 @@ from personal_hub.feeds.parser import sanitize_html
 from personal_hub.feeds.security import origin_for_url
 from personal_hub.sources import (
     SourceDisconnectedError,
+    SourcePausedError,
     SourcePermissionRequiredError,
     SourceUnavailableError,
 )
@@ -123,7 +124,9 @@ class CanvasIcalTaskImporter:
             )
         except (SourceDisconnectedError, SourcePermissionRequiredError, SourceUnavailableError):
             raise
-        except (FeedOfflineError, FeedUnavailableError) as error:
+        except FeedPausedError as error:
+            raise SourcePausedError("Network refresh is paused.") from error
+        except FeedUnavailableError as error:
             raise SourceUnavailableError("Canvas calendar is temporarily unavailable") from error
         except (
             FeedParseError,

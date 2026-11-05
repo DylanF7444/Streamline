@@ -192,16 +192,16 @@ async def test_outlook_maps_selected_calendars_pages_times_and_safe_links():
 
 
 @pytest.mark.asyncio
-async def test_outlook_offline_gate_blocks_token_and_transport_before_connection():
+async def test_outlook_network_pause_blocks_token_and_transport_before_connection():
     transport = FakeTransport()
     token_provider = FakeTokenProvider()
-    source = _source(transport, token_provider, offline=True)
+    source = _source(transport, token_provider, network_paused=True)
 
     status = await source.status(_query())
     result = await source.refresh(_query())
 
-    assert status.state == "offline"
-    assert result.state == "offline"
+    assert status.state == "paused"
+    assert result.state == "paused"
     assert token_provider.calls == 0
     assert transport.calls == []
 

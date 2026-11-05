@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from personal_hub.feeds.contracts import (
-    FeedOfflineError,
+    FeedPausedError,
     FeedPolicyError,
     FeedRedirectError,
     FeedResponse,
@@ -272,8 +272,8 @@ class FeedFetcher:
         reviewed_origins: Iterable[str] = (),
         resolver: HostResolver | None = None,
         resolve_host: bool | None = None,
-        offline: bool = False,
-        offline_getter: object | None = None,
+        network_paused: bool = False,
+        network_paused_getter: object | None = None,
     ) -> None:
         if timeout_seconds <= 0 or timeout_seconds > 300:
             raise ValueError("Feed timeout must be greater than 0 and at most 300 seconds")
@@ -281,8 +281,8 @@ class FeedFetcher:
             raise ValueError("Feed response limit is out of bounds")
         if not 0 <= max_redirects <= 10:
             raise ValueError("Feed redirect limit must be between 0 and 10")
-        if offline_getter is not None and not callable(offline_getter):
-            raise TypeError("offline_getter must be callable")
+        if network_paused_getter is not None and not callable(network_paused_getter):
+            raise TypeError("network_paused_getter must be callable")
         self.transport = transport or UrllibFeedTransport()
         self.timeout_seconds = float(timeout_seconds)
         self.max_response_bytes = max_response_bytes
@@ -295,26 +295,27 @@ class FeedFetcher:
         # hostname resolution can be explicitly enabled with ``resolve_host``
         # or a resolver for tests and custom transports.
         self.resolve_host = (transport is None) if resolve_host is None else bool(resolve_host)
-        self._offline_getter = offline_getter
-        self._offline_value = bool(offline) if offline_getter is None else False
-
-    @property
-    def offline(self) -> bool:
-        return (
-            bool(self._offline_getter())
-            if self._offline_getter is not None
-            else self._offline_value
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
         )
 
     @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def network_paused(self) -> bool:
+        return (
+            bool(self._network_paused_getter())
+            if self._network_paused_getter is not None
+            else self._network_paused_value
+        )
 
-    def set_offline(self, value: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(value)
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
 
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: object) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
 
     async def fetch(
         self,
@@ -327,8 +328,8 @@ class FeedFetcher:
 
         if not isinstance(subscription, FeedSubscription):
             raise TypeError("FeedFetcher expects a FeedSubscription")
-        if self.offline:
-            raise FeedOfflineError("Feed refresh is paused by offline mode.")
+        if self.network_paused:
+            raise FeedPausedError("Feed refresh is paused.")
         # Plain HTTP is a two-key opt-in: the process policy must permit it and
         # this particular subscription must have been explicitly reviewed.
         allow_http = self.allow_http and bool(getattr(subscription, "allow_http", False))
@@ -359,7 +360,7 @@ class FeedFetcher:
 
         RSS/Atom subscriptions continue to use :meth:`fetch`; this lower-level
         entry point lets other Hub-owned read-only sources reuse the same URL,
-        redirect, response-size, and offline policy without duplicating network
+        redirect, response-size, and network-pause policy without duplicating network
         security code.
         """
 
@@ -369,8 +370,8 @@ class FeedFetcher:
             raise FeedPolicyError("Feed response type is invalid.")
         if any(character in accept for character in "\r\n\x00"):
             raise FeedPolicyError("Feed response type is invalid.")
-        if self.offline:
-            raise FeedOfflineError("Feed refresh is paused by offline mode.")
+        if self.network_paused:
+            raise FeedPausedError("Feed refresh is paused.")
         reviewed = tuple(reviewed_origins)
         url = await validate_url_for_request(
             url,
@@ -392,8 +393,8 @@ class FeedFetcher:
             _add_conditional_header(headers, "If-Modified-Since", last_modified)
 
         for redirect_count in range(self.max_redirects + 1):
-            if self.offline:
-                raise FeedOfflineError("Feed refresh is paused by offline mode.")
+            if self.network_paused:
+                raise FeedPausedError("Feed refresh is paused.")
             response = await self._request(url, headers)
             # A custom transport must not silently follow a redirect outside
             # this client's policy.  The built-in transport returns each 3xx
@@ -463,7 +464,7 @@ class FeedFetcher:
                     url=response.url,
                 )
             return _bounded_body(response, self.max_response_bytes)
-        except (FeedPolicyError, FeedResponseTooLargeError, FeedOfflineError):
+        except (FeedPolicyError, FeedResponseTooLargeError, FeedPausedError):
             raise
         except asyncio.CancelledError:
             raise

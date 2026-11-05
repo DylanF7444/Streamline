@@ -148,7 +148,8 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
     }
     assert expected_labels.issubset(texts)
     assert window.navigation_caption.text() == "NAVIGATION"
-    assert "Plan in Tasks and Calendar" in window.today_subtitle.text()
+    assert window.today_subtitle.isHidden()
+    assert window.today_subtitle.text() == ""
     assert not window.findChildren(QLabel, "brandSubtitle")
     assert "A little clarity for every day." not in texts
     assert "YOUR PERSONAL SPACE" not in texts
@@ -276,7 +277,6 @@ def test_inbox_sources_settings_and_diagnostics_render_plain_view_data(qtbot):
 
     window.render_settings(
         SettingsView(
-            offline_mode=True,
             privacy_masking=True,
             close_to_tray=False,
             text_scale=1.25,
@@ -285,9 +285,8 @@ def test_inbox_sources_settings_and_diagnostics_render_plain_view_data(qtbot):
             network_refresh_paused=True,
         )
     )
-    assert window.settings_values["offline_mode"] == "On"
     assert window.settings_values["network_refresh_paused"] == "Paused"
-    assert window.offline_mode is True
+    assert window.network_refresh_paused is True
     assert window.close_to_tray is False
     assert window.text_scale == 1.25
     assert window.high_contrast is True
@@ -367,9 +366,9 @@ def test_tray_actions_emit_requests_and_close_to_tray_is_reversible(qtbot):
         "inbox",
         "refresh",
         "pause",
-        "offline",
         "quit",
     } <= set(window.tray_controller.actions)
+    assert "offline" not in window.tray_controller.actions
     assert window.tray_controller.open_action.text() == "Open Hub"
     assert window.tray_controller.refresh_action.text() == "Refresh enabled sources"
 
@@ -381,8 +380,7 @@ def test_tray_actions_emit_requests_and_close_to_tray_is_reversible(qtbot):
     window.tray_controller.trigger("pause")
     assert window.network_refresh_paused is True
     assert window.tray_controller.pause_action.text() == "Resume network refresh"
-    window.tray_controller.trigger("offline")
-    assert window.offline_mode is True
+    assert window.network_refresh_paused is True
     window.tray_controller.trigger("today")
     assert window.active_destination == "Home"
 

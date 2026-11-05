@@ -55,10 +55,10 @@ class _MessageSource:
     def __init__(self) -> None:
         self.list_calls = 0
         self.body_calls = 0
-        self.offline = False
+        self.paused = False
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = value
+    def set_network_paused(self, value: bool) -> None:
+        self.paused = value
 
     async def list_summaries(self, _query: MessageQuery) -> MessageSnapshot:
         self.list_calls += 1

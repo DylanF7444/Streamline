@@ -64,6 +64,7 @@ class DailyOverview(QWidget):
         self.caption.setWordWrap(True)
         layout.addWidget(self.caption)
         self.facts = QPlainTextEdit()
+        self.facts.setObjectName("dailyOverviewFacts")
         self.facts.setReadOnly(True)
         self.facts.setTabChangesFocus(True)
         self.facts.setAccessibleName("Daily overview totals")
@@ -75,10 +76,7 @@ class DailyOverview(QWidget):
         layout.addWidget(self.more)
         reflection_group = QGroupBox("Reflection")
         reflection_layout = QVBoxLayout(reflection_group)
-        help_text = QLabel(
-            "Writing is optional and autosaves on this device. "
-            "What went well? What would you like to carry into tomorrow?"
-        )
+        help_text = QLabel("Optional · Autosaves on this device")
         help_text.setWordWrap(True)
         reflection_layout.addWidget(help_text)
         self.chooser = QComboBox()
@@ -101,7 +99,7 @@ class DailyOverview(QWidget):
         self.body.setTabChangesFocus(True)
         self.body.setMinimumHeight(180)
         reflection_layout.addWidget(self.body)
-        self.saved = StatusLabel("Write whenever you like. Your reflection will save here.")
+        self.saved = StatusLabel("")
         self.saved.setTextFormat(Qt.TextFormat.PlainText)
         self.saved.setWordWrap(True)
         self.saved.setAccessibleName("Daily reflection saved state")
@@ -175,10 +173,8 @@ class DailyOverview(QWidget):
     def render(self, facts, entries: list[ActivityEntry], reflections: list[ReflectionEntry]):
         if self.masked:
             return
-        self.caption.setText(
-            f"{self.day:%A, %B %d, %Y} · {self.timezone}. "
-            "Updates as you log activity. Undone completions are excluded."
-        )
+        self.caption.setText(f"{self.day:%A, %B %d, %Y} · {self.timezone}")
+        self.caption.setToolTip("Corrected (undone) completions are excluded from totals.")
         duration = facts["duration_minutes"]
         self.facts.setPlainText(
             f"Tasks completed: {facts['task_completion']}\n"
@@ -247,11 +243,7 @@ class DailyOverview(QWidget):
             if current != text:
                 with QSignalBlocker(control):
                     control.setText(text) if control is self.title else control.setPlainText(text)
-        self.saved.setText(
-            "Saved on this device"
-            if entry
-            else "Write whenever you like. Your reflection will save here."
-        )
+        self.saved.setText("Saved on this device" if entry else "")
 
     def choose_reflection(self, _index):
         if self.masked:

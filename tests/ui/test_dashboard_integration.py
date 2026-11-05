@@ -23,7 +23,7 @@ from personal_hub.ui.desktop.main_window import (
 
 
 def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_path):
-    settings = HubSettings(data_dir=tmp_path / "hub", offline_mode=True)
+    settings = HubSettings(data_dir=tmp_path / "hub")
     container = build_hub_container(settings)
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
@@ -64,7 +64,6 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
         assert second.settings_view.ui_theme == "light"
         assert second.settings_view.ui_accent_color == "#765432"
         assert second.reduced_motion
-        assert reopened.controller.settings.offline_mode
     finally:
         second_coordinator.shutdown()
         reopened.close()
@@ -74,7 +73,7 @@ def test_dashboard_layout_and_appearance_survive_refresh_and_restart(qtbot, tmp_
 def test_refresh_updates_today_content_without_replacing_visible_widgets(qtbot, tmp_path):
     """A refresh must not reparent visible Today content through a blank state."""
 
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
     window.show()

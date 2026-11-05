@@ -1,4 +1,4 @@
-"""Offline-aware message summary refresh and explicit memory-only body viewing."""
+"""Pause-aware message summary refresh and explicit memory-only body viewing."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from personal_hub.messages.contracts import (
     MessageDisconnectedError,
     MessageError,
     MessageInvalidResponseError,
-    MessageOfflineError,
+    MessagePausedError,
     MessagePermissionRequiredError,
     MessageResult,
     MessageSnapshot,
@@ -28,7 +28,8 @@ _MESSAGES = {
     "ready": "Message summaries refreshed successfully.",
     "empty": "No messages match the selected view.",
     "stale": "Showing the last successful message summaries.",
-    "offline": "Message refresh is paused by offline mode.",
+    "paused": "Message refresh is paused.",
+    "offline": "Message source is offline.",
     "permission_required": "Message source permission is required.",
     "disconnected": "Message source is disconnected.",
     "error": "Message refresh failed safely.",
@@ -47,14 +48,18 @@ class MessageService:
         self,
         repository: MessageRepository,
         *,
-        offline: bool = False,
+        network_paused: bool = False,
+        network_paused_getter=None,
         concurrency: int = 2,
         random_source: random.Random | None = None,
     ) -> None:
         if not 1 <= concurrency <= 2:
             raise ValueError("message concurrency must be between 1 and 2")
         self.repository = repository
-        self.offline = bool(offline)
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self._sources: dict[str, MessageSource] = {}
         self._session_summaries: dict[str, tuple[MessageSummary, ...]] = {}
         self._body_cache: dict[tuple[str, str], MessageBody] = {}
@@ -62,12 +67,28 @@ class MessageService:
         self._in_flight: set[str] = set()
         self._random = random_source or random.Random()
 
-    def set_offline(self, value: bool) -> None:
-        self.offline = bool(value)
+    @property
+    def network_paused(self) -> bool:
+        if callable(self._network_paused_getter):
+            return bool(self._network_paused_getter())
+        return self._network_paused_value
+
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
         for source in self._sources.values():
-            callback = getattr(source, "set_offline", None)
+            callback = getattr(source, "set_network_paused", None)
             if callable(callback):
                 callback(value)
+
+    def set_network_paused_getter(self, getter) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
+        for source in self._sources.values():
+            callback = getattr(source, "set_network_paused_getter", None)
+            if callable(callback):
+                callback(getter)
 
     @property
     def source_ids(self) -> tuple[str, ...]:
@@ -79,9 +100,13 @@ class MessageService:
         if source.source_id in self._sources and self._sources[source.source_id] is not source:
             raise ValueError("message source identity is already registered")
         self._sources[source.source_id] = source
-        callback = getattr(source, "set_offline", None)
-        if callable(callback):
-            callback(self.offline)
+        callback = getattr(source, "set_network_paused_getter", None)
+        if self._network_paused_getter is not None and callable(callback):
+            callback(self._network_paused_getter)
+        else:
+            callback = getattr(source, "set_network_paused", None)
+            if callable(callback):
+                callback(self.network_paused)
 
     def unregister(self, source_id: str) -> None:
         self._sources.pop(source_id, None)
@@ -137,8 +162,8 @@ class MessageService:
         if config is None:
             raise KeyError("message source does not exist")
         state = self.repository.sync_state(source_id) or MessageSyncState(source_id=source_id)
-        if self.offline:
-            return self._failure(config, state, "offline", timestamp)
+        if self.network_paused:
+            return self._failure(config, state, "paused", timestamp)
         if not config.enabled:
             return self._result(config, state.state, timestamp)
         if state.backoff_until and timestamp < state.backoff_until:
@@ -162,8 +187,8 @@ class MessageService:
                     self._validate_snapshot(config, snapshot)
                 except asyncio.CancelledError:
                     raise
-                except MessageOfflineError:
-                    return self._failure(config, state, "offline", timestamp)
+                except MessagePausedError:
+                    return self._failure(config, state, "paused", timestamp)
                 except MessagePermissionRequiredError:
                     return self._failure(config, state, "permission_required", timestamp)
                 except MessageDisconnectedError:
@@ -239,8 +264,8 @@ class MessageService:
     async def get_body(self, source_id: str, message_id: str) -> MessageBody:
         """Fetch only after explicit UI open; keep the result in process memory."""
 
-        if self.offline:
-            raise MessageOfflineError("Message body fetch is paused by offline mode.")
+        if self.network_paused:
+            raise MessagePausedError("Message body fetch is paused.")
         config = self.repository.get_source(source_id)
         source = self._sources.get(source_id)
         if config is None or source is None:
@@ -281,7 +306,7 @@ class MessageService:
         state: str,
         timestamp: datetime,
     ) -> MessageResult:
-        failures = previous.failure_count + (0 if state == "offline" else 1)
+        failures = previous.failure_count + (0 if state == "paused" else 1)
         backoff = previous.backoff_until
         if state in {"stale", "error", "disconnected"}:
             seconds = min(21_600, 60 * (2 ** min(failures, 8)))
@@ -301,7 +326,9 @@ class MessageService:
         )
         self.repository.save_sync_state(updated)
         snapshot = (
-            self._snapshot_from_cache(config, timestamp) if state in {"stale", "offline"} else None
+            self._snapshot_from_cache(config, timestamp)
+            if state in {"stale", "paused", "offline"}
+            else None
         )
         return MessageResult(
             source_id=config.source_id,

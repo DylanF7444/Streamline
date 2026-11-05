@@ -1,4 +1,4 @@
-"""Offline-aware, bounded RSS/Atom refresh orchestration.
+"""Pause-aware, bounded RSS/Atom refresh orchestration.
 
 ``FeedRefreshService`` keeps provider state in memory and is intentionally
 agnostic about SQLite.  A later repository can persist ``FeedSyncState`` and
@@ -20,8 +20,8 @@ from pydantic import ValidationError
 
 from personal_hub.feeds.contracts import (
     FeedBackoff,
-    FeedOfflineError,
     FeedParseError,
+    FeedPausedError,
     FeedPermissionRequiredError,
     FeedPolicyError,
     FeedRedirectError,
@@ -42,7 +42,8 @@ _DEFAULT_SAFE_MESSAGES: dict[str, str] = {
     "ready": "Feed refreshed successfully.",
     "empty": "Feed contains no matching entries.",
     "stale": "Showing the last successful feed snapshot.",
-    "offline": "Feed refresh is paused by offline mode.",
+    "paused": "Feed refresh is paused.",
+    "offline": "Feed is offline.",
     "permission_required": "Feed access requires attention.",
     "disconnected": "Feed origin is unavailable.",
     "error": "Feed refresh failed safely.",
@@ -91,7 +92,7 @@ async def _invoke_fetch(
 
 
 class FeedRefreshService:
-    """Coordinate feed fetches with offline, conditional, and retry safety."""
+    """Coordinate feed fetches with pause, conditional, and retry safety."""
 
     def __init__(
         self,
@@ -100,8 +101,8 @@ class FeedRefreshService:
         *,
         max_concurrency: int = 2,
         max_items: int = 100,
-        offline: bool = False,
-        offline_getter: Callable[[], bool] | None = None,
+        network_paused: bool = False,
+        network_paused_getter: Callable[[], bool] | None = None,
         clock: Callable[[], datetime] | None = None,
         backoff_base_seconds: float = 60.0,
         backoff_max_seconds: float = 3_600.0,
@@ -118,8 +119,8 @@ class FeedRefreshService:
             raise ValueError("Feed max_items must be between 1 and 1000")
         if not 15 <= minimum_refresh_minutes <= 7 * 24 * 60:
             raise ValueError("Feed minimum_refresh_minutes must be between 15 and 10080")
-        if offline_getter is not None and not callable(offline_getter):
-            raise TypeError("offline_getter must be callable")
+        if network_paused_getter is not None and not callable(network_paused_getter):
+            raise TypeError("network_paused_getter must be callable")
         if backoff_base_seconds <= 0 or backoff_max_seconds < backoff_base_seconds:
             raise ValueError("Feed backoff bounds are invalid")
         if not 0 <= jitter_ratio <= 1:
@@ -132,8 +133,10 @@ class FeedRefreshService:
         self.max_items = max_items
         self.minimum_refresh_minutes = minimum_refresh_minutes
         self.timeout_seconds = timeout_seconds
-        self._offline_getter = offline_getter
-        self._offline_value = bool(offline) if offline_getter is None else False
+        self._network_paused_getter = network_paused_getter
+        self._network_paused_value = (
+            bool(network_paused) if network_paused_getter is None else False
+        )
         self._clock = clock or (lambda: datetime.now(UTC))
         self.backoff_base_seconds = float(backoff_base_seconds)
         self.backoff_max_seconds = float(backoff_max_seconds)
@@ -149,20 +152,25 @@ class FeedRefreshService:
         self._backoff: dict[str, FeedBackoff] = {}
 
     @property
-    def offline(self) -> bool:
-        if self._offline_getter is not None:
-            return bool(self._offline_getter())
-        return self._offline_value
+    def network_paused(self) -> bool:
+        if self._network_paused_getter is not None:
+            return bool(self._network_paused_getter())
+        return self._network_paused_value
 
-    @property
-    def offline_mode(self) -> bool:
-        return self.offline
+    def set_network_paused(self, value: bool) -> None:
+        self._network_paused_getter = None
+        self._network_paused_value = bool(value)
+        callback = getattr(self.fetcher, "set_network_paused", None)
+        if callable(callback):
+            callback(value)
 
-    def set_offline(self, value: bool) -> None:
-        self._offline_getter = None
-        self._offline_value = bool(value)
-
-    set_offline_mode = set_offline
+    def set_network_paused_getter(self, getter: Callable[[], bool]) -> None:
+        if not callable(getter):
+            raise TypeError("network_paused_getter must be callable")
+        self._network_paused_getter = getter
+        callback = getattr(self.fetcher, "set_network_paused_getter", None)
+        if callable(callback):
+            callback(getter)
 
     @property
     def subscriptions(self) -> tuple[FeedSubscription, ...]:
@@ -325,8 +333,8 @@ class FeedRefreshService:
         if selected.subscription_id not in self._subscriptions:
             self.register(selected)
         checked_at = _utc_now(now or self._clock())
-        if self.offline:
-            return self._remember(self._offline_result(selected, checked_at))
+        if self.network_paused:
+            return self._remember(self._paused_result(selected, checked_at))
         if not selected.enabled:
             return self._remember(
                 self._result(
@@ -371,10 +379,10 @@ class FeedRefreshService:
         origin_lock = self._origin_locks.setdefault(origin, asyncio.Lock())
         async with lock, origin_lock, self._concurrency:
             # Recheck after waiting for locks so queued work cannot contact the
-            # network after offline mode or backoff was enabled.
+            # network after refresh was paused or backoff was enabled.
             checked_at = _utc_now(now or self._clock())
-            if self.offline:
-                return self._remember(self._offline_result(selected, checked_at))
+            if self.network_paused:
+                return self._remember(self._paused_result(selected, checked_at))
             current_backoff = self._backoff.get(origin)
             if (
                 current_backoff is not None
@@ -577,8 +585,8 @@ class FeedRefreshService:
             )
         except asyncio.CancelledError:
             raise
-        except FeedOfflineError:
-            return self._remember(self._offline_result(subscription, checked_at))
+        except FeedPausedError:
+            return self._remember(self._paused_result(subscription, checked_at))
         except FeedPermissionRequiredError as error:
             return self._remember(self._failure_result(subscription, checked_at, error))
         except BaseException as error:
@@ -643,8 +651,8 @@ class FeedRefreshService:
             result_state: FeedSyncStateValue = "permission_required"
             safe_message = _DEFAULT_SAFE_MESSAGES[result_state]
             backoff_until = None
-        elif isinstance(error, FeedOfflineError):
-            result_state = "offline"
+        elif isinstance(error, FeedPausedError):
+            result_state = "paused"
             safe_message = _DEFAULT_SAFE_MESSAGES[result_state]
             backoff_until = None
         elif isinstance(error, FeedUnavailableError):
@@ -707,14 +715,14 @@ class FeedRefreshService:
     def _clear_origin_backoff(self, subscription: FeedSubscription, _checked_at: datetime) -> None:
         self._backoff.pop(origin_for_url(str(subscription.feed_url)), None)
 
-    def _offline_result(self, subscription: FeedSubscription, checked_at: datetime) -> FeedResult:
+    def _paused_result(self, subscription: FeedSubscription, checked_at: datetime) -> FeedResult:
         snapshot = self._last_good.get(subscription.subscription_id)
         return self._result(
             subscription,
-            "offline",
+            "paused",
             checked_at=checked_at,
             snapshot=snapshot,
-            safe_message=_DEFAULT_SAFE_MESSAGES["offline"],
+            safe_message=_DEFAULT_SAFE_MESSAGES["paused"],
         )
 
     def _not_due_result(

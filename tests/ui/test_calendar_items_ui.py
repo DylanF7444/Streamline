@@ -51,7 +51,7 @@ def test_editor_rejects_nonexistent_or_ambiguous_clock_times(qtbot, day, clock):
 
 
 def test_calendar_add_edit_remove_persists_offline(qtbot, tmp_path, monkeypatch):
-    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub", offline_mode=True))
+    container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
     coordinator = HubDesktopCoordinator(container, window, QApplication.instance())
