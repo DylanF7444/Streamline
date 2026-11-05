@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 
 class _MonthGrid(QCalendarWidget):
-    """Paint content-free activity dots and a distinct outline around today."""
+    """Paint activity dots, a filled today highlight, and a selected-date outline."""
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -26,7 +26,9 @@ class _MonthGrid(QCalendarWidget):
         self.activity: set[QDate] = set()
         self.setObjectName("miniCalendarGrid")
         self.setAccessibleName("Mini calendar month grid")
-        self.setAccessibleDescription("Use arrow keys to select a date and Enter to open Calendar.")
+        self.setAccessibleDescription(
+            "Click or use arrow keys to select a date. Double-click or press Enter to open Calendar."
+        )
         self.setNavigationBarVisible(False)
         self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
         self.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
@@ -36,12 +38,26 @@ class _MonthGrid(QCalendarWidget):
         super().paintCell(painter, rect, value)
         painter.save()
         selected = value == self.selectedDate()
-        color = self.palette().color(
-            QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
+        today = value == self.today
+        palette = self.palette()
+        color = palette.color(
+            QPalette.ColorRole.HighlightedText if today else QPalette.ColorRole.Text
         )
-        painter.setPen(color)
-        if value == self.today:
+        if today:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(palette.color(QPalette.ColorRole.Highlight))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+            painter.setPen(color)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(value.day()))
+        elif selected:
+            painter.fillRect(rect, palette.color(QPalette.ColorRole.Base))
+            painter.setPen(color)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(value.day()))
+        if selected:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(palette.color(QPalette.ColorRole.Highlight))
             painter.drawRect(rect.adjusted(2, 2, -3, -3))
+        painter.setPen(color)
         if value in self.activity:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setBrush(color)
@@ -85,7 +101,7 @@ class MiniCalendar(QWidget):
         self.activity_label.setTextFormat(Qt.TextFormat.PlainText)
         self.activity_label.setWordWrap(True)
         self.activity_label.setToolTip(
-            "Dots mark dates with events or due tasks in loaded data. Select a date to open Calendar."
+            "Dots mark dates with events or due tasks in loaded data. Double-click a date to open Calendar."
         )
         self.activity_label.setAccessibleDescription(self.activity_label.toolTip())
         layout.addWidget(self.activity_label)
@@ -100,7 +116,6 @@ class MiniCalendar(QWidget):
         self.today_button.clicked.connect(self.go_to_today)
         self.grid.currentPageChanged.connect(self._page_changed)
         self.grid.selectionChanged.connect(self._update_activity_label)
-        self.grid.clicked.connect(self._request_date)
         self.grid.activated.connect(self._request_date)
         self._update_month_label()
 
