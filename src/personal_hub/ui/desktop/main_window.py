@@ -72,9 +72,11 @@ from personal_hub.ui.desktop.home_summary import HomeSummary
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.icons import hub_icon
 from personal_hub.ui.desktop.logging_workspace import LoggingWorkspace
-from personal_hub.ui.desktop.mini_calendar import MiniCalendar
+from personal_hub.ui.desktop.metrics_page import MetricsPage
+from personal_hub.ui.desktop.mini_calendar import MiniCalendar, MiniCalendarItem
 from personal_hub.ui.desktop.motion import DisclosureTransition, PageTransition
 from personal_hub.ui.desktop.places_page import PlacesPage
+from personal_hub.ui.desktop.readable import ReadableList, ReadableText, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 from personal_hub.ui.desktop.workspace_navigation import (
     CalendarViewGroupsDialog,
@@ -99,6 +101,7 @@ NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     "Reflection",
     "Summary",
     "Places",
+    "Metrics",
 )
 NAVIGATION_LABELS: Final[tuple[str, ...]] = tuple(
     "Daily overview" if name == "Summary" else name for name in NAVIGATION_DESTINATIONS
@@ -117,10 +120,17 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Reflection": "reflectionButton",
     "Summary": "summaryButton",
     "Places": "placesButton",
+    "Metrics": "metricsButton",
 }
 _WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
 _MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = ("Sources", "Settings")
-_LOGGING_DESTINATIONS: Final[tuple[str, ...]] = ("Summary", "Activity", "Reflection", "Places")
+_LOGGING_DESTINATIONS: Final[tuple[str, ...]] = (
+    "Summary",
+    "Activity",
+    "Reflection",
+    "Places",
+    "Metrics",
+)
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
 
@@ -3741,6 +3751,7 @@ class PersonalHubMainWindow(QMainWindow):
         self._mode_pages = {"Tracking": HOME_DESTINATION, "Logging": "Summary"}
         self.logging_workspace = LoggingWorkspace(self)
         self.places_page = PlacesPage(self)
+        self.metrics_page = MetricsPage(self)
 
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
@@ -3815,6 +3826,8 @@ class PersonalHubMainWindow(QMainWindow):
                 page = self._build_inbox_page()
             elif destination == "Sources":
                 page = self._build_sources_page()
+            elif destination == "Metrics":
+                page = self.metrics_page
             elif destination == "Places":
                 page = self.places_page
             elif destination in _LOGGING_DESTINATIONS:
@@ -3912,7 +3925,7 @@ class PersonalHubMainWindow(QMainWindow):
 
         self._update_persistent_clock()
         self._persistent_clock_timer = QTimer(self)
-        self._persistent_clock_timer.setInterval(30_000)
+        self._persistent_clock_timer.setInterval(1_000)
         self._persistent_clock_timer.timeout.connect(self._update_persistent_clock)
         self._persistent_clock_timer.start()
         return display
@@ -3923,7 +3936,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.clock_date_label.setText(
             f"{local_now.strftime('%B')} {local_now.day}, {local_now.year}"
         )
-        self.clock_time_label.setText(local_now.strftime("%I:%M %p").lstrip("0"))
+        self.clock_time_label.setText(local_now.strftime("%I:%M:%S %p").lstrip("0"))
         timezone_offset = local_now.strftime("%z")
         if len(timezone_offset) == 5:
             timezone_display = f"Local time · UTC{timezone_offset[:3]}:{timezone_offset[3:]}"
@@ -4715,7 +4728,7 @@ class PersonalHubMainWindow(QMainWindow):
         body.setWordWrap(True)
         card_layout.addWidget(body)
 
-        items = QListWidget(card)
+        items = ReadableList(card)
         items.setObjectName("todaySectionItems")
         items.setAccessibleName(f"{section.title} items")
         items.setSelectionMode(QListWidget.SelectionMode.NoSelection)
@@ -4804,21 +4817,51 @@ class PersonalHubMainWindow(QMainWindow):
         first = date(self.mini_calendar.grid.yearShown(), self.mini_calendar.grid.monthShown(), 1)
         start = first - timedelta(days=(first.weekday() + 1) % 7)
         events = self._calendar_events_for_selected()
-        counts: dict[date, int] = {}
+        counts: dict[date, list[int]] = {}
+        day_items: dict[date, list[tuple[float, MiniCalendarItem]]] = {}
+        events_by_id = {event.event_id: event for event in events}
         # Reuse the full calendar's timezone and multi-day clipping semantics.
         for week in range(6):
             schedule = build_hourly_schedule_layout(
                 events, start_date=start + timedelta(days=7 * week), day_count=7, timezone=timezone
             )
             for placement in (*schedule.timed, *schedule.all_day):
-                counts[placement.day] = counts.get(placement.day, 0) + 1
+                event = events_by_id.get(placement.event_id)
+                if event is None:
+                    continue
+                totals = counts.setdefault(placement.day, [0, 0])
+                totals[1 if event.is_task else 0] += 1
+                minute = getattr(placement, "start_minutes", 0)
+                title = self._calendar_event_title(event)
+                kind = "Task" if event.is_task else "Event"
+                if event.all_day:
+                    when = "All day"
+                else:
+                    hour, minute_part = divmod(int(minute), 60)
+                    when = f"{hour:02d}:{minute_part:02d}"
+                item = MiniCalendarItem(title=title, metadata=f"{when} · {kind}")
+                day_items.setdefault(placement.day, []).append((minute, item))
         freshness = self._calendar_view.freshness
+        ready = freshness in {"ready", "empty"} and not self._network_refresh_paused
         status = (
             "Paused · showing saved data"
             if self._network_refresh_paused
             else _CALENDAR_FRESHNESS_MESSAGES[freshness]
         )
-        self.mini_calendar.set_activity(counts, status=status)
+        self.mini_calendar.set_activity(
+            {day: (value[0], value[1]) for day, value in counts.items()},
+            items={
+                day: tuple(
+                    item
+                    for _minute, item in sorted(
+                        values, key=lambda value: (value[0], value[1].title.casefold())
+                    )[:4]
+                )
+                for day, values in day_items.items()
+            },
+            status=status,
+            ready=ready,
+        )
         self.dashboard.refresh_geometry()
 
     def _browse_mini_calendar_month(self, year: int, month: int) -> None:
@@ -5121,7 +5164,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_week_grid_widget.slot_requested.connect(self.calendar_slot_requested.emit)
         self.calendar_week_scroll.setWidget(self.calendar_week_grid_widget)
         self.calendar_week_layout.addWidget(self.calendar_week_scroll)
-        self.calendar_agenda_view = QListWidget()
+        self.calendar_agenda_view = ReadableList()
         self.calendar_agenda_view.setObjectName("calendarAgendaView")
         self.calendar_agenda_view.setAccessibleName("Calendar agenda")
         self.calendar_agenda_view.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -5649,7 +5692,11 @@ class PersonalHubMainWindow(QMainWindow):
                 cell = QFrame()
                 cell.setObjectName("calendarMonthCell")
                 cell.setProperty("calendarDate", current.isoformat())
-                cell.setAccessibleName(f"Calendar day {current.isoformat()}")
+                is_today = current == date.today()
+                cell.setProperty("currentDay", is_today)
+                cell.setAccessibleName(
+                    f"{'Today, ' if is_today else ''}Calendar day {current.isoformat()}"
+                )
                 cell.setMinimumWidth(0)
                 cell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
                 cell_layout = QVBoxLayout(cell)
@@ -5658,6 +5705,9 @@ class PersonalHubMainWindow(QMainWindow):
                 day_label = QLabel(str(current.day))
                 day_label.setObjectName("calendarDayLabel")
                 day_label.setAccessibleName(f"Day {current.isoformat()}")
+                if is_today:
+                    day_label.setText(f"Today · {current.day}")
+                    day_label.setObjectName("calendarTodayLabel")
                 day_label.setTextFormat(Qt.TextFormat.PlainText)
                 day_label.setAlignment(Qt.AlignmentFlag.AlignRight)
                 cell_layout.addWidget(day_label)
@@ -5728,6 +5778,7 @@ class PersonalHubMainWindow(QMainWindow):
             schedule,
             timed_widgets=timed_widgets,
             all_day_widgets=all_day_widgets,
+            today=date.today(),
         )
 
     def _render_calendar_day(self) -> None:
@@ -5771,6 +5822,12 @@ class PersonalHubMainWindow(QMainWindow):
                 color = self._calendar_color_for_event(event)
                 item = QListWidgetItem(f"●  {self._calendar_event_label(event, include_date=True)}")
                 item.setData(Qt.ItemDataRole.UserRole, event.event_id)
+                present_item(
+                    item,
+                    self._calendar_event_title(event),
+                    self._calendar_event_when_label(event),
+                    body=self._calendar_event_source_label(event),
+                )
                 item.setData(Qt.ItemDataRole.UserRole + 1, color)
                 item.setToolTip(self._calendar_event_label(event, include_date=True))
                 if not self._high_contrast:
@@ -7798,7 +7855,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_editor_status.setWordWrap(True)
         grid.addWidget(self.watch_editor_status)
         grid = panel_layout
-        self.watch_list = QListWidget()
+        self.watch_list = ReadableList()
         self.watch_list.setObjectName("watchList")
         self.watch_list.setAccessibleName("Configured webpage watches")
         self.watch_list.setMinimumHeight(120)
@@ -8083,6 +8140,12 @@ class PersonalHubMainWindow(QMainWindow):
                 rendered += f" — {value}"
             item = QListWidgetItem(rendered)
             item.setData(Qt.ItemDataRole.UserRole, watch.watch_id)
+            present_item(
+                item,
+                name,
+                watch.status.replace("_", " "),
+                body="\n".join(part for part in (source, value) if part),
+            )
             item.setToolTip(rendered)
             self.watch_list.addItem(item)
         self.watch_list.setVisible(bool(self._web_watches))
@@ -9097,7 +9160,7 @@ class PersonalHubMainWindow(QMainWindow):
         body_heading.setObjectName("sectionTitle")
         body_heading.setAccessibleName("Memory-only message body heading")
         body_heading.setTextFormat(Qt.TextFormat.PlainText)
-        self.message_body_view = QPlainTextEdit()
+        self.message_body_view = ReadableText()
         self.message_body_view.setObjectName("messageBodyView")
         self.message_body_view.setAccessibleName("Sanitized memory-only message body")
         self.message_body_view.setReadOnly(True)
@@ -9105,7 +9168,7 @@ class PersonalHubMainWindow(QMainWindow):
             "Select a summary and choose View body. Remote content is never loaded."
         )
         self.message_body_view.setMaximumBlockCount(4_000)
-        self.message_link_list = QListWidget()
+        self.message_link_list = ReadableList()
         self.message_link_list.setObjectName("messageBodyLinks")
         self.message_link_list.setAccessibleName("Safe links in the selected message")
         self.message_link_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -9151,7 +9214,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.sources_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.sources_status_label.setWordWrap(True)
         layout.addWidget(self.sources_status_label)
-        self.sources_list = QListWidget()
+        self.sources_list = ReadableList()
         self.sources_list.setObjectName("sourcesList")
         self.sources_list.setAccessibleName("Configured sources")
         self.sources_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -9475,7 +9538,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.diagnostics_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.diagnostics_status_label.setWordWrap(True)
         diagnostics_layout.addWidget(self.diagnostics_status_label)
-        self.diagnostics_list = QListWidget()
+        self.diagnostics_list = ReadableList()
         self.diagnostics_list.setObjectName("diagnosticsList")
         self.diagnostics_list.setAccessibleName("Diagnostics entries")
         self.diagnostics_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
@@ -9535,8 +9598,13 @@ class PersonalHubMainWindow(QMainWindow):
             if compact
             else QFormLayout.RowWrapPolicy.WrapLongRows
         )
+        # The calendar sits inside a padded scroll area, so the main-window
+        # breakpoint does not account for its narrower usable width. Reflow its
+        # toolbar and event inspector before their minimum widths squeeze the
+        # month grid or the hourly columns.
+        calendar_compact = compact or self.calendar_page.viewport().width() < 960
         self.calendar_content_splitter.setOrientation(
-            Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+            Qt.Orientation.Vertical if calendar_compact else Qt.Orientation.Horizontal
         )
         calendar_controls = (
             self.calendar_previous_button,
@@ -9552,7 +9620,7 @@ class PersonalHubMainWindow(QMainWindow):
             self.calendar_toolbar_layout.removeWidget(widget)
         positions = (
             ((0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (2, 1), (3, 0), (3, 1))
-            if compact
+            if calendar_compact
             else tuple((0, index) for index in range(len(calendar_controls)))
         )
         for widget, (row, column) in zip(calendar_controls, positions, strict=True):
@@ -9976,6 +10044,10 @@ class PersonalHubMainWindow(QMainWindow):
             if details:
                 rendered += " — " + " · ".join(details)
             list_item = QListWidgetItem(rendered)
+            # The row widget draws this text in a structured layout. Keep the
+            # item text for accessibility/callers, but prevent Qt from painting
+            # the same text underneath the custom widget.
+            list_item.setForeground(QColor(0, 0, 0, 0))
             list_item.setData(Qt.ItemDataRole.UserRole, item.item_id)
             list_item.setToolTip(rendered)
             self.inbox_list.addItem(list_item)
@@ -10105,6 +10177,10 @@ class PersonalHubMainWindow(QMainWindow):
             if details:
                 rendered += " — " + " · ".join(details)
             item = QListWidgetItem(rendered)
+            # The row widget draws this text in a structured layout. Keep the
+            # item text for accessibility/callers, but prevent Qt from painting
+            # the same text underneath the custom widget.
+            item.setForeground(QColor(0, 0, 0, 0))
             item.setData(
                 Qt.ItemDataRole.UserRole,
                 (summary.source_id, summary.message_id),
@@ -10241,6 +10317,19 @@ class PersonalHubMainWindow(QMainWindow):
                 rendered += f" · Last success: {source.last_success_at}"
             item = QListWidgetItem(rendered)
             item.setData(Qt.ItemDataRole.UserRole, source.source_id)
+            present_item(
+                item,
+                name,
+                status,
+                body="\n".join(
+                    part
+                    for part in (
+                        detail,
+                        f"Last success: {source.last_success_at}" if source.last_success_at else "",
+                    )
+                    if part
+                ),
+            )
             item.setToolTip(rendered)
             self.sources_list.addItem(item)
             if source.source_id == selected_id:
@@ -10580,7 +10669,9 @@ class PersonalHubMainWindow(QMainWindow):
         for failure in view.source_failures:
             name = failure.display_name or failure.source_id
             text = f"{_safe_text(name, limit=180)}: {_safe_text(failure.message)}"
-            self.diagnostics_list.addItem(QListWidgetItem(text))
+            item = QListWidgetItem(text)
+            present_item(item, _safe_text(name, limit=180), _safe_text(failure.message))
+            self.diagnostics_list.addItem(item)
         if self.diagnostics_list.count() == 0:
             self.diagnostics_list.addItem(QListWidgetItem("No diagnostic events recorded."))
 
@@ -10718,6 +10809,7 @@ class PersonalHubMainWindow(QMainWindow):
         return tuple(self._source_failures.values())
 
     def set_privacy_masked(self, masked: bool) -> None:
+        self.metrics_page.set_state(private=bool(masked) or self._locked, locked=self._locked)
         self.logging_workspace.set_private(bool(masked) or self._locked)
         self.places_page.set_state(private=bool(masked) or self._locked)
         self._privacy_masked = bool(masked)
@@ -10747,6 +10839,9 @@ class PersonalHubMainWindow(QMainWindow):
         return self._privacy_masked
 
     def set_locked(self, locked: bool) -> None:
+        self.metrics_page.set_state(
+            private=bool(locked) or self._privacy_masked, locked=bool(locked)
+        )
         self.logging_workspace.set_private(bool(locked) or self._privacy_masked)
         self.places_page.set_state(private=bool(locked) or self._privacy_masked)
         self._locked = bool(locked)

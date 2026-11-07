@@ -190,8 +190,8 @@ timer, inferred hours, score, or streak is involved.
 
 The main window uses a persistent left navigation rail and a content area. A persistent local
 date and time display sits above the page content on every screen, with the weekday, full date,
-12-hour time, and local UTC offset; it updates every 30 seconds. The **Workspace** group contains
-Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
+12-hour time including seconds, and local UTC offset; it updates every second. The **Workspace**
+group contains Home, Calendar, Tasks, Watchlists, and Inbox. Users can rename, reorder, show,
 or hide these pages. The main Calendar includes all available calendars by default. Users can
 create named calendar views that include chosen combinations of calendars; each view opens the
 existing Calendar page scoped to its chosen set. Local task lists appear as individual shortcuts
@@ -1758,3 +1758,13 @@ calendar events, news, watched changes, and bounded message summaries with expli
 freshness, privacy, and notification controls.
 
 The later assistant roadmap remains available, but Personal Hub 1.0 does not depend on it.
+
+## Personal metrics extension — November 6, 2026
+
+Logging now includes a personal metrics subsystem, Android Health Connect step companion,
+manual encrypted metrics snapshots and an opt-in authenticated TLS receiver for approved LAN
+devices and custom sources. This explicitly extends the former outbound-only boundary.
+Metrics remain excluded from the existing shared-state sync and provider relay; Activity and
+Reflection permissions retain their existing behavior. Read PERSONAL_HUB_METRICS.md for
+contracts, source permissions, revision/deletion semantics, setup and acceptance requirements.
+Ring/sleep collection is deferred. Physical-device acceptance is a separate release gate.

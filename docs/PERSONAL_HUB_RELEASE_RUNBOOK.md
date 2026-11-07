@@ -271,3 +271,13 @@ commit and artifact hashes:
 - user/privacy documentation matches the candidate.
 
 Phase 8 AI work is optional, disabled, and not a condition of non-AI 1.0.
+
+## Metrics extension gate
+
+Run tests/test_metrics.py, tests/test_metrics_receiver.py and tests/ui/test_metrics_ui.py,
+then the complete Hub lane. Build the Android companion and run its JVM tests using the
+commands in PERSONAL_HUB_METRICS.md. Actual step collection, Android permission UI and
+battery restrictions require device acceptance; record those separately from loopback and
+fixture evidence. Verify snapshots and LAN delivery of the same records deduplicate.
+Do not include device credentials, TLS private keys, SDK installations or signing keys in
+release/source artifacts. Inspect the desktop package after adding aiohttp.

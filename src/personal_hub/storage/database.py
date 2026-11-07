@@ -602,6 +602,29 @@ class HubVisitRow(HubBase):
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class HubMetricDefinitionRow(HubBase):
+    __tablename__ = "hub_metric_definitions"
+    metric_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
+    primary_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class HubMetricSourceRow(HubBase):
+    __tablename__ = "hub_metric_sources"
+    source_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
+
+
+class HubMeasurementRow(HubBase):
+    __tablename__ = "hub_measurements"
+    source_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    metric_id: Mapped[str] = mapped_column(String(64), index=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class HubDatabase:
     """Small, explicit database boundary used by the Hub composition root."""
 
@@ -622,7 +645,8 @@ class HubDatabase:
     # Declarative table creation remains idempotent so an older backup can be
     # restored and then migrated safely.
     # Version 14 adds Logging; version 15 adds local places and visit history.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 15
+    # Version 16 adds personal metric definitions, sources and measurements.
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 16
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -748,7 +772,12 @@ class HubDatabase:
         14: REQUIRED_TABLES | {"hub_activity", "hub_reflections"},
         15: REQUIRED_TABLES | {"hub_activity", "hub_reflections", "hub_places", "hub_visits"},
     }
-    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[15]
+    REQUIRED_TABLES_BY_VERSION[16] = REQUIRED_TABLES_BY_VERSION[15] | {
+        "hub_metric_definitions",
+        "hub_metric_sources",
+        "hub_measurements",
+    }
+    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[16]
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path).expanduser().resolve(strict=False)

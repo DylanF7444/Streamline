@@ -152,7 +152,8 @@ async def test_network_pause_getter_is_checked_before_queued_provider_invocation
     first_result = await first
     second_result = await second
 
-    assert first_result.state is SourceState.READY
+    assert first_result.state is SourceState.PAUSED
+    assert first_result.snapshot is None
     assert second_result.state is SourceState.PAUSED
     assert source.calls == ["refresh"]
 

@@ -72,7 +72,6 @@ def test_hourly_calendar_places_due_task_and_exposes_addable_time_slots(qtbot) -
         window.calendar_day_grid.HEADER_HEIGHT
         + window.calendar_day_grid.ALL_DAY_MINIMUM_HEIGHT
         + task_placement.start_minutes / 60 * window.calendar_day_grid.HOUR_HEIGHT
-        + window.calendar_day_grid.EVENT_GAP
     )
     assert abs(task_row.geometry().y() - expected_y) <= 2
 

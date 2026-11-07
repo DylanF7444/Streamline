@@ -86,11 +86,15 @@ are available from **Customize dashboard → Add widget**. The count cards show 
 unread Hub alerts, and today's recorded activity. Privacy masking and lock hide these counts.
 **Overview updated** refers to the local overview; each source retains its own freshness state.
 
-The **Mini calendar** shows a compact month grid with an outline around today and dots on
-dates with loaded events or due tasks from selected calendars. Use the arrows to browse months
-or **Today** to return to the current date. Select a date (or press Enter on a selected date)
-to open its full Calendar day view. The widget shows calendar freshness and offline status;
-markers reflect available data. The separate **Agenda** widget retains the event list.
+The **Mini calendar** shows a compact month grid with an outline around today. Blue bars mark
+dates with loaded calendar events; accent bars mark dates with due tasks from selected
+calendars. A split bar marks dates with both. The selected date shows separate event and task
+counts plus a short list with bold titles and separate time/type details. Long titles wrap;
+activate an entry to open that day in Calendar. When more than four items are scheduled,
+use **Open day in Calendar** to see the rest. Use the arrows to browse months or **Today** to return
+to the current date. Press Enter on a selected date to open its full Calendar day view. The
+widget shows calendar freshness and offline status; markers reflect available data. The
+separate **Agenda** widget retains the event list.
 
 Use **Customize dashboard → Edit layout** to arrange your space. Drag the visible move handle in a widget heading
 to place it on the 48-step horizontal grid. Vertical positions and heights snap in 6-pixel
@@ -157,6 +161,11 @@ local deletion marker so later feed refreshes do not recreate removed tasks. Can
 never modified.
 
 ### Logging: Daily overview, Activity, and Reflection
+
+Daily totals appear as separate cards. Activity uses date headings and spacious entries:
+the work title comes first, followed by time, entry type, list, tags, and any entered duration.
+Select an entry to read its labeled details and notes. Long titles wrap, and cards stack
+in narrow windows. Reflection history also separates each title from its date.
 
 **Daily overview** brings the day's completed tasks, logged progress, and reflection together.
 It replaces Summary and is the initial Logging landing page; your remembered Logging page
@@ -455,3 +464,16 @@ your local data. Keep a separate backup before changing or removing a shared fol
 
 See `PERSONAL_HUB_PRIVACY.md` for the exact data boundary and
 `PERSONAL_HUB_RELEASE_RUNBOOK.md` for release-only acceptance steps.
+
+## Personal metrics in Logging
+
+The Overview tab separates **Daily values** from **Measurement records** in labeled tables.
+The records table includes timestamps, values, units, timezones, record IDs, and revisions;
+it shows up to 200 records. Selected daily metrics appear as cards in Daily overview.
+Devices and transfer groups source permissions, network pairing, and snapshot files separately.
+
+Open Logging > Metrics to define measurements, review trends and daily totals, choose primary
+sources, and manage devices. Both manual encrypted files and paired local-network transfer
+are available. The Android companion collects permitted Health Connect steps; sleep/ring
+connections are deferred. Sources and Settings include a link to device and privacy controls.
+See PERSONAL_HUB_METRICS.md for complete setup, custom CSV/JSON imports and sender examples.

@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
@@ -33,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.places.contracts import MapPosition, Place, Visit
+from personal_hub.ui.desktop.readable import ReadableDetails, ReadableList, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
@@ -275,15 +275,18 @@ class PlacesPage(QScrollArea):
         self.state.currentIndexChanged.connect(self.render)
         content.addLayout(filters)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.items = QListWidget()
+        self.items = ReadableList()
         self.items.setAccessibleName("Saved places")
         self.items.setMinimumHeight(170)
         self.items.currentItemChanged.connect(lambda *_: self.select_place(focus=True))
         self.splitter.addWidget(self.items)
         detail = QWidget()
         details = QVBoxLayout(detail)
-        self.details = label("Save a place or select one to see its visit history.")
-        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details = ReadableDetails()
+        self.details.setPlainText("Save a place or select one to see its visit history.")
+        self.details.setAccessibleName("Selected place details and notes")
+        self.details.setMinimumHeight(140)
+        self.details.setMaximumHeight(240)
         details.addWidget(self.details)
         actions = self.actions_grid = QGridLayout()
         self.visit_button = QPushButton("Log visit")
@@ -293,7 +296,7 @@ class PlacesPage(QScrollArea):
         self.delete_button = QPushButton("Delete place")
         self.delete_button.clicked.connect(self.delete_place)
         details.addLayout(actions)
-        self.history = QListWidget()
+        self.history = ReadableList()
         self.history.setAccessibleName("Visits to selected place, newest date first")
         self.history.setMinimumHeight(100)
         details.addWidget(self.history)
@@ -498,6 +501,11 @@ class PlacesPage(QScrollArea):
                 state = "Visited" if place.place_id in visited else "Want to visit"
                 item = QListWidgetItem(f"{'★ ' if place.favorite else ''}{place.name} · {state}")
                 item.setData(Qt.ItemDataRole.UserRole, str(place.place_id))
+                present_item(
+                    item,
+                    ("★ " if place.favorite else "") + place.name,
+                    " · ".join(part for part in (place.category, state) if part),
+                )
                 self.items.addItem(item)
                 if selected and selected.place_id == place.place_id:
                     self.items.setCurrentItem(item)
@@ -525,15 +533,22 @@ class PlacesPage(QScrollArea):
         self.history.clear()
         self.remove_visit_button.setEnabled(False)
         if place is None:
-            self.details.setText("Save a place or select one to see its visit history.")
+            self.details.setPlainText("Save a place or select one to see its visit history.")
             return
         visits = [visit for visit in self.visits if visit.place_id == place.place_id]
-        self.details.setText(
-            f"{place.name}\n{place.category} · {len(visits)} visits\n{place.latitude:.6f}, {place.longitude:.6f}\n{place.notes}"
+        self.details.show_details(
+            place.name,
+            (
+                ("Category", place.category),
+                ("History", f"{len(visits)} visits"),
+                ("Coordinates", f"{place.latitude:.6f}, {place.longitude:.6f}"),
+            ),
+            place.notes,
         )
         for visit in visits:
             item = QListWidgetItem(f"{visit.visited_on.isoformat()}  {visit.notes}")
             item.setData(Qt.ItemDataRole.UserRole, str(visit.visit_id))
+            present_item(item, visit.visited_on.strftime("%A, %B %d, %Y"), visit.notes)
             self.history.addItem(item)
         if self.browser and focus:
             self.browser.go_to(

@@ -1,0 +1,309 @@
+{
+  "$defs": {
+    "DeviceEnrollment": {
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "maxLength": 256,
+          "minLength": 32,
+          "title": "Token",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "source_id"
+      ],
+      "title": "DeviceEnrollment",
+      "type": "object"
+    },
+    "Measurement": {
+      "additionalProperties": false,
+      "properties": {
+        "record_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Record Id",
+          "type": "string"
+        },
+        "metric_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+          "title": "Metric Id",
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000.0,
+              "minimum": -1000000000000000.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "unit": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        },
+        "timezone": {
+          "default": "UTC",
+          "maxLength": 100,
+          "title": "Timezone",
+          "type": "string"
+        },
+        "reporting_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reporting Date"
+        }
+      },
+      "required": [
+        "record_id",
+        "metric_id",
+        "revision",
+        "unit",
+        "start"
+      ],
+      "title": "Measurement",
+      "type": "object"
+    },
+    "MeasurementBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "personal-hub-metrics-v1",
+          "default": "personal-hub-metrics-v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/Measurement"
+          },
+          "maxItems": 1000,
+          "title": "Records",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_id",
+        "records"
+      ],
+      "title": "MeasurementBatch",
+      "type": "object"
+    },
+    "MetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "metric_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+          "title": "Metric Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        },
+        "kind": {
+          "default": "point",
+          "enum": [
+            "point",
+            "interval",
+            "session"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "aggregation": {
+          "default": "latest",
+          "enum": [
+            "sum",
+            "latest",
+            "min",
+            "max",
+            "mean",
+            "duration"
+          ],
+          "title": "Aggregation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric_id",
+        "name",
+        "unit"
+      ],
+      "title": "MetricDefinition",
+      "type": "object"
+    },
+    "MetricSource": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "metric_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Metric Ids",
+          "type": "array"
+        },
+        "revoked": {
+          "default": false,
+          "title": "Revoked",
+          "type": "boolean"
+        },
+        "last_received_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Received At"
+        },
+        "reporting_timezone": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reporting Timezone"
+        }
+      },
+      "required": [
+        "source_id",
+        "name",
+        "metric_ids"
+      ],
+      "title": "MetricSource",
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "personal-hub-metrics-snapshot-v1",
+          "default": "personal-hub-metrics-snapshot-v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/MetricSource"
+        },
+        "definitions": {
+          "items": {
+            "$ref": "#/$defs/MetricDefinition"
+          },
+          "maxItems": 64,
+          "title": "Definitions",
+          "type": "array"
+        },
+        "batches": {
+          "items": {
+            "$ref": "#/$defs/MeasurementBatch"
+          },
+          "maxItems": 100,
+          "title": "Batches",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source",
+        "definitions",
+        "batches"
+      ],
+      "title": "Snapshot",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/MeasurementBatch"
+    },
+    {
+      "$ref": "#/$defs/Snapshot"
+    },
+    {
+      "$ref": "#/$defs/DeviceEnrollment"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Personal Hub Metrics v1"
+}

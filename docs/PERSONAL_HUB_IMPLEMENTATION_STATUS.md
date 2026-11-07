@@ -8,6 +8,37 @@ authoritative product and technical specification is
 acceptance evidence from release evidence that needs real provider accounts, private signing
 material, assistive-technology users, a clean Windows VM, or elapsed wall-clock time.
 
+## Readable history and detail views — November 6, 2026
+
+Mini calendar follow-up: selected-day events and tasks now share the wrapping title/context
+row presentation, with explicit all-day or local-time labels. Up to four entries appear in a
+bounded list; an overflow action opens the full day. Refresh preserves unchanged rows and
+keyboard selection. Thirteen focused Home calendar, dashboard integration, and accessibility
+cases passed in isolated processes, including populated narrow/large-text layouts, timezone
+conversion, privacy, overflow, and empty states. Dark, light, and high-contrast previews were
+rendered and inspected. Ruff, documentation consistency, and diff whitespace checks passed.
+
+Reviewed desktop text-heavy surfaces. Activity and Reflection history, Home widget lists,
+Calendar agenda, watchlists, sources, diagnostics, saved places, and visit history now use
+wrapping rows with clearer titles and context. Daily overview and selected daily metrics
+use responsive summary cards. Activity and place notes use labeled, selectable detail
+views; message bodies retain inert plain text with more line spacing. Metrics separates
+daily values and bounded measurement records into labeled, copyable tables, and groups
+transfer controls by purpose. Existing Tasks, Inbox, and News card layouts are preserved.
+
+Presentation changes retain record identities, keyboard actions, filters, pagination,
+privacy masking, lock, and external-content escaping. No schema, provider permissions,
+data retention, or network behavior changes are included in this presentation update.
+
+Validation: all 309 non-UI tests passed with `python -m pytest tests --ignore=tests/ui -q`.
+All 117 collected UI cases passed in fresh pytest processes with three concurrent workers;
+combined runs were replaced because accumulated Qt global styling caused excessive runtime.
+The four added UI cases cover wrapping and long identifiers, literal external markup,
+Logging privacy clearing, and exact metric records/copying. Repository-wide Ruff formatting
+and lint, documentation consistency, and `git diff --check` passed. Rendered previews were
+inspected in dark, light, narrow, and high-contrast layouts, including daily cards and metrics
+tables. Preview images and per-case results remain in ignored `.benchmark-data/`.
+
 ## Charcoal and mint desktop presentation — November 4, 2026
 
 Implemented the reviewed dashboard style in the native desktop application: charcoal
@@ -665,3 +696,52 @@ powershell -ExecutionPolicy Bypass -File scripts/test_personal_hub.ps1 -Lane all
 The fast lane ignores the Qt UI directory and excludes only the slower core checks marked
 `hub_slow`; it still includes the Hub architecture, storage, provider, controller, and
 security regressions. The complete `all` lane remains the required pre-release check.
+
+
+## Personal metrics center — November 6, 2026
+
+Implemented the Windows metrics workspace, schema 16 repositories, source permissions,
+primary-source summaries, CSV/JSON imports, encrypted snapshot import/export, replay suppression,
+and opt-in paired LAN receiver. Added the Android Health Connect step companion, durable Room
+queue, optional background reads, local-network transfer and encrypted file export. Ring/sleep
+collection remains deferred by user selection. See `PERSONAL_HUB_METRICS.md` for setup and the
+public protocol, and `metrics-v1.schema.json` for the versioned machine-readable interface.
+
+Integration also synchronizes the window/Places pause state after controller network gates
+change, so direct pause calls stop the renderer and unpause can resume it. Existing user edits
+were retained. Regression expectations were updated for schema 16, Metrics navigation, the
+existing exact calendar grid alignment, safe in-flight pause behavior and current packaging path.
+
+Validation on this Windows workspace:
+
+- All 309 core tests passed: `python -m pytest tests --ignore=tests/ui -q`.
+- All 113 UI cases passed in separate pytest processes, including focused reruns after fixes.
+  The monolithic all-lane run was attempted, then replaced by isolated UI runs because repeated
+  Qt global styling of accumulated windows caused excessive runtime. The complete core and UI
+  collection is covered; initial failures and reruns are retained in ignored evidence logs.
+- Metrics tests cover file/LAN duplicate delivery, corrections, permission narrowing,
+  revocation, invalid values, DST reporting days, custom values/sessions, old-backup restore,
+  source impersonation, bad TLS pins, enrollment expiry/reuse, oversized uploads and deletion
+  suppression. Synthetic encryption fixtures are shared with Android JVM tests.
+- Android: `:app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug`
+  passed. Three JVM tests passed. Four additional instrumentation tests compile into the test
+  APK but were not executed: no emulator or Android device was connected (`adb devices` empty).
+  Lint reports zero errors and eighteen warnings, including dependency update suggestions and
+  the deliberately pinned self-signed TLS trust manager.
+- Ruff lint and repository-wide formatting, documentation consistency, `git diff --check`,
+  and the pre-desktop import/Assistant isolation probe passed.
+- PyInstaller executable and Inno Setup installer builds passed. Archive/analysis inspection
+  found no forbidden dependencies or missing required prefixes. Candidates are unsigned.
+- Accelerated seven-day bounded-growth reliability passed (168 virtual hours, six restarts).
+  This is explicitly not a real 24-hour soak or physical health-device acceptance.
+
+Local artifacts: `dist/PersonalHub.exe`,
+`dist/personal-hub/PersonalHub-0.1.0-Setup.exe`, and
+`mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+SDKs, build caches, private device state and generated artifacts are excluded from source control.
+
+Remaining acceptance: install the companion on a supported phone; exercise real Health Connect
+permission grant/denial/revocation, actual step recording, battery restrictions, disconnected
+queues and the same-day snapshot/LAN workflow. Run the compiled instrumentation tests on a
+phone or emulator. Public release signing and the existing clean-VM/manual release gates remain
+separate requirements. Automated loopback/fake evidence does not claim physical-device success.

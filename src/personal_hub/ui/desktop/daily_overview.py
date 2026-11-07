@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.ui.desktop.readable import ReadableList, SummaryCards, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
@@ -63,14 +63,16 @@ class DailyOverview(QWidget):
         self.caption = QLabel()
         self.caption.setWordWrap(True)
         layout.addWidget(self.caption)
-        self.facts = QPlainTextEdit()
+        self.facts = SummaryCards()
         self.facts.setObjectName("dailyOverviewFacts")
-        self.facts.setReadOnly(True)
-        self.facts.setTabChangesFocus(True)
         self.facts.setAccessibleName("Daily overview totals")
         layout.addWidget(self.facts)
-        self.completed = self._section("Tasks completed", layout)
-        self.progress = self._section("Logged progress", layout)
+        self.completed = self._section(
+            "Tasks completed", layout, "dailyOverviewCompleted", "Tasks completed"
+        )
+        self.progress = self._section(
+            "Logged progress", layout, "dailyOverviewProgress", "Logged progress"
+        )
         self.more = QPushButton("Load more of this day's activity")
         self.more.clicked.connect(self.load_more)
         layout.addWidget(self.more)
@@ -114,21 +116,21 @@ class DailyOverview(QWidget):
         self._size_sections()
 
     @staticmethod
-    def _section(title, layout):
+    def _section(title, layout, object_name, accessible_title):
         group = QGroupBox(title)
         content = QVBoxLayout(group)
-        entries = QListWidget()
-        entries.setAccessibleName(f"Daily overview · {title}")
+        entries = ReadableList()
+        entries.setObjectName(object_name)
+        entries.setAccessibleName(f"Daily overview · {accessible_title}")
         entries.setWordWrap(True)
         content.addWidget(entries)
         layout.addWidget(group)
         return entries
 
     def _size_sections(self):
-        self.facts.setFixedHeight(self.facts.fontMetrics().lineSpacing() * 4 + 20)
         for entries in (self.completed, self.progress):
             rows = max(1, min(entries.count(), 4))
-            height = entries.fontMetrics().lineSpacing() * 2 * rows + 20
+            height = entries.fontMetrics().lineSpacing() * 3 * rows + 20
             entries.setFixedHeight(max(70, min(220, height)))
 
     def changeEvent(self, event):
@@ -137,6 +139,7 @@ class DailyOverview(QWidget):
             self._size_sections()
 
     def set_compact(self, compact):
+        self.facts.set_compact(compact)
         for index, control in enumerate((self.previous, self.date, self.next, self.today)):
             self.date_actions.removeWidget(control)
             self.date_actions.addWidget(control, index if compact else 0, 0 if compact else index)
@@ -176,13 +179,14 @@ class DailyOverview(QWidget):
         self.caption.setText(f"{self.day:%A, %B %d, %Y} · {self.timezone}")
         self.caption.setToolTip("Corrected (undone) completions are excluded from totals.")
         duration = facts["duration_minutes"]
-        self.facts.setPlainText(
-            f"Tasks completed: {facts['task_completion']}\n"
-            f"Manual progress entries: {facts['manual']}\n"
-            + (
-                f"Sum of durations you entered: {duration} minutes"
-                if duration is not None
-                else "Duration was not tracked."
+        self.facts.set_cards(
+            (
+                ("Tasks completed", facts["task_completion"]),
+                ("Manual progress entries", facts["manual"]),
+                (
+                    "Sum of durations you entered",
+                    f"{duration} minutes" if duration is not None else "Duration was not tracked.",
+                ),
             )
         )
         self.completed.clear()
@@ -192,8 +196,14 @@ class DailyOverview(QWidget):
             context = [entry.list_name or "No list", *(f"#{tag}" for tag in entry.tags)]
             if entry.duration_minutes is not None:
                 context.append(f"{entry.duration_minutes} minutes entered")
-            item = QListWidgetItem(f"{local:%H:%M} · {entry.description}\n" + " · ".join(context))
-            target = self.completed if entry.kind == "task_completion" else self.progress
+            if entry.kind == "task_completion":
+                item_text = f"✓  {local:%H:%M}  {entry.description}\n    " + " · ".join(context)
+                target = self.completed
+            else:
+                item_text = f"↗  {local:%H:%M}  {entry.description}\n    " + " · ".join(context)
+                target = self.progress
+            item = QListWidgetItem(item_text)
+            present_item(item, entry.description, f"{local:%H:%M} · " + " · ".join(context))
             target.addItem(item)
         total = facts["task_completion"] + facts["manual"]
         for widget, kind, empty in (

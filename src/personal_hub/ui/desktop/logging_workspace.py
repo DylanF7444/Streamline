@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
@@ -32,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
 from personal_hub.ui.desktop.daily_overview import DailyOverview
+from personal_hub.ui.desktop.readable import ReadableDetails, ReadableList, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
@@ -352,17 +352,20 @@ class LoggingWorkspace(QObject):
         actions = QGridLayout()
         self.action_layouts.append(actions)
         self.add_button = _button("Log progress", self.log_progress, actions)
+        self.add_button.setProperty("hubAccent", True)
         self.edit_button = _button("Edit entry / note", self.edit_activity, actions)
         self.delete_button = _button("Delete entry", self.delete_activity, actions)
         layout.addLayout(actions)
-        self.activity_list = QListWidget()
+        self.activity_list = ReadableList()
+        self.activity_list.setMinimumHeight(260)
         self.activity_list.setAccessibleName("Activity grouped by local date, newest first")
         self.activity_list.currentItemChanged.connect(self._activity_selected)
         self.activity_list.itemActivated.connect(lambda _: self.edit_activity())
         layout.addWidget(self.activity_list, 1)
-        self.activity_detail = QPlainTextEdit()
-        self.activity_detail.setReadOnly(True)
-        self.activity_detail.setMaximumHeight(150)
+        self.activity_detail = ReadableDetails()
+        self.activity_detail.setMinimumHeight(150)
+        self.activity_detail.setMaximumHeight(240)
+        self.activity_detail.setPlaceholderText("Select an entry to see its details and notes.")
         self.activity_detail.setAccessibleName("Activity details and notes")
         layout.addWidget(self.activity_detail)
         actions = QGridLayout()
@@ -386,7 +389,7 @@ class LoggingWorkspace(QObject):
         )
         layout.addLayout(actions)
         split = QSplitter(Qt.Orientation.Vertical)
-        self.reflection_list = QListWidget()
+        self.reflection_list = ReadableList()
         self.reflection_list.setAccessibleName("Saved reflections by date")
         self.reflection_list.currentItemChanged.connect(self._reflection_selected)
         split.addWidget(self.reflection_list)
@@ -502,19 +505,19 @@ class LoggingWorkspace(QObject):
         )
         self.reflect_button.setEnabled(bool(entry) and not self.masked)
         if entry and not self.masked:
-            parts = [
-                entry.description,
-                entry.notes,
-                f"List: {entry.list_name or 'No list'}",
-                f"Tags: {', '.join(entry.tags) or 'None'}",
+            fields = [
+                ("List", entry.list_name or "No list"),
+                ("Tags", ", ".join(entry.tags) or "None"),
             ]
             if entry.task_id and str(entry.task_id) not in dict(self.tasks):
-                parts.append("Original task is no longer available. History is preserved.")
+                fields.append(
+                    ("Linked task", "Original task is no longer available. History is preserved.")
+                )
             if entry.duration_minutes is not None:
-                parts.append(f"Duration you entered: {entry.duration_minutes} minutes")
+                fields.append(("Duration you entered", f"{entry.duration_minutes} minutes"))
             if entry.undone_at:
-                parts.append("Undone · excluded from completed counts")
-            self.activity_detail.setPlainText("\n\n".join(part for part in parts if part))
+                fields.append(("Status", "Undone · excluded from completed counts"))
+            self.activity_detail.show_details(entry.description, fields, entry.notes)
         else:
             self.activity_detail.clear()
 
@@ -528,12 +531,21 @@ class LoggingWorkspace(QObject):
             local = entry.occurred_at.astimezone(ZoneInfo(self.timezone))
             if local.date() != previous_date:
                 item = QListWidgetItem(local.date().isoformat())
+                present_item(item, local.strftime("%A, %B %d, %Y"), section=True)
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self.activity_list.addItem(item)
                 previous_date = local.date()
             kind = "Completed task" if entry.kind == "task_completion" else "Manual progress"
             correction = " · Undone" if entry.undone_at else ""
             item = QListWidgetItem(f"{local:%H:%M} · {kind}{correction} · {entry.description}")
+            context = [f"{local:%H:%M}", kind + correction]
+            if entry.list_name:
+                context.append(entry.list_name)
+            if entry.duration_minutes is not None:
+                context.append(f"{entry.duration_minutes} minutes entered")
+            if entry.tags:
+                context.append(" ".join(f"#{tag}" for tag in entry.tags))
+            present_item(item, entry.description, " · ".join(context))
             item.setData(Qt.ItemDataRole.UserRole, str(entry.entry_id))
             self.activity_list.addItem(item)
             if selected and selected.entry_id == entry.entry_id:
@@ -650,6 +662,7 @@ class LoggingWorkspace(QObject):
         self.reflection_list.clear()
         for entry in entries:
             item = QListWidgetItem(f"{entry.display_date} · {entry.title or 'Untitled reflection'}")
+            present_item(item, entry.title or "Untitled reflection", str(entry.display_date))
             item.setData(Qt.ItemDataRole.UserRole, str(entry.reflection_id))
             self.reflection_list.addItem(item)
             if self.reflection and self.reflection.reflection_id == entry.reflection_id:

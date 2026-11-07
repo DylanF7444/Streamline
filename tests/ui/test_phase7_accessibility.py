@@ -36,7 +36,7 @@ def test_minimum_window_and_maximum_supported_text_scale_keep_all_destinations_a
     assert set(window.navigation_buttons) == set(NAVIGATION_DESTINATIONS)
     for mode, workspace_pages in (
         ("Tracking", {"Home", "Calendar", "Tasks", "Watchlists", "Inbox"}),
-        ("Logging", {"Activity", "Reflection", "Summary", "Places"}),
+        ("Logging", {"Activity", "Reflection", "Summary", "Places", "Metrics"}),
     ):
         window.set_workspace_mode(mode)
         visible_pages = workspace_pages | {"Sources", "Settings"}

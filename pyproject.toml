@@ -9,6 +9,7 @@ description = "Local-first Windows attention dashboard"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "aiohttp>=3.12,<4",
   "certifi>=2024.7.4,<2027",
   "cryptography>=50,<51",
   "defusedxml>=0.7,<1",

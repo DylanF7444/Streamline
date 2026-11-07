@@ -97,6 +97,8 @@ from personal_hub.messages import (
     MessageSyncState,
 )
 from personal_hub.messages.categories import MessageCategory
+from personal_hub.metrics.contracts import STEPS
+from personal_hub.metrics.repository import MetricsRepository
 from personal_hub.places.contracts import Place, Visit
 from personal_hub.places.repository import PlacesRepository
 from personal_hub.reminders import DurableReminderClaimStore, ReminderService
@@ -301,6 +303,9 @@ class HubController:
         self.activity_repository = ActivityRepository(selected_database)
         self.reflection_repository = ReflectionRepository(selected_database)
         self.places_repository = PlacesRepository(selected_database)
+        self.metrics_repository = MetricsRepository(selected_database)
+        self.metrics_receiver = None
+        self.metrics_locked = False
         self._owns_database = owns_database
         self.settings_repository = settings_repository or SettingsRepository(selected_database)
         self.sync_service = sync_service or SyncService(self.settings_repository)
@@ -448,6 +453,8 @@ class HubController:
         """Set the session-only refresh pause for standalone controller use."""
 
         self._network_paused = bool(paused)
+        if paused and self.metrics_receiver:
+            self.metrics_receiver.stop()
 
     @property
     def is_closed(self) -> bool:
@@ -3411,6 +3418,22 @@ class HubController:
                 item.model_dump(mode="json") for item in self.list_message_summaries(limit=1_000)
             ],
         }
+        payload["metrics"] = {
+            "definitions": [
+                d.model_dump(mode="json") for d in self.metrics_repository.definitions()
+            ],
+            "sources": [s.model_dump(mode="json") for s in self.metrics_repository.sources()],
+            "records": [],
+        }
+        offset = 0
+        while True:
+            page = self.metrics_repository.records(limit=1000, offset=offset)
+            if not page:
+                break
+            payload["metrics"]["records"].extend(
+                {"source_id": source, **record.model_dump(mode="json")} for source, record in page
+            )
+            offset += len(page)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{selected.name}.",
             suffix=".tmp",
@@ -3451,8 +3474,11 @@ class HubController:
         destination: Path | str | None = None,
     ) -> Path:
         self._ensure_open()
+        if self.metrics_receiver:
+            self.metrics_receiver.stop()
         restored = restore_database(self.database, source, destination=destination)
         if _same_path(restored, self.database.path):
+            self.metrics_repository.define(STEPS)
             self._settings = _load_controller_settings(
                 self.settings_repository,
                 defaults=self._settings_defaults,
@@ -3484,6 +3510,8 @@ class HubController:
 
         if not self._closed or self._refresh_tasks:
             await self.cancel_refreshes()
+        if self.metrics_receiver:
+            self.metrics_receiver.stop()
         self.message_service.clear_bodies()
         self._closed = True
         if close_database is None:
@@ -3501,6 +3529,8 @@ class HubController:
         :meth:`shutdown`, which waits until cancelled source work has unwound.
         """
 
+        if self.metrics_receiver:
+            self.metrics_receiver.stop()
         self.message_service.clear_bodies()
         self._closed = True
         current = asyncio.current_task() if _has_running_loop() else None

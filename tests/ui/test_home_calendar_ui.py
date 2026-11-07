@@ -17,6 +17,7 @@ from personal_hub.ui.desktop.main_window import (
     TodayView,
     create_main_window,
 )
+from personal_hub.ui.desktop.readable import PRESENTATION_ROLE
 
 
 def test_home_is_default_and_legacy_today_links_and_tray_open_home(qtbot):
@@ -84,8 +85,20 @@ def test_mini_calendar_marks_selected_timezone_and_multiday_data_without_titles(
     assert "Stale" in mini.status_label.text()
     mini.grid.setSelectedDate(QDate(2026, 9, 30))
     assert "2 events" in mini.activity_label.text()
+    assert mini.items_list.count() == 2
+    assert mini.items_list.item(0).data(PRESENTATION_ROLE)[:2] == (
+        "Private trip",
+        "All day · Event",
+    )
+    assert mini.items_list.item(1).data(PRESENTATION_ROLE)[:2] == (
+        "Private meeting",
+        "21:00 · Event",
+    )
     window.set_privacy_masked(True)
     assert all("Private" not in label.text() for label in mini.findChildren(QLabel))
+    assert all(
+        "Private" not in mini.items_list.item(row).text() for row in range(mini.items_list.count())
+    )
     window.set_calendar_selection(())
     assert mini.grid.activity == set()
     window.set_network_refresh_paused(True)
@@ -128,6 +141,23 @@ def test_mini_calendar_fits_dashboard_at_minimum_window_size(qtbot, scale):
         text_scale=scale, high_contrast=True, reduced_motion=True
     )
     window.resize(*window.MINIMUM_SIZE)
+    window.render_today(TodayView(local_date="2026-11-11"))
+    window.render_calendar(
+        CalendarView(
+            events=(
+                CalendarEventView(
+                    "holiday", "Veterans Day", starts_at=date(2026, 11, 11), all_day=True
+                ),
+                CalendarEventView(
+                    "task",
+                    "Final Project: Topic Selection " * 6,
+                    starts_at=datetime(2026, 11, 11, 15, tzinfo=UTC),
+                    item_kind="task",
+                ),
+            ),
+            timezone="UTC",
+        )
+    )
     window.show()
     window.dashboard.set_widget_size("mini_calendar", "compact")
     qtbot.wait(25)
@@ -137,5 +167,35 @@ def test_mini_calendar_fits_dashboard_at_minimum_window_size(qtbot, scale):
     assert mini.grid.height() >= mini.grid.minimumSizeHint().height()
     assert mini.geometry().bottom() < card.height()
     assert mini.grid.geometry().bottom() < mini.activity_label.geometry().top()
+    assert mini.items_list.count() == 2
+    assert mini.items_list.horizontalScrollBar().maximum() == 0
+    assert mini.items_list.geometry().bottom() < mini.status_label.geometry().top()
     assert window.dashboard.remove_widget("mini_calendar")
     assert window.dashboard.add_widget("mini_calendar")
+
+
+def test_mini_calendar_bounded_rows_open_day_and_empty_state(qtbot):
+    window = create_main_window(close_to_tray=False)
+    qtbot.addWidget(window)
+    window.render_today(TodayView(local_date="2026-11-11"))
+    window.render_calendar(
+        CalendarView(
+            timezone="UTC",
+            events=tuple(
+                CalendarEventView(
+                    str(index), f"Meeting {index}", starts_at=datetime(2026, 11, 11, 15, tzinfo=UTC)
+                )
+                for index in range(6)
+            ),
+        )
+    )
+    mini = window.mini_calendar
+    assert mini.items_list.count() == 4
+    assert mini.more_button.text().startswith("+2 more")
+    assert not mini.more_button.isHidden()
+    mini.more_button.click()
+    assert window.active_destination == "Calendar"
+    assert window.current_calendar_date == date(2026, 11, 11)
+    mini.grid.setSelectedDate(QDate(2026, 11, 12))
+    assert mini.items_list.count() == 0 and mini.items_list.isHidden()
+    assert not mini.empty_label.isHidden() and mini.more_button.isHidden()

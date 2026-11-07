@@ -58,7 +58,7 @@ def _signed_manifest(payload: bytes) -> tuple[HubUpdateManifest, bytes]:
 
 def test_personal_hub_spec_is_one_product_and_explicitly_excludes_assistant_stacks() -> None:
     text = (ROOT / "packaging" / "personal-hub.spec").read_text(encoding="utf-8")
-    assert "../src/personal_hub/app.py" in text
+    assert 'hub_source / "personal_hub" / "app.py"' in text
     assert 'name="PersonalHub"' in text
     assert 'collect_submodules("personal_hub")' in text
     assert 'collect_submodules("assistant")' not in text

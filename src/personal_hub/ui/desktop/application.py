@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QSignalBlocker, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog, QPushButton
 
 from personal_hub.calendar.contracts import CalendarQuery, CalendarResult
 from personal_hub.calendar.google_sync import CalendarSyncReport
@@ -732,6 +732,13 @@ class HubDesktopCoordinator(QObject):
             container.controller, window, refresh_home=self.render_task_surfaces
         )
         self.places_coordinator = PlacesCoordinator(container.controller, window)
+        window.metrics_page.bind(container.controller, window.logging_workspace.daily)
+        for name in ("Sources", "Settings"):
+            target = window.page_widgets[name]
+            target = target.widget() if hasattr(target, "widget") else target
+            button = QPushButton("Metrics devices, transfers, and privacy")
+            button.clicked.connect(lambda: window.show_destination("Metrics"))
+            target.layout().addWidget(button)
         self.render_all()
         window.restore_workspace_mode(container.settings_repository.get("workspace_modes", None))
         window.calendar_mode_changed.connect(self._save_calendar_mode)
@@ -3593,6 +3600,8 @@ class HubDesktopCoordinator(QObject):
             return
         self.container.lifecycle.set_network_paused(paused)
         self.container.controller.set_network_paused(paused)
+        with QSignalBlocker(self.window):
+            self.window.set_network_refresh_paused(paused)
         if paused and self._global_refresh_thread is not None:
             self._global_refresh_thread.cancel()
         if paused and self._refresh_thread is not None:

@@ -267,3 +267,13 @@ Deterministic tests use synthetic provider-shaped data and ephemeral cryptograph
 do not prove a real Google, Microsoft, or Slack tenant/test instance; possession of a
 production signing key; a 24-hour elapsed tray soak; or a clean-VM user experience. Those checks are mandatory in
 `PERSONAL_HUB_RELEASE_RUNBOOK.md` and must not be inferred from offline test success.
+
+## Personal metrics
+
+Steps and custom readings are private local data retained until explicit deletion. Metrics
+can arrive only through approved file imports or the explicitly enabled paired LAN receiver.
+Network pause and lock stop the receiver. Masking hides values and enrollment secrets.
+Metrics are included in database backups and explicit exports, and excluded from operational
+diagnostics, existing shared-state sync, and provider relay. Revocation stops future ingestion;
+deletion retains opaque suppression identities to prevent replay. Android retains its own
+Health Connect originals and queued readings. See PERSONAL_HUB_METRICS.md for details.

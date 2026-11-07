@@ -1,0 +1,11 @@
+{
+  "description": "Synthetic interoperability fixture; fixed test keys only. Never use these parameters for real data.",
+  "passphrase": "a long test passphrase",
+  "plaintext": "{\"format\":\"personal-hub-metrics-snapshot-v1\",\"source\":{\"source_id\":\"fixture-phone\",\"name\":\"Fixture phone\",\"metric_ids\":[\"steps\"],\"revoked\":false,\"last_received_at\":null,\"reporting_timezone\":null},\"definitions\":[{\"metric_id\":\"steps\",\"name\":\"Steps\",\"unit\":\"count\",\"kind\":\"interval\",\"aggregation\":\"sum\"}],\"batches\":[{\"format\":\"personal-hub-metrics-v1\",\"source_id\":\"fixture-phone\",\"records\":[{\"record_id\":\"steps:UTC:2026-11-01\",\"metric_id\":\"steps\",\"revision\":1,\"value\":1234.0,\"unit\":\"count\",\"start\":\"2026-11-01T00:00:00Z\",\"end\":\"2026-11-02T00:00:00Z\",\"timezone\":\"UTC\",\"reporting_date\":\"2026-11-01\"}]}]}",
+  "envelope": {
+    "format": "personal-hub-metrics-encrypted-v1",
+    "salt": "AAECAwQFBgcICQoLDA0ODw==",
+    "nonce": "AAECAwQFBgcICQoL",
+    "ciphertext": "rx7O9gV9Oh2B56kE4Q5y4FM2jaLA6o6hxdq9/WLqQj2HJPzkoZ6LMiiVC/Vbs3dpMlDPNwrwcHGIAdcOpySpe/dT7gY2mAg2FyrtkzFbtVQY7VeKK0lLw9VJ42ss04s5WgFFdObHag54pEsQNs9pNTMu7QkI25sszdCpgfCz5D92wbOiKCO5+bJtppMthJSaQEEToDwlLQqmj8lxBGNJmUWYH+hnsxhjGSmfbl/Awm1Zh5QYGxTBCQj/yA1s5zO9buENpEkHkySzootG7f9YQoqQgJZCEa8JDwjg1b8UHebrlF56SBLB/ZtrORHDvNGgPmOKVjrbDULsa7zOW8oPv1btDIMt7qfd4hXaJSgVezbecekk/er7sdhJMfImy+fyPFuklFgvkJraqDpw4OQin0LDic9v89ZVw8o1fSUW1+5wFHkTxMirpBuTH6jClGQ4mD62k34xmYdv4ypNmXDjho6I4dcoRDhXzGj/oM9ZRcxGQCJfL5KiQqfliYKWEAcensmJiTvRArxl5Yqxos1H8I4I+U7l5WMF9U4yfhWWuQpGlIQBhFtJOuKXvXlcwdTLjJykPq3w+p1IkyKC+U3okkvimou7ytABtRDP9WYlZNeYoijsA7GqDL4API7pFAq7NUSFp9NXgyvNj6hwquoLdGD01Os2D5D9TtT7nTPTpRz6aSMYSEVSAy1AbKgz0nQ+84KCJ+JAq1wgGuxw6xcl+V0QPsBddlJcWGqMEl6l8YbcBlaMmqxrDD5SzckVNG9NDLs867Q8loajeAG1LCGkdDiG6qw+fXo3fs5Eq3L+P+DQr5ysJ68="
+  }
+}

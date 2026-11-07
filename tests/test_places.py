@@ -64,7 +64,7 @@ def test_version14_migrates_additively_and_validates_new_tables(tmp_path):
     assert database._validate_database_file(database.path) == 14
     database.migrate()
     database.migrate()
-    assert database._validate_database_file(database.path) == 15
+    assert database._validate_database_file(database.path) == HubDatabase.CURRENT_SCHEMA_VERSION
     database.close()
 
 

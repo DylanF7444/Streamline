@@ -25,6 +25,7 @@ EXPECTED_NAVIGATION = (
     "Reflection",
     "Summary",
     "Places",
+    "Metrics",
 )
 
 

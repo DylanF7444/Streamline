@@ -391,6 +391,17 @@ QFrame[hubSurface="true"], QFrame[hubCard="true"], QWidget[hubWidget="true"] {{
     background: {input_background};
 }}
 
+QFrame#calendarMonthCell[currentDay="true"] {{
+    background: {selected};
+    border: 1px solid {accent};
+    border-radius: 5px;
+}}
+
+QLabel#calendarTodayLabel {{
+    color: {accent};
+    font-weight: 700;
+}}
+
 #pageHeader, #calendarToolbar, #taskViewBar, #messageCategoryBar,
 #calendarContentSplitter, #taskContentSplitter, #messageContentSplitter {{
     background: transparent;
@@ -656,6 +667,15 @@ QTreeWidget::item:selected, QTableView::item:selected {{
     selection-color: {page_text};
 }}
 
+QFrame#miniCalendarStatusDot {{
+    background: #e35d64;
+    border-radius: 4px;
+}}
+
+QFrame#miniCalendarStatusDot[ready="true"] {{
+    background: #45cf86;
+}}
+
 QCheckBox, QRadioButton {{
     color: {surface_text};
     spacing: 7px;
@@ -766,6 +786,10 @@ QGroupBox {{ margin-top: 12px; padding: 14px 10px 10px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {surface_text}; }}
 #homeSummaryLabel {{ color: {muted_text}; font-size: 9pt; }}
 #homeSummaryValue {{ color: {accent}; font-size: 21pt; font-weight: 600; }}
+#readingSummaryCard {{ background: {surface}; border: 1px solid {border}; border-radius: 10px; }}
+#readingSummaryCaption {{ color: {muted_text}; }}
+#readingSummaryValue {{ color: {accent}; font-size: 16pt; font-weight: 600; }}
+QHeaderView::section {{ background: {surface}; color: {surface_text}; border: 0; padding: 8px; }}
 #dashboardWidgetCard {{ border-radius: 12px; }}
 #dashboardGridPanel {{ background: transparent; border-color: {border}; border-radius: 12px; }}
 #dashboardOpenButton {{
@@ -776,6 +800,10 @@ QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color
 #todaySectionItems::item {{ padding: 10px 2px; border-bottom: 1px solid {border}; }}
 #loggingActivityPage, #loggingReflectionPage, #loggingSummaryPage {{ background: {background}; }}
 #dailyOverviewFacts {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+#dailyOverviewCompleted, #dailyOverviewProgress {{ background: transparent; border: 0; }}
+#dailyOverviewCompleted::item, #dailyOverviewProgress::item {{
+    padding: 7px 4px; border-bottom: 1px solid {border};
+}}
 #appearanceHeader {{ background: transparent; }}
 #appearancePresetCard, #appearanceColorsCard, #appearanceMotionCard {{
     border: 1px solid {border}; border-radius: 10px;
@@ -794,6 +822,8 @@ QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
         override += """
 
 /* High contrast reinforcement */
+#readingSummaryCard { background: #000000; border: 2px solid #ffffff; }
+#readingSummaryCaption, #readingSummaryValue { color: #ffffff; }
 QMainWindow, QWidget, QDialog, QScrollArea, QScrollArea > QWidget > QWidget {
     background: #000000;
     color: #ffffff;

@@ -51,6 +51,7 @@ class HourlyCalendarGrid(QWidget):
         self._all_day_height = self.ALL_DAY_MINIMUM_HEIGHT
         self._day_width = self.DAY_MINIMUM_WIDTH
         self._time_top = self.HEADER_HEIGHT + self._all_day_height
+        self._today = date.today()
 
     @property
     def day_columns(self) -> dict[date, QFrame]:
@@ -70,6 +71,7 @@ class HourlyCalendarGrid(QWidget):
         *,
         timed_widgets: Mapping[tuple[str, int], QWidget],
         all_day_widgets: Mapping[tuple[str, int], QWidget],
+        today: date | None = None,
     ) -> None:
         """Replace the visible schedule and reflow supplied event widgets."""
 
@@ -77,6 +79,7 @@ class HourlyCalendarGrid(QWidget):
             raise ValueError("hourly calendar grids support one or seven days")
         self._clear_dynamic_widgets()
         self._layout = layout
+        self._today = today or date.today()
         self._all_day_height = self._calculate_all_day_height(layout)
         self._time_top = self.HEADER_HEIGHT + self._all_day_height
         for day_index in range(layout.day_count):
@@ -125,23 +128,40 @@ class HourlyCalendarGrid(QWidget):
             QRect(self.TIME_COLUMN_WIDTH, self.HEADER_HEIGHT, width, self._all_day_height),
             base,
         )
+        today_index = (self._today - self._layout.start_date).days
+        if self._layout.day_count > 1 and 0 <= today_index < self._layout.day_count:
+            today_x = int(self.TIME_COLUMN_WIDTH + today_index * self._day_width)
+            today_color = palette.color(QPalette.ColorRole.Highlight)
+            today_color.setAlpha(28)
+            painter.fillRect(
+                QRect(today_x + 1, 0, max(1, int(self._day_width) - 1), self.height()),
+                today_color,
+            )
+            header_color = palette.color(QPalette.ColorRole.Highlight)
+            header_color.setAlpha(70)
+            painter.fillRect(
+                QRect(today_x + 1, 0, max(1, int(self._day_width) - 1), self.HEADER_HEIGHT),
+                header_color,
+            )
         painter.setPen(grid)
         painter.drawLine(self.TIME_COLUMN_WIDTH, 0, self.TIME_COLUMN_WIDTH, self.height())
         for index in range(self._layout.day_count + 1):
             x = self.TIME_COLUMN_WIDTH + index * self._day_width
             painter.drawLine(x, 0, x, self.height())
         for hour in range(25):
-            y = self._time_top + hour * self.HOUR_HEIGHT
+            y = self._time_y(hour * 60)
             painter.drawLine(self.TIME_COLUMN_WIDTH, y, self.width(), y)
             if hour < 24:
                 painter.setPen(text)
+                label_height = painter.fontMetrics().height()
+                label_top = y + 2 if hour == 0 else y - label_height - 2
                 painter.drawText(
-                    QRect(4, y + 4, self.TIME_COLUMN_WIDTH - 10, 20),
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                    QRect(4, label_top, self.TIME_COLUMN_WIDTH - 10, label_height),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     f"{hour:02d}:00",
                 )
                 painter.setPen(grid)
-                half_y = y + self.HOUR_HEIGHT // 2
+                half_y = self._time_y(hour * 60 + 30)
                 painter.drawLine(self.TIME_COLUMN_WIDTH, half_y, self.width(), half_y)
         painter.setPen(text)
         for day_index in range(self._layout.day_count):
@@ -150,11 +170,15 @@ class HourlyCalendarGrid(QWidget):
             )
             x = self.TIME_COLUMN_WIDTH + day_index * self._day_width
             label = f"{current.strftime('%a')} {current.day}"
+            if self._layout.day_count > 1 and current == self._today:
+                painter.setPen(palette.color(QPalette.ColorRole.Highlight))
+                label = f"Today · {label}"
             painter.drawText(
                 QRect(x + 8, 0, self._day_width - 16, self.HEADER_HEIGHT),
                 Qt.AlignmentFlag.AlignCenter,
                 label,
             )
+            painter.setPen(text)
         painter.drawText(
             QRect(4, self.HEADER_HEIGHT, self.TIME_COLUMN_WIDTH - 10, self._all_day_height),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
@@ -248,7 +272,7 @@ class HourlyCalendarGrid(QWidget):
             day_index, hour = divmod(index, 24)
             slot.setGeometry(
                 int(self.TIME_COLUMN_WIDTH + day_index * self._day_width + 1),
-                self._time_top + hour * self.HOUR_HEIGHT + 1,
+                self._time_y(hour * 60) + 1,
                 max(1, int(self._day_width) - 2),
                 self.HOUR_HEIGHT - 2,
             )
@@ -271,12 +295,18 @@ class HourlyCalendarGrid(QWidget):
             day_x = self.TIME_COLUMN_WIDTH + placement.day_index * self._day_width
             column_width = self._day_width / max(1, placement.column_count)
             x = day_x + placement.column * column_width + self.EVENT_GAP
-            y = self._time_top + placement.start_minutes / 60 * self.HOUR_HEIGHT + self.EVENT_GAP
+            y = self._time_y(placement.start_minutes)
             height = max(
-                25, placement.duration_minutes / 60 * self.HOUR_HEIGHT - 2 * self.EVENT_GAP
+                25,
+                placement.duration_minutes / 60 * self.HOUR_HEIGHT - self.EVENT_GAP,
             )
             width = max(1, column_width - 2 * self.EVENT_GAP)
             widget.setGeometry(int(x), int(y), int(width), int(height))
+
+    def _time_y(self, minutes: float) -> int:
+        """Map local minutes after midnight to the matching grid-line coordinate."""
+
+        return round(self._time_top + minutes / 60 * self.HOUR_HEIGHT)
 
     def _widget_for(
         self, placement: HourlySchedulePlacement | AllDaySchedulePlacement

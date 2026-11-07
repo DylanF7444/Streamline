@@ -33,7 +33,7 @@ def test_local_place_and_repeat_visits_edit_filter_and_delete(ui):
     window.show_destination("Places")
     view = window.places_page
     assert window.workspace_mode == "Logging" and view.browser is None
-    assert "Offline" in view.status.text()
+    assert "remain available" in view.status.text()
     view.add_button.click()
     view.dialog.name.setText("Library")
     view.dialog.latitude.setValue(41)
@@ -48,7 +48,7 @@ def test_local_place_and_repeat_visits_edit_filter_and_delete(ui):
         view.dialog.notes.setPlainText("Read a book")
         view.dialog.save()
     assert len(hub.list_visits()) == view.history.count() == 2
-    assert "2 visits" in view.details.text()
+    assert "2 visits" in view.details.toPlainText()
     view.edit_button.click()
     view.dialog.name.setText("Main library")
     view.dialog.favorite.setChecked(True)
@@ -90,7 +90,7 @@ def test_mask_lock_clears_private_controls_rejects_dialog_and_blocks_mutations(u
     dialog.notes.setPlainText("Unsaved writing")
     window.set_privacy_masked(True)
     assert view.private and view.content.isHidden()
-    assert view.items.count() == view.history.count() == 0 and not view.details.text()
+    assert view.items.count() == view.history.count() == 0 and not view.details.toPlainText()
     assert not dialog.isVisible()
     dialog.save()
     assert not hub.list_visits()

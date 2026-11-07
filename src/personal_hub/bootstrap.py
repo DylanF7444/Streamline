@@ -214,6 +214,18 @@ def build_hub_container(
             network_paused_getter=lambda: lifecycle.network_activity_paused,
             diagnostics=diagnostics,
         )
+        from personal_hub.metrics.receiver import MetricsReceiver
+
+        controller.metrics_receiver = MetricsReceiver(
+            controller.metrics_repository,
+            secret_vault,
+            settings_repository,
+            blocked=lambda: (
+                controller.is_closed
+                or controller.network_requests_paused
+                or controller.metrics_locked
+            ),
+        )
         return HubContainer(
             settings=persisted_settings,
             database=database,
