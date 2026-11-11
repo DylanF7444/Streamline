@@ -514,7 +514,14 @@ class LoggingWorkspace(QObject):
                     ("Linked task", "Original task is no longer available. History is preserved.")
                 )
             if entry.duration_minutes is not None:
-                fields.append(("Duration you entered", f"{entry.duration_minutes} minutes"))
+                fields.append(
+                    (
+                        "Timed duration"
+                        if entry.duration_source == "timer"
+                        else "Duration you entered",
+                        f"{entry.duration_minutes} minutes",
+                    )
+                )
             if entry.undone_at:
                 fields.append(("Status", "Undone · excluded from completed counts"))
             self.activity_detail.show_details(entry.description, fields, entry.notes)
@@ -542,7 +549,7 @@ class LoggingWorkspace(QObject):
             if entry.list_name:
                 context.append(entry.list_name)
             if entry.duration_minutes is not None:
-                context.append(f"{entry.duration_minutes} minutes entered")
+                context.append(f"{entry.duration_minutes} minutes ({entry.duration_source})")
             if entry.tags:
                 context.append(" ".join(f"#{tag}" for tag in entry.tags))
             present_item(item, entry.description, " · ".join(context))

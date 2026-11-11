@@ -1,5 +1,9 @@
 # Personal Hub Tracking and Logging Proposal
 
+November 9, 2026: screen-time deferral is superseded by the implemented Windows-only
+extension documented in `PERSONAL_HUB_SCREEN_TIME.md`. Screen time has its own records;
+Activity and Reflection retain the meanings described here.
+
 - **Status:** Implemented October 28, 2026; acceptance evidence in `PERSONAL_HUB_LOGGING_IMPLEMENTATION.md`
 - **Date:** October 28, 2026
 - **Related specification:** `PERSONAL_HUB_IMPLEMENTATION_PLAN.md`
@@ -9,6 +13,10 @@ the initial Logging landing page and combines one day's factual activity with an
 Reflection editor and previous/next/date/Today navigation. Screen-time tracking is deferred.
 This supersedes the Summary presentation below; record and privacy boundaries remain the
 same. See `PERSONAL_HUB_LOGGING_IMPLEMENTATION.md` for current implementation details.
+
+November 9, 2026: `PERSONAL_HUB_TASK_TIMERS.md` supersedes the timer deferral and entered-only
+duration decision below. Optional explicit timers can produce measured Activity progress;
+completion facts remain separate and immutable.
 
 ## Summary
 

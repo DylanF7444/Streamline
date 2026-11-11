@@ -26,6 +26,7 @@ class ActivityEntry(HubContract):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     description: str = Field(min_length=1, max_length=240)
     notes: str = Field(default="", max_length=20_000)
+    duration_source: Literal["entered", "timer"] = "entered"
     duration_minutes: int | None = Field(default=None, ge=1, le=525_600)
     task_id: UUID | None = None
     occurrence_key: str | None = Field(default=None, max_length=256)

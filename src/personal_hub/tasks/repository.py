@@ -444,6 +444,9 @@ class TaskRepository:
             if row.state == "archived":
                 return self._contract(row)
             if row.state != "completed":
+                from personal_hub.tasks.focus import settle_focus
+
+                settle_focus(session, row, timestamp)
                 row.state = "completed"
                 row.completed_at = _db_time(timestamp)
                 row.updated_at = max(
@@ -722,6 +725,9 @@ class TaskRepository:
             external_url=row.external_url,
             state=cast(Any, row.state),
             priority=cast(Any, row.priority),
+            time_mode=cast(Any, row.time_mode),
+            target_minutes=row.target_minutes,
+            log_focus_duration=row.log_focus_duration,
             due_at=_contract_time(row.due_at),
             due_is_all_day=row.due_is_all_day,
             timezone=row.timezone,
@@ -756,6 +762,13 @@ class TaskRepository:
         if row is None:
             row = HubTaskRow(task_id=identifier)
             session.add(row)
+        from personal_hub.tasks.focus import discard_changed_focus
+
+        if row.title is not None:
+            discard_changed_focus(session, row, task)
+        row.time_mode = task.time_mode
+        row.target_minutes = task.target_minutes
+        row.log_focus_duration = task.log_focus_duration
         row.title = task.title
         row.notes = task.notes
         row.external_url = task.external_url
@@ -932,6 +945,12 @@ class TaskRepository:
             row = session.get(HubTaskRow, identifier)
             if row is None:
                 return None
+            if state == "archived":
+                from personal_hub.storage.database import HubFocusSessionRow
+
+                session.execute(
+                    delete(HubFocusSessionRow).where(HubFocusSessionRow.task_id == identifier)
+                )
             row.state = state
             row.updated_at = max(_db_time(timestamp), row.updated_at + timedelta(microseconds=1))
             if clear_completed:

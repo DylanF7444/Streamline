@@ -733,6 +733,7 @@ class HubDesktopCoordinator(QObject):
         )
         self.places_coordinator = PlacesCoordinator(container.controller, window)
         window.metrics_page.bind(container.controller, window.logging_workspace.daily)
+        window.screen_time_page.bind(container.controller, window)
         for name in ("Sources", "Settings"):
             target = window.page_widgets[name]
             target = target.widget() if hasattr(target, "widget") else target
@@ -749,6 +750,9 @@ class HubDesktopCoordinator(QObject):
         window.calendar_deep_link_requested.connect(self._open_calendar_event)
         window.calendar_task_completion_changed.connect(self._calendar_task_completion_changed)
         window.calendar_slot_requested.connect(self._calendar_slot_requested)
+        from personal_hub.ui.desktop.focus_coordinator import FocusCoordinator
+
+        self.focus_coordinator = FocusCoordinator(self)
         self._scheduler_timer = QTimer(self)
         self._scheduler_timer.setInterval(60_000)
         self._scheduler_timer.setSingleShot(False)
@@ -822,6 +826,8 @@ class HubDesktopCoordinator(QObject):
         self.places_coordinator.refresh()
 
     def render_task_surfaces(self) -> None:
+        if hasattr(self, "focus_coordinator"):
+            self.focus_coordinator.refresh()
         self.logging_coordinator.refresh()
         task_lists = self.container.controller.list_task_lists()
         self.window.set_workspace_task_lists(task_lists)
@@ -2097,6 +2103,9 @@ class HubDesktopCoordinator(QObject):
 
     def _task_changes(self, view: TaskView, *, include_identity: bool) -> dict[str, object]:
         values: dict[str, object] = {
+            "time_mode": view.time_mode,
+            "target_minutes": view.target_minutes,
+            "log_focus_duration": view.log_focus_duration,
             "title": view.title,
             "notes": view.notes,
             "external_url": view.external_url or None,
@@ -3702,8 +3711,10 @@ class HubDesktopCoordinator(QObject):
         self.window.logging_workspace.flush()
         if self._closed:
             return
+        self.focus_coordinator.close()
         self._closed = True
         self.places_coordinator.close()
+        self.window.screen_time_page.close_runtime()
         self._scheduler_timer.stop()
         self._system_notification_timer.stop()
         self._pending_system_notifications.clear()
@@ -3829,6 +3840,9 @@ def _task_view(task: Any, *, lists: Mapping[str, str]) -> TaskView:
     external_url = _task_native_url(task)
     return TaskView(
         task_id=str(task.task_id),
+        time_mode=task.time_mode,
+        target_minutes=task.target_minutes,
+        log_focus_duration=task.log_focus_duration,
         title=task.title,
         notes=task.notes,
         external_url=external_url or "",

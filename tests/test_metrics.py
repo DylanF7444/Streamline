@@ -232,7 +232,7 @@ def test_schema15_upgrade_adds_metrics_without_erasing_other_state(tmp_path):
         connection.execute("UPDATE hub_schema_migrations SET version=15")
     assert database._validate_database_file(database.path) == 15
     database.migrate()
-    assert database._validate_database_file(database.path) == 16
+    assert database._validate_database_file(database.path) == HubDatabase.CURRENT_SCHEMA_VERSION
     assert MetricsRepository(database).definitions() == [STEPS]
     database.close()
 

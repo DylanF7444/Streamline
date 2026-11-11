@@ -184,7 +184,7 @@ class DailyOverview(QWidget):
                 ("Tasks completed", facts["task_completion"]),
                 ("Manual progress entries", facts["manual"]),
                 (
-                    "Sum of durations you entered",
+                    "Logged duration (entered and timed)",
                     f"{duration} minutes" if duration is not None else "Duration was not tracked.",
                 ),
             )
@@ -195,7 +195,7 @@ class DailyOverview(QWidget):
             local = entry.occurred_at.astimezone(ZoneInfo(self.timezone))
             context = [entry.list_name or "No list", *(f"#{tag}" for tag in entry.tags)]
             if entry.duration_minutes is not None:
-                context.append(f"{entry.duration_minutes} minutes entered")
+                context.append(f"{entry.duration_minutes} minutes ({entry.duration_source})")
             if entry.kind == "task_completion":
                 item_text = f"✓  {local:%H:%M}  {entry.description}\n    " + " · ".join(context)
                 target = self.completed

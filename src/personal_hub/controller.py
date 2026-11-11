@@ -25,6 +25,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from personal_hub import __version__
+from personal_hub.browser_time.repository import BrowserTimeRepository
 from personal_hub.calendar.contracts import (
     CalendarQuery,
     CalendarResult,
@@ -102,6 +103,7 @@ from personal_hub.metrics.repository import MetricsRepository
 from personal_hub.places.contracts import Place, Visit
 from personal_hub.places.repository import PlacesRepository
 from personal_hub.reminders import DurableReminderClaimStore, ReminderService
+from personal_hub.screen_time.repository import ScreenTimeRepository
 from personal_hub.sources import (
     SourceDefinition,
     SourceRegistry,
@@ -303,6 +305,10 @@ class HubController:
         self.activity_repository = ActivityRepository(selected_database)
         self.reflection_repository = ReflectionRepository(selected_database)
         self.places_repository = PlacesRepository(selected_database)
+        self.screen_time_repository = ScreenTimeRepository(selected_database)
+        self.screen_time_runtime = None
+        self.browser_time_repository = BrowserTimeRepository(selected_database)
+        self.browser_time_runtime = None
         self.metrics_repository = MetricsRepository(selected_database)
         self.metrics_receiver = None
         self.metrics_locked = False
@@ -3348,6 +3354,22 @@ class HubController:
         self._ensure_open()
         self.places_repository.delete_visit(visit_id)
 
+    def _export_focus_sessions(self) -> list[dict[str, object]]:
+        from sqlalchemy import select
+
+        from personal_hub.storage.database import HubFocusSessionRow
+
+        with self.database.session() as session:
+            return [
+                {
+                    "task_id": row.task_id,
+                    "elapsed_seconds": row.elapsed_seconds,
+                    "reached": row.reached,
+                    "running": False,
+                }
+                for row in session.scalars(select(HubFocusSessionRow)).all()
+            ]
+
     def export_local_data(
         self,
         destination: Path | str,
@@ -3390,8 +3412,17 @@ class HubController:
                 item.model_dump(mode="json") for item in self.list_source_connections()
             ],
             "tasks": [item.model_dump(mode="json") for item in tasks],
+            "focus_sessions": self._export_focus_sessions(),
             "places": [item.model_dump(mode="json") for item in self.list_places()],
             "visits": [item.model_dump(mode="json") for item in self.list_visits()],
+            "screen_time": [
+                item.model_dump(mode="json") for item in self.screen_time_repository.all()
+            ],
+            "browser_time": [
+                item.model_dump(mode="json") for item in self.browser_time_repository.all()
+            ],
+            "browser_time_settings": self.settings_repository.get("browser_time.settings", {}),
+            "screen_time_settings": self.settings_repository.get("screen_time.settings", {}),
             "activity": [item.model_dump(mode="json") for item in self.activity_repository.all()],
             "reflections": [
                 item.model_dump(mode="json") for item in self.reflection_repository.all()
@@ -3476,8 +3507,15 @@ class HubController:
         self._ensure_open()
         if self.metrics_receiver:
             self.metrics_receiver.stop()
+        if self.browser_time_runtime:
+            self.browser_time_runtime.pause()
+        if self.screen_time_runtime:
+            self.screen_time_runtime.pause()
         restored = restore_database(self.database, source, destination=destination)
         if _same_path(restored, self.database.path):
+            from personal_hub.tasks.focus import FocusRepository
+
+            FocusRepository(self.database).recover()
             self.metrics_repository.define(STEPS)
             self._settings = _load_controller_settings(
                 self.settings_repository,
@@ -3508,6 +3546,10 @@ class HubController:
     async def shutdown(self, *, close_database: bool | None = None) -> None:
         """Stop refresh work and optionally close a database owned by this controller."""
 
+        if self.browser_time_runtime:
+            self.browser_time_runtime.pause()
+        if self.screen_time_runtime:
+            self.screen_time_runtime.pause()
         if not self._closed or self._refresh_tasks:
             await self.cancel_refreshes()
         if self.metrics_receiver:
@@ -3529,6 +3571,10 @@ class HubController:
         :meth:`shutdown`, which waits until cancelled source work has unwound.
         """
 
+        if self.browser_time_runtime:
+            self.browser_time_runtime.pause()
+        if self.screen_time_runtime:
+            self.screen_time_runtime.pause()
         if self.metrics_receiver:
             self.metrics_receiver.stop()
         self.message_service.clear_bodies()

@@ -26,6 +26,7 @@ EXPECTED_NAVIGATION = (
     "Summary",
     "Places",
     "Metrics",
+    "Screen time",
 )
 
 

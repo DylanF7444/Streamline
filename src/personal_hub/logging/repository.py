@@ -144,6 +144,11 @@ class ActivityRepository:
             )
             if set(changes).difference(allowed):
                 raise ValueError("completion facts and record identity cannot be edited")
+            if (
+                "duration_minutes" in changes
+                and changes["duration_minutes"] != current.duration_minutes
+            ):
+                changes["duration_source"] = "entered"
             entry = ActivityEntry.model_validate(
                 {
                     **current.model_dump(),

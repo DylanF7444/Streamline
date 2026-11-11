@@ -45,6 +45,32 @@ class HubBase(DeclarativeBase):
     """Declarative metadata owned exclusively by Personal Hub."""
 
 
+class HubScreenTimeRow(HubBase):
+    __tablename__ = "hub_screen_time_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    app: Mapped[str] = mapped_column(String(160), nullable=False)
+    start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("ix_hub_screen_time_interval", "start", "end"),
+        Index("ix_hub_screen_time_end", "end", "start"),
+    )
+
+
+class HubBrowserTimeRow(HubBase):
+    __tablename__ = "hub_browser_time_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    domain: Mapped[str] = mapped_column(String(253), nullable=False)
+    browser: Mapped[str] = mapped_column(String(16), nullable=False)
+    start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (Index("ix_hub_browser_time_interval", "start", "end"),)
+
+
 class HubSchemaVersionRow(HubBase):
     __tablename__ = "hub_schema_migrations"
 
@@ -172,6 +198,9 @@ class HubTaskRow(HubBase):
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     external_url: Mapped[str | None] = mapped_column(String(1_024))
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    time_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    target_minutes: Mapped[int | None] = mapped_column(Integer)
+    log_focus_duration: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_is_all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -195,6 +224,21 @@ class HubTaskRow(HubBase):
         Index("ix_hub_tasks_completed_at", "completed_at"),
         Index("ix_hub_tasks_series_occurrence", "series_id", "occurrence_index"),
     )
+
+
+class HubFocusSessionRow(HubBase):
+    """Device-local focus progress; never starts automatically after recovery."""
+
+    __tablename__ = "hub_focus_sessions"
+
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("hub_tasks.task_id", ondelete="CASCADE"), primary_key=True
+    )
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    elapsed_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    running: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class HubTaskDeletionMarkerRow(HubBase):
@@ -646,7 +690,8 @@ class HubDatabase:
     # restored and then migrated safely.
     # Version 14 adds Logging; version 15 adds local places and visit history.
     # Version 16 adds personal metric definitions, sources and measurements.
-    CURRENT_SCHEMA_VERSION: ClassVar[int] = 16
+    # Version 17 adds focus sessions; version 18 adds local screen-time intervals.
+    CURRENT_SCHEMA_VERSION: ClassVar[int] = 19
     REQUIRED_TABLES: ClassVar[frozenset[str]] = frozenset(
         {
             "hub_schema_migrations",
@@ -777,7 +822,10 @@ class HubDatabase:
         "hub_metric_sources",
         "hub_measurements",
     }
-    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[16]
+    REQUIRED_TABLES_BY_VERSION[17] = REQUIRED_TABLES_BY_VERSION[16] | {"hub_focus_sessions"}
+    REQUIRED_TABLES_BY_VERSION[18] = REQUIRED_TABLES_BY_VERSION[17] | {"hub_screen_time_sessions"}
+    REQUIRED_TABLES_BY_VERSION[19] = REQUIRED_TABLES_BY_VERSION[18] | {"hub_browser_time_sessions"}
+    REQUIRED_TABLES = REQUIRED_TABLES_BY_VERSION[19]
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path).expanduser().resolve(strict=False)
@@ -895,14 +943,18 @@ class HubDatabase:
         if "hub_tasks" not in table_names:
             return
         existing = {column["name"] for column in inspector.get_columns("hub_tasks")}
-        if "external_url" in existing:
-            return
+        additions = {
+            "external_url": "VARCHAR(1024)",
+            "time_mode": "VARCHAR(16) NOT NULL DEFAULT 'none'",
+            "target_minutes": "INTEGER",
+            "log_focus_duration": "BOOLEAN NOT NULL DEFAULT 0",
+        }
         with self.engine.begin() as connection:
-            # This is a fixed schema identifier; provider URLs are values, not
-            # interpolated SQL.
-            connection.exec_driver_sql(
-                "ALTER TABLE hub_tasks ADD COLUMN external_url VARCHAR(1024)"
-            )
+            for name, definition in additions.items():
+                if name not in existing:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE hub_tasks ADD COLUMN {name} {definition}"
+                    )
 
     def _run_migrations(self, session: Session, from_version: int) -> None:
         # All Hub tables are declaratively created above. Keeping the version

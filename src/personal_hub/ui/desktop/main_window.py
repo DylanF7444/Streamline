@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
@@ -68,6 +69,7 @@ from personal_hub.ui.desktop.appearance import (
     theme_stylesheet,
 )
 from personal_hub.ui.desktop.dashboard import DashboardBoard
+from personal_hub.ui.desktop.focus_panel import FocusPanel
 from personal_hub.ui.desktop.home_summary import HomeSummary
 from personal_hub.ui.desktop.hourly_calendar import HourlyCalendarGrid
 from personal_hub.ui.desktop.icons import hub_icon
@@ -77,6 +79,7 @@ from personal_hub.ui.desktop.mini_calendar import MiniCalendar, MiniCalendarItem
 from personal_hub.ui.desktop.motion import DisclosureTransition, PageTransition
 from personal_hub.ui.desktop.places_page import PlacesPage
 from personal_hub.ui.desktop.readable import ReadableList, ReadableText, present_item
+from personal_hub.ui.desktop.screen_time_page import ScreenTimePage
 from personal_hub.ui.desktop.status_label import StatusLabel
 from personal_hub.ui.desktop.workspace_navigation import (
     CalendarViewGroupsDialog,
@@ -102,6 +105,7 @@ NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     "Summary",
     "Places",
     "Metrics",
+    "Screen time",
 )
 NAVIGATION_LABELS: Final[tuple[str, ...]] = tuple(
     "Daily overview" if name == "Summary" else name for name in NAVIGATION_DESTINATIONS
@@ -121,6 +125,7 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Summary": "summaryButton",
     "Places": "placesButton",
     "Metrics": "metricsButton",
+    "Screen time": "screenTimeButton",
 }
 _WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
 _MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = ("Sources", "Settings")
@@ -130,6 +135,7 @@ _LOGGING_DESTINATIONS: Final[tuple[str, ...]] = (
     "Reflection",
     "Places",
     "Metrics",
+    "Screen time",
 )
 _MAX_TEXT_LENGTH: Final = 500
 _MAX_ID_LENGTH: Final = 128
@@ -293,6 +299,9 @@ class TaskView:
     completed_at: datetime | None = None
     external_url: str = ""
     native_platform: str = ""
+    time_mode: str = "none"
+    target_minutes: int | None = None
+    log_focus_duration: bool = False
     list_key: str | None = None
 
     @property
@@ -1437,6 +1446,9 @@ def _coerce_task(value: object, index: int) -> TaskView:
             limit=64,
         ).casefold(),
         state=state,
+        time_mode=_safe_text(_field(value, "time_mode", "none")),
+        target_minutes=_field(value, "target_minutes", None),
+        log_focus_duration=_bool_value(_field(value, "log_focus_duration", False)),
         priority=priority,
         due_at=_coerce_datetime(
             _field(value, "due_at", _field(value, "due", _field(value, "due_date", None)))
@@ -3312,6 +3324,7 @@ class _MessageSummaryRowWidget(QFrame):
 class TaskRowWidget(QFrame):
     """Keyboard-friendly presentation row for one in-memory task view."""
 
+    focus_requested = Signal(str)
     complete_requested = Signal(str)
     edit_requested = Signal(str)
     log_requested = Signal(str)
@@ -3362,6 +3375,8 @@ class TaskRowWidget(QFrame):
         body_layout.addWidget(self.title_label)
 
         details: list[str] = []
+        if task.target_minutes:
+            details.append(f"{task.target_minutes} min {task.time_mode}")
         if task.priority != "normal":
             details.append(task.priority.title())
         if task.due_at is not None:
@@ -3379,6 +3394,12 @@ class TaskRowWidget(QFrame):
         self.details_label.setWordWrap(True)
         body_layout.addWidget(self.details_label)
         layout.addWidget(body, 1)
+
+        if task.target_minutes and task.state == "open":
+            self.focus_button = QPushButton("Start / resume", self)
+            self.focus_button.setAccessibleName(f"Start or resume timer: {task.title}")
+            self.focus_button.clicked.connect(lambda: self.focus_requested.emit(self.task.task_id))
+            layout.addWidget(self.focus_button)
 
         self.native_open_button: QPushButton | None = None
         native_target = _safe_http_target(task.external_url, limit=1_024)
@@ -3533,6 +3554,8 @@ class PersonalHubMainWindow(QMainWindow):
     attention_notification_open_requested = Signal(object)
     attention_notification_dismissed = Signal(object)
     closed_to_tray = Signal()
+    focus_pause_requested = Signal()
+    focus_start_requested = Signal(str)
     task_created = Signal(object)
     task_updated = Signal(object)
     task_completed = Signal(object)
@@ -3752,6 +3775,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.logging_workspace = LoggingWorkspace(self)
         self.places_page = PlacesPage(self)
         self.metrics_page = MetricsPage(self)
+        self.screen_time_page = ScreenTimePage(self)
 
         self._ui_bridge = _UiSignalBridge(self)
         self._ui_bridge.source_failure.connect(self._receive_source_failure)
@@ -3828,6 +3852,8 @@ class PersonalHubMainWindow(QMainWindow):
                 page = self._build_sources_page()
             elif destination == "Metrics":
                 page = self.metrics_page
+            elif destination == "Screen time":
+                page = self.screen_time_page
             elif destination == "Places":
                 page = self.places_page
             elif destination in _LOGGING_DESTINATIONS:
@@ -6485,6 +6511,9 @@ class PersonalHubMainWindow(QMainWindow):
         )
         layout.addWidget(self.task_reset_filters_button)
 
+        self.focus_panel = FocusPanel()
+        layout.addWidget(self.focus_panel)
+
         self.tasks_list = TaskListWidget()
         self.tasks_list.setObjectName("tasksList")
         self.tasks_list.setAccessibleName("Tasks")
@@ -6627,6 +6656,34 @@ class PersonalHubMainWindow(QMainWindow):
         form.addRow("Repeat (optional)", self.task_recurrence_input)
         self.task_recurrence_combo = self.task_recurrence_input
         self.task_recurrence = self.task_recurrence_input
+        self.task_time_mode_input = QComboBox()
+        for label, value in (
+            ("No timer", "none"),
+            ("Time goal (completes automatically)", "goal"),
+            ("Effort estimate (confirm completion)", "estimate"),
+        ):
+            self.task_time_mode_input.addItem(label, value)
+        self.task_time_mode_input.setAccessibleName("Task timer type")
+        form.addRow("Timer", self.task_time_mode_input)
+        self.task_target_minutes_input = QSpinBox()
+        self.task_target_minutes_input.setRange(1, 1440)
+        self.task_target_minutes_input.setValue(60)
+        self.task_target_minutes_input.setEnabled(False)
+        self.task_target_minutes_input.setSuffix(" minutes")
+        self.task_target_minutes_input.setAccessibleName("Task target minutes")
+        form.addRow("Time target", self.task_target_minutes_input)
+        self.task_log_focus_input = QCheckBox("Save measured minutes to Activity")
+        form.addRow("Time logging", self.task_log_focus_input)
+        timer_hint = QLabel(
+            "Changing the timer type or target resets saved timer progress. Duration logging is optional; partial minutes are omitted."
+        )
+        timer_hint.setWordWrap(True)
+        form.addRow(timer_hint)
+        self.task_time_mode_input.currentIndexChanged.connect(
+            lambda: self.task_target_minutes_input.setEnabled(
+                self.task_time_mode_input.currentData() != "none"
+            )
+        )
         self.task_reminders_input = QLineEdit()
         self.task_reminders_input.setObjectName("taskRemindersInput")
         self.task_reminders_input.setAccessibleName("Task reminders")
@@ -7086,6 +7143,7 @@ class PersonalHubMainWindow(QMainWindow):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, task.task_id)
             row = TaskRowWidget(task)
+            row.focus_requested.connect(self.focus_start_requested.emit)
             row.complete_requested.connect(self.complete_task)
             row.edit_requested.connect(self.open_task_editor)
             row.log_requested.connect(self.log_task_progress)
@@ -7199,6 +7257,9 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_list_input.setText(self._workspace_task_list_filter_name or "")
         self.task_tags_input.clear()
         self.task_recurrence_input.setCurrentText("")
+        self.task_time_mode_input.setCurrentIndex(0)
+        self.task_target_minutes_input.setValue(60)
+        self.task_log_focus_input.setChecked(False)
         self.task_reminders_input.clear()
         self.task_editor_panel.show()
         self.task_editor_status_label.setText(
@@ -7207,6 +7268,9 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_title_input.setFocus()
 
     def _populate_task_editor(self, task: TaskView) -> None:
+        self._set_combo_data(self.task_time_mode_input, task.time_mode, fallback="none")
+        self.task_target_minutes_input.setValue(task.target_minutes or 60)
+        self.task_log_focus_input.setChecked(task.log_focus_duration)
         self.task_title_input.setText(task.title)
         self.task_notes_input.setPlainText(task.notes)
         due = _coerce_datetime(task.due_at)
@@ -7257,6 +7321,11 @@ class PersonalHubMainWindow(QMainWindow):
             self.task_timezone_input.setFocus()
             return None
         changes = {
+            "time_mode": self.task_time_mode_input.currentData(),
+            "target_minutes": self.task_target_minutes_input.value()
+            if self.task_time_mode_input.currentData() != "none"
+            else None,
+            "log_focus_duration": self.task_log_focus_input.isChecked(),
             "title": title,
             "notes": self.task_notes_input.toPlainText(),
             "due_at": due,
@@ -7309,6 +7378,9 @@ class PersonalHubMainWindow(QMainWindow):
         if not changes:
             return self.open_task_editor(normalized_id)
         data: dict[str, object] = {
+            "time_mode": current.time_mode,
+            "target_minutes": current.target_minutes,
+            "log_focus_duration": current.log_focus_duration,
             "task_id": current.task_id,
             "title": current.title,
             "notes": current.notes,
@@ -10809,10 +10881,12 @@ class PersonalHubMainWindow(QMainWindow):
         return tuple(self._source_failures.values())
 
     def set_privacy_masked(self, masked: bool) -> None:
+        self.screen_time_page.set_state(private=bool(masked) or self._locked, locked=self._locked)
         self.metrics_page.set_state(private=bool(masked) or self._locked, locked=self._locked)
         self.logging_workspace.set_private(bool(masked) or self._locked)
         self.places_page.set_state(private=bool(masked) or self._locked)
         self._privacy_masked = bool(masked)
+        self.focus_panel.set_private(self._privacy_masked or self._locked)
         self.home_summary.set_masked(self._privacy_masked or self._locked)
         if hasattr(self, "settings_values"):
             self.settings_values["privacy_masking"] = "On" if self._privacy_masked else "Off"
@@ -10839,6 +10913,12 @@ class PersonalHubMainWindow(QMainWindow):
         return self._privacy_masked
 
     def set_locked(self, locked: bool) -> None:
+        if locked:
+            self.focus_pause_requested.emit()
+        self.screen_time_page.set_state(
+            private=bool(locked) or self._privacy_masked, locked=bool(locked)
+        )
+        self.focus_panel.set_private(bool(locked) or self._privacy_masked)
         self.metrics_page.set_state(
             private=bool(locked) or self._privacy_masked, locked=bool(locked)
         )

@@ -130,6 +130,9 @@ class HubTask(HubContract):
     notes: str = Field(default="", max_length=_MAX_NOTES_LENGTH)
     external_url: str | None = Field(default=None, max_length=_MAX_EXTERNAL_URL_LENGTH)
     state: TaskState = "open"
+    time_mode: Literal["none", "goal", "estimate"] = "none"
+    target_minutes: int | None = Field(default=None, ge=1, le=1440)
+    log_focus_duration: bool = False
     priority: TaskPriority = "normal"
     due_at: datetime | None = None
     due_is_all_day: bool = False
@@ -193,6 +196,8 @@ class HubTask(HubContract):
 
     @model_validator(mode="after")
     def _task_fields_are_consistent(self) -> HubTask:
+        if (self.time_mode == "none") != (self.target_minutes is None):
+            raise ValueError("timed tasks require a target; untimed tasks cannot have one")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot precede created_at")
         if self.due_is_all_day and self.due_at is None:

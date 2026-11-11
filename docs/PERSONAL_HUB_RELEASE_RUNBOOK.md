@@ -274,6 +274,12 @@ Phase 8 AI work is optional, disabled, and not a condition of non-AI 1.0.
 
 ## Metrics extension gate
 
+Browser site tracking additionally requires the packaged PersonalHubBrowserHost.exe and
+the bundled extension assets. Run the browser Python/UI and Node tests and perform the
+Chrome/Edge setup, permission, focus, idle, lock, restore, disconnect and uninstall checks
+in `PERSONAL_HUB_BROWSER_TIME.md`. Sign the helper with the desktop executable.
+
+
 Run tests/test_metrics.py, tests/test_metrics_receiver.py and tests/ui/test_metrics_ui.py,
 then the complete Hub lane. Build the Android companion and run its JVM tests using the
 commands in PERSONAL_HUB_METRICS.md. Actual step collection, Android permission UI and

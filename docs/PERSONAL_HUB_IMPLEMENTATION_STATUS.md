@@ -1,5 +1,87 @@
 # Personal Hub implementation status
 
+## Browser site screen time — November 10, 2026
+
+Implemented optional Windows Chrome/Edge hostname tracking in
+`PERSONAL_HUB_BROWSER_TIME.md`: separately enabled extension permissions and Hub recording,
+allowlisted native-messaging helper, foreground/idle checks, expiring Hub lease, bounded
+latest-sample mailboxes, strict hostname-only contracts and schema 19 history. Screen time
+includes setup/disconnect, site/category totals, aliases, exclusions, bounded interval review,
+seven-day trend, shared date selection, separate deletion and optional Daily overview subtotal.
+App and site time are explicitly overlapping. Masking hides details; Hub lock, restore and
+shutdown revoke recording. Settings changes rotate leases immediately; deletion freezes
+collection during its preview. Disconnect also revokes already-open native connections.
+Backup/restore/export include history; shared-folder sync, relay, Metrics and logs exclude it.
+Existing uncommitted app screen-time and task-timer work was preserved.
+
+Validation:
+
+- `python -m pytest tests --ignore=tests/ui -q`: **341 passed** before the final native
+  disconnect test was added; the final browser-focused rerun passed **11 tests**.
+- `python -m pytest tests/test_browser_time.py tests/test_screen_time.py -q`:
+  **18 passed** before that last extra regression.
+- `node --test tests/browser_time_extension.test.cjs`: **4 passed** (also invoked by pytest).
+- Screen-time/browser/Logging/window UI batch: **24 passed**.
+- Final `tests/ui/test_browser_time_ui.py`: **1 passed**, including consent, lease rotation,
+  lock/masking, alias/category, deletion, and 720×460 layout without horizontal scrolling.
+- Native helper built successfully; packaged code includes registration revocation, rejects
+  an invalid caller silently, and contains no Qt or Assistant modules.
+- Clean desktop PyInstaller build and package archive/analysis boundary verification passed.
+  All four packaged extension files exactly match source; final packaged native registration
+  revocation and settings lease-rotation code were inspected after clearing an earlier cache.
+- Inno Setup compiled the unsigned installer with both PersonalHub.exe and
+  PersonalHubBrowserHost.exe. No installer execution, signing or live-browser acceptance claimed.
+- App import isolation, repository Ruff lint/format, documentation and whitespace checks pass.
+
+Live browser permission/native-host installation, actual OS lock/sleep transitions, signed
+installer lifecycle, store publication and manual accessibility acceptance remain separate
+release checks. No browser was installed/configured or private browsing recorded by this work.
+
+
+## Screen time — November 9, 2026
+
+Implemented the Windows desktop screen-time extension in `PERSONAL_HUB_SCREEN_TIME.md`:
+explicit start/pause and startup opt-in, tray controls, five-second foreground executable
+sampling, configurable idle threshold, exact app exclusions, clock/sleep/lock gaps and durable
+checkpoints. Logging > Screen time provides full date-range totals, categories and aliases,
+filtering, bounded interval review and timeline, seven-day values, and an optional Daily
+overview summary. Schema 18 preserves concurrent schema 17 focus-session changes. History
+participates in backup/restore/export and explicit preview/confirmed deletion, remains
+separate from Activity durations and is excluded from sync, relay and operational logs.
+
+Focused validation: `python -m pytest tests/test_screen_time.py tests/ui/test_screen_time_ui.py -q`
+passed **11 tests**. `python -m pytest tests/test_screen_time.py tests/test_metrics.py -q`
+passed **34 tests**. The first broad core run passed 326 tests and found the old hard-coded
+schema-16 migration expectation; updating it to CURRENT_SCHEMA_VERSION passes the focused
+rerun. Final validation:
+
+- `python -m pytest tests --ignore=tests/ui -q`: **331 passed**.
+- `python -m pytest tests/ui/test_application.py tests/ui/test_metrics_ui.py -q`:
+  **16 passed**, one existing QDateTime deprecation warning.
+- `python -m pytest tests/ui/test_screen_time_ui.py -q`: **3 passed**; the combined
+  screen-time core/UI rerun passed **11 tests**.
+- The initial combined Logging/window/screen-time run passed 20 cases and found two
+  navigation regressions in its loaded code (Screen time preceding Daily overview, and
+  the former 12-page expectation). The final Logging route appends Screen time and the
+  window test expects the new route. All six window tests pass in the final rerun;
+  the corrected Logging keyboard case and navigation construction pass their two-test
+  rerun. Together with the other 13 passing Logging cases this covers **39 distinct UI
+  cases** across the four affected areas, including the new Screen time tests.
+- After the final index/contract adjustments, `python -m pytest tests/test_screen_time.py -q`:
+  **8 passed**.
+
+Ruff check/format,
+documentation consistency, import/Assistant isolation and whitespace checks pass. A native
+Windows observer sample succeeded without persisting or printing application identity.
+Wide and narrow offscreen layouts were rendered with synthetic usage records; generated
+evidence remains ignored in `.benchmark-data`.
+
+Android and iOS collection remain deferred. Browser-domain deferral is superseded by
+the November 10 Chrome/Edge extension in `PERSONAL_HUB_BROWSER_TIME.md`. Actual Windows
+lock/sleep observation, long passive use, packaged tray/startup behavior, screen-reader
+acceptance, installer building/signing and clean-VM release checks remain manual release
+work. Automated fake-collector workflows do not claim those outcomes.
+
 Updated November 4, 2026. The current implementation baseline is complete for now, and
 feature updates can continue without treating release evidence as a blocker. External release
 checks remain pending and should be revisited when release readiness is the focus. The
@@ -745,3 +827,39 @@ permission grant/denial/revocation, actual step recording, battery restrictions,
 queues and the same-day snapshot/LAN workflow. Run the compiled instrumentation tests on a
 phone or emulator. Public release signing and the existing clean-VM/manual release gates remain
 separate requirements. Automated loopback/fake evidence does not claim physical-device success.
+
+
+## Task time goals — November 9, 2026
+
+Implemented optional task time goals and effort estimates, described in
+`PERSONAL_HUB_TASK_TIMERS.md`. Time goals complete automatically; estimates pause for an
+explicit completion decision. The desktop provides target editing, a filling progress bar,
+start/pause/resume, switching between saved sessions, early completion, stop, discard and
+completion dismissal. Normal completion/Undo, recurrence and task surfaces remain connected.
+
+Schema 17 adds task timer settings and device-local focus sessions; later schema additions
+in this workspace retain this migration. Active seconds are counted with a monotonic clock
+and saved every whole second. Shutdown, lock, recovery and gaps over ten seconds pause the
+timer. Config changes/archive/deletion clear sessions. Backup/restore and explicit export
+include progress; restore pauses it. Task settings follow task sync; running sessions do not.
+Optional measured whole-minute Activity entries retain their own history, duration source,
+list/tag snapshots, and existing privacy, retention and encrypted Activity sync policy.
+
+Verification:
+
+- `python -m pytest tests/test_task_focus.py -q`: **14 passed** (goals, estimates,
+  pause/switch/recovery, optional history, duration correction, recurrence, migration,
+  backup/restore, deletion, concurrency, invalid targets, wall-clock changes).
+- `python -m pytest tests/test_task_focus.py tests/test_phase2_tasks.py tests/test_logging.py tests/test_sync.py tests/test_boundaries.py -q`:
+  **46 passed** before adding the final wall-clock-change case, which passes in the 14-test run.
+- `python -m pytest tests/ui/test_task_focus_ui.py tests/ui/test_phase2_tasks_ui.py -xq`:
+  **9 passed** (timer controls, completion and Undo, privacy, lock, sleep, existing task UI).
+- `python -m pytest tests/ui/test_logging_ui.py -k 'manual_dialog_task_capture or daily_overview_local_day' -q`:
+  **2 passed**, 12 deselected.
+- Ruff check, repository format check, documentation consistency and `git diff --check` pass.
+
+Final rerun after the completion-refresh change:
+`python -m pytest tests/ui/test_task_focus_ui.py tests/ui/test_logging_ui.py::test_narrow_logging_pages_are_scrollable_and_keyboard_accessible -xq`: **4 passed**.
+The earlier keyboard-order failure during concurrent Screen time navigation work is resolved
+in the final workspace. No installer, signing, real-hour duration or full release-lane
+verification is claimed.

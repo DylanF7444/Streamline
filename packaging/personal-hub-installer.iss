@@ -27,12 +27,16 @@ Name: "startup"; Description: "Start Personal Hub when I sign in"; Flags: unchec
 
 [Files]
 Source: "..\dist\PersonalHub.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\PersonalHubBrowserHost.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "PersonalHub.Desktop"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PersonalHub"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startup; Flags: uninsdeletevalue
+
+Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.personalhub.browser_time"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.personalhub.browser_time"; Flags: uninsdeletekey dontcreatekey
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Personal Hub"; Flags: nowait postinstall skipifsilent

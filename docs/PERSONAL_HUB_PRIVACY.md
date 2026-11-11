@@ -6,6 +6,32 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 ## Data categories
 
+Browser site time is separately opt-in in Hub and its Chrome/Edge extension. It reads the
+active tab address transiently and sends only its hostname through a local native-messaging
+helper. No full URL, title, page content or history is retained. Hostnames and intervals are
+private local data included in backup/export and excluded from sync/relay/Metrics/logs.
+Masking hides presentation; lock, restore and shutdown revoke recording. See
+`PERSONAL_HUB_BROWSER_TIME.md` for permissions, mailbox expiry, exclusions and deletion.
+
+
+Task focus timers start only on explicit Start / resume. Their saved progress is local to this
+device, included in database backups and explicit JSON exports, and excluded from sync and
+provider requests. Masking hides timer content; lock pauses counting. Duration logging is a
+separate per-task opt-in, off by default. Saved whole-minute duration entries follow normal
+Activity retention, deletion, backup/export and explicitly enabled encrypted sync. Task timer
+settings follow task sync, but do not cause a receiving device to start timing. Timers do not
+inspect apps, keystrokes, or whether the user is working. See `PERSONAL_HUB_TASK_TIMERS.md`.
+
+Screen time is off by default and requires Start recording or the explicit start-on-open
+preference. Windows collection reads foreground executable basenames and input idle time
+every five seconds. It never reads window titles, typed text, screenshots or browser URLs.
+Idle/lock/unavailable samples and interrupted sampling leave gaps. Records and local app
+rules/exclusions stay in Hub's database, retained until explicit deletion, included in backup,
+restore and explicit JSON export, and excluded from all shared-folder sync, provider relay,
+Metrics transfer, audit payloads, operational logs and diagnostics. Privacy masking hides
+history and controls; session lock also suppresses collection. Tray start/pause is independent
+from network pause. See `PERSONAL_HUB_SCREEN_TIME.md` for accuracy and deletion semantics.
+
 Places and dated visit history are Hub-native local data in schema 15 (`hub_places` and
 `hub_visits`). They are kept until explicit deletion, participate in database backup/restore
 and JSON export, and are excluded from shared-folder sync and the provider relay. Deleting a

@@ -22,6 +22,12 @@ hub_datas = collect_data_files("certifi") + collect_data_files("tzdata") + [
     for path in hub_map_assets.iterdir() if path.is_file()
 ]
 
+hub_datas += [
+    (str(path), "personal_hub/browser_time/extension")
+    for path in (hub_source / "personal_hub" / "browser_time" / "extension").iterdir()
+    if path.is_file()
+]
+
 a = Analysis(
     [str(hub_source / "personal_hub" / "app.py")],
     pathex=[str(hub_source)],

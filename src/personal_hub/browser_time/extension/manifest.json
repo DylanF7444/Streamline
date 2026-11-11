@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Personal Hub Browser Time",
+  "version": "0.1.0",
+  "description": "Opt-in local active-site screen time for Personal Hub. No cloud service.",
+  "permissions": ["storage", "alarms"],
+  "optional_permissions": ["tabs", "nativeMessaging"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html", "default_title": "Personal Hub Browser Time"},
+  "incognito": "not_allowed"
+}

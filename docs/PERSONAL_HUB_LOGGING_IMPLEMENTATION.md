@@ -1,6 +1,15 @@
 # Tracking and Logging implementation
 
+November 9, 2026: the separate Screen time extension now adds opt-in Windows foreground-app
+usage history and an optional Daily overview card. It supersedes the screen-time deferral
+below without changing the meaning of user-entered Activity durations. See
+`PERSONAL_HUB_SCREEN_TIME.md` for collection, privacy and acceptance details.
+
 Implemented October 28, 2026 from `PERSONAL_HUB_PROGRESS_AND_ACTIVITY_PLAN.md`.
+
+November 9, 2026: optional explicit task timers and labeled measured Activity durations are
+implemented in `PERSONAL_HUB_TASK_TIMERS.md`. This extends the original entered-only duration
+behavior described below; completion facts remain independent.
 
 ## Daily overview extension — October 29, 2026
 

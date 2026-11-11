@@ -28,6 +28,8 @@ if ($LASTEXITCODE -ne 0) { throw "Personal Hub regression gate failed" }
 python scripts/run_personal_hub_reliability.py --mode accelerated --output .benchmark-data/personal-hub-seven-day.json
 if ($LASTEXITCODE -ne 0) { throw "Personal Hub bounded-growth reliability gate failed" }
 
+python -m PyInstaller --clean --noconfirm packaging/personal-hub-browser-host.spec
+if ($LASTEXITCODE -ne 0) { throw "Browser native helper build failed" }
 python -m PyInstaller --clean --noconfirm packaging/personal-hub.spec
 if ($LASTEXITCODE -ne 0) { throw "Personal Hub PyInstaller build failed" }
 python scripts/verify_personal_hub_package.py dist/PersonalHub.exe --analysis build/personal-hub/Analysis-00.toc --output .benchmark-data/personal-hub-package.json
@@ -41,6 +43,10 @@ if ($SigningThumbprint) {
     if ($LASTEXITCODE -ne 0) { throw "Personal Hub Authenticode signing failed" }
     & $hubSignTool.Source verify /pa /all dist\PersonalHub.exe
     if ($LASTEXITCODE -ne 0) { throw "Personal Hub Authenticode verification failed" }
+    & $hubSignTool.Source sign /sha1 $SigningThumbprint /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 dist\PersonalHubBrowserHost.exe
+    if ($LASTEXITCODE -ne 0) { throw "Browser helper signing failed" }
+    & $hubSignTool.Source verify /pa /all dist\PersonalHubBrowserHost.exe
+    if ($LASTEXITCODE -ne 0) { throw "Browser helper signature verification failed" }
     $hubAuthenticodeSigned = $true
 }
 
@@ -67,6 +73,7 @@ if ($hubIsccPath) {
 $hubReleaseArguments = @(
     "scripts/generate_personal_hub_release.py",
     "--artifact", "dist/PersonalHub.exe",
+    "--artifact", "dist/PersonalHubBrowserHost.exe",
     "--output-dir", "dist/personal-hub/release"
 )
 if (Test-Path -LiteralPath $hubInstaller) {

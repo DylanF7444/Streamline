@@ -38,6 +38,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "personal_hub.ui.desktop" = ["map_assets/*"]
+"personal_hub.browser_time" = ["extension/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

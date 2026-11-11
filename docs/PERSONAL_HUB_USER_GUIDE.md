@@ -1,5 +1,63 @@
 # Personal Hub user guide
 
+## Timed task goals — November 9, 2026
+
+Tasks can optionally have a **Time goal** or **Effort estimate**, with a target from 1 to
+1,440 minutes. Edit a task to configure its timer, then choose **Start / resume** on its row.
+The Tasks page shows a filling progress bar, remaining time, elapsed minutes, and controls.
+A Time goal automatically completes the task when its target is reached. An Effort estimate
+pauses at its target and offers completion, Keep working, or Stop session. Completing early
+uses the normal completion and Undo behavior. Recurring occurrences inherit the timer settings
+and begin with zero progress.
+
+Pause retains progress. Starting another task pauses the previous timer; select its row's
+Start / resume to return. Stop session clears progress and saves optional logged time.
+Discard session clears progress without creating a duration record. Changing the timer type
+or target resets its progress; ordinary title/notes edits retain it. Archiving discards its
+session, deletion removes it, and reopening a completed task requires a fresh session.
+
+Timers use active elapsed time, independent of timezone and wall-clock changes. They continue
+while Hub is minimized or another page is open. Exit, lock, restart, and gaps over ten seconds
+(sleep or a blocked app) pause counting; Resume is explicit. Recovery retains the last saved
+whole second. The app must be running to complete a timed task; closed/suspended time is not
+credited. This is an explicit focus timer and does not monitor whether you are studying.
+
+**Save measured minutes to Activity** is optional and off by default for each task. Finishing
+or stopping a session writes one linked Activity progress entry with its measured whole minutes
+(partial minutes are omitted; sessions under a minute create no duration entry). Task completion
+still creates its usual independent completion fact. Duration entries are labeled timed; manually
+changing their duration changes the label to entered. Undo corrects the completion fact and retains
+the measured focus record. Daily overview totals include both entered and timed durations.
+
+Task timer settings follow existing task backup/export and enabled encrypted task sync. Running
+sessions and unfinished seconds remain device-local in `hub_focus_sessions` (schema 17), are
+included in database backup and explicit JSON export, and never sync or enter provider APIs.
+Restoring progress pauses it. Saved duration Activity entries follow existing Activity retention,
+backup/export and explicitly enabled encrypted sync; task cleanup preserves them. Use updated
+builds on all sync devices because older strict contracts may reject timer settings or duration
+source metadata. Privacy masking hides timer content immediately; lock also pauses counting.
+
+
+## Screen time
+
+For website breakdowns in Chrome or Edge, use **Browser sites > Set up browser extension**,
+enable tracking in the extension popup, then choose **Start browser recording** in Hub.
+The site section shares the date range and offers exclusions, categories, review and separate
+history deletion. Site time overlaps browser app time. See `PERSONAL_HUB_BROWSER_TIME.md`
+for setup and the native helper development build command.
+
+
+Open **Logging > Screen time**, then **Start recording screen time** to opt in on this PC.
+Use the page or tray menu to pause. Recording continues in the tray while Hub runs.
+**Start recording when Hub opens** is a separate choice, off by default. Save recording
+settings to change the idle threshold, exclude executable names, or show a Daily overview
+card. App display/category rules apply to historical review. Choose dates and an optional
+app/category filter to review full totals and seven-day values; Load more expands interval
+details. Gaps are unrecorded and short app visits can be missed. Windows titles, typed text,
+screenshots and website addresses are excluded from app recording. Use **Preview deletion for selected
+dates** to review and confirm removal of complete overlapping screen-time sessions.
+See `PERSONAL_HUB_SCREEN_TIME.md` for precision, privacy, backup and restore behavior.
+
 ## Places and visit history
 
 Select **Logging → Places** to browse the online world map. No account or API key is needed.
@@ -184,7 +242,7 @@ a short pause and before changing days or leaving the page. Failed saves preserv
 draft and keep you on the current day. Reflections retain their original date when edited.
 The overview works offline and respects privacy masking, lock, backup, export, and existing
 reflection sync choices. Duration is only the sum of minutes you entered manually; it shows
-as not tracked when no duration was entered. Screen-time collection is not included.
+as not tracked when no entered or timed duration was saved. Screen-time collection is not included.
 
 **Activity** shows work grouped by local date, newest first. Choose **Log progress** for an
 unplanned accomplishment or work on an open task. Enter a description and optionally notes,

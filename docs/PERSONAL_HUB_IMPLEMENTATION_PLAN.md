@@ -147,6 +147,20 @@ new cloud service.
 
 ## Information Architecture
 
+November 10, 2026: optional Chrome/Edge hostname tracking extends Screen time through a
+local native-messaging helper. Schema 19 stores site intervals separately; explicit dual
+consent, exclusions, privacy, local-only storage and setup are specified in
+`PERSONAL_HUB_BROWSER_TIME.md`. Firefox/mobile collection remains deferred.
+
+
+November 9, 2026 extension: **Screen time** in Logging provides explicit opt-in Windows
+foreground-app collection, local interval history, date review, categories and an optional
+Daily overview card. Schema 18 adds screen-time history independently from task Activity.
+This supersedes the screen-time deferral in the October Logging extension. Collection
+stores executable basenames and UTC intervals only, with idle/lock/gap handling. Screen-time
+records and settings stay local, excluded from shared-folder sync and the provider relay.
+See `PERSONAL_HUB_SCREEN_TIME.md` for consent, accuracy, privacy, retention and acceptance.
+
 October 29, 2026 extension: **Places** in Logging provides an online worldwide MapLibre
 map backed by OpenFreeMap's OpenStreetMap-derived tiles. The renderer and scripts load only
 when that page is opened online. Saved places and dated repeat visits remain Hub-owned local
@@ -185,8 +199,9 @@ lock, and explicit data deletion. Logging defaults to keep until deleted. Settin
 a separate preview/apply history-deletion control; ordinary retention and completed-task
 cleanup never remove Logging. Activity follows explicitly enabled encrypted shared-folder
 sync. Reflections require a separate device-local opt-in on each participating device.
-Provider APIs and the provider collector relay never receive Logging content. No AI, running
-timer, inferred hours, score, or streak is involved.
+Provider APIs and the provider collector relay never receive Logging content. No AI, inferred
+hours, score, or streak is involved. Explicit task timers are an optional November 9 extension
+described under Tasks.
 
 The main window uses a persistent left navigation rail and a content area. A persistent local
 date and time display sits above the page content on every screen, with the weekday, full date,
@@ -287,6 +302,12 @@ to-do items with due dates are projected onto Calendar and retain their normal t
 and undo controls.
 
 ### Tasks
+
+November 9, 2026 extension: optional Time goals auto-complete after explicitly started active
+time; Effort estimates ask for confirmation. Start/pause/resume, saved progress, optional measured
+Activity duration, recurrence, undo, offline operation and privacy are specified in
+`PERSONAL_HUB_TASK_TIMERS.md`. This supersedes the earlier deferral of running timers and
+entered-only durations. Unstarted task estimates never count as time worked.
 
 Tasks is a complete local visual workflow, not a summary card. It supports:
 
