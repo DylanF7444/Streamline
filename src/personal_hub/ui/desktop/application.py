@@ -718,6 +718,7 @@ class HubDesktopCoordinator(QObject):
         window.restore_requested.connect(self._restore_requested)
         window.export_requested.connect(self._export_requested)
         window.sync_configure_requested.connect(self._sync_configure_requested)
+        window.sync_folder_browse_requested.connect(self._sync_folder_browse_requested)
         window.sync_requested.connect(self._sync_requested)
         window.sync_disable_requested.connect(self._sync_disable_requested)
         window.sync_relay_role_changed.connect(self._sync_relay_role_changed)
@@ -2380,6 +2381,19 @@ class HubDesktopCoordinator(QObject):
         self.window.set_settings_status(
             "Encrypted sync folder saved. Enter the same passphrase on each device."
         )
+
+    @Slot()
+    def _sync_folder_browse_requested(self) -> None:
+        current_folder = self.window.sync_endpoint_input.text().strip()
+        if not current_folder or not Path(current_folder).is_dir():
+            current_folder = ""
+        selected = QFileDialog.getExistingDirectory(
+            self.window,
+            "Choose shared sync folder",
+            current_folder,
+        )
+        if selected:
+            self.window.sync_endpoint_input.setText(selected)
 
     @Slot(str)
     def _sync_requested(self, passphrase: str) -> None:

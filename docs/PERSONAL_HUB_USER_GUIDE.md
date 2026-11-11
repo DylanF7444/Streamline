@@ -462,10 +462,11 @@ export as sensitive because it intentionally contains your visible local content
 ## Sync across devices
 
 Personal Hub can share local Hub data through a folder that you control. In **Settings**, open
-**Sync across devices**, choose the same shared folder on each device, select **Save folder**,
-enter a passphrase, and choose **Sync now**. Use the same passphrase on every device. Sync is
-manual; the folder may be local, removable, an SMB share, or a user-managed cloud folder such as
-OneDrive or Dropbox. Personal Hub does not create a hosted account or run an inbound service.
+**Sync across devices**, select **Browse…** to choose the shared folder on each device, then
+select **Save folder**, enter a passphrase, and choose **Sync now**. Use the same passphrase on
+every device. Sync is manual; the folder may be local, removable, an SMB share, or a user-managed
+cloud folder such as OneDrive or Dropbox. Personal Hub does not create a hosted account or run an
+inbound service.
 
 By default, **This device only** keeps provider data on the device. The `.sync` shard includes
 local task lists and tasks, explicitly imported calendar items, feed subscriptions, watch
