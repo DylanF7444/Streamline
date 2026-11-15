@@ -88,7 +88,8 @@ def test_high_contrast_selected_navigation_is_readable_and_home_reflows(qtbot):
     qtbot.wait(25)
     page = window.today_page
     assert page.horizontalScrollBar().maximum() == 0
-    assert window.today_subtitle.isHidden()
+    assert not window.today_subtitle.isHidden()
+    assert window.today_subtitle.wordWrap()
     assert (
         window.home_add_task_button.width() >= window.home_add_task_button.minimumSizeHint().width()
     )

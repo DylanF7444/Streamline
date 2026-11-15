@@ -1,5 +1,135 @@
 # Personal Hub implementation status
 
+## Background recording indicators — November 15, 2026
+
+Added independent app/site tray marks, readable status and last-save times, browser
+start/pause and review controls, and toolbar REC/WAIT/OFF/error badges with popup and
+hover guidance. Recording confirmation follows successful interval persistence. Native
+responses distinguish idle, focus, ineligible and waiting states; a short-lived local
+lease holds a digest of the confirmed identity and its checkpoint timestamp. No identity
+is returned to the extension or shown in tray/status text. Consent, lock, privacy and
+local-only boundaries remain in place. See the Browser time and Screen time guides.
+
+Validation: `python -m pytest tests/test_browser_time.py tests/test_screen_time.py -q`
+passed **25 cases**; `node --test tests/browser_time_extension.test.cjs` passed **12 cases**.
+Ruff lint/format, documentation consistency and scoped whitespace checks passed. Desktop
+coverage includes independent tray controls, save confirmation, lock/masking and storage
+failure. Initial lock-label failures exposed an ordering issue; the corrected case passed.
+The final `python -m pytest tests/ui/test_screen_time_ui.py tests/ui/test_browser_time_ui.py -q`
+batch passed **7 cases**. Native Windows tray rendering and installed Chrome/Edge/Brave
+helper checks remain manual release acceptance. No executable or installer rebuild is
+claimed for this source change.
+
+
+## Weekly review — November 13, 2026
+
+Implemented **Logging > Weekly review**, described in `PERSONAL_HUB_WEEKLY_REVIEW.md`.
+Monday–Sunday navigation uses the selected IANA timezone; This week follows local rollover,
+historical browsing remains selected, and each of seven days opens Daily overview.
+Accomplishments retain snapshots and full counts independently of paginated details, with
+undone completions excluded. Entered duration, saved timer duration, app time and site time
+remain visibly separate. Selected metrics use primary sources and configured aggregation,
+preserving missing/zero semantics and recorded reporting dates.
+
+Weekly writing uses ordinary Monday-dated Reflection records and existing autosave, limits,
+backup/export/restore, deletion and separately opted-in reflection sync. Existing daily
+writing is selected only by explicit choice. Failed saves guard navigation; mask/lock clear
+review details and visible writing and preserve an unsaved draft for recovery. The page
+refreshes local data once a minute while visible; inactive weekly history is not queried
+during ordinary dashboard/task refresh. No new schema, collector, provider scope, AI or
+runtime dependency was added. Existing pending changes were retained.
+
+Validation on this Windows workspace:
+
+- `python -m pytest tests/test_weekly_review.py -q`: **9 passed**.
+- `python -m pytest tests --ignore=tests/ui -q`: **365 passed**.
+- `python -m pytest tests/ui/test_weekly_review_ui.py -xq`: **4 passed**; all four also pass
+  in the final isolated full-UI sweep, including the hidden-history query guard.
+- **136 distinct current UI cases passed** across an isolated-process sweep and one corrected
+  rerun. The sweep passed 135 and found an obsolete Home-hidden-description assertion from
+  pending orientation work; aligned it with the implemented visible wrapping guidance, and
+  its focused rerun passed. The final collected inventory matches the swept 136 cases.
+  An earlier combined Logging/window run was stopped because accumulated Qt styling caused
+  excessive runtime; the isolated sweep covers its full collection.
+- Repository Ruff lint/format, documentation consistency, import/Assistant isolation and
+  Git whitespace checks pass. The import probe finds no Qt before explicit desktop launch.
+- Accelerated bounded-growth reliability passes **168 virtual hours and six restarts**;
+  this is not a real 24-hour soak.
+- Synthetic wide and 720×460/175%-text/high-contrast previews were rendered and visually
+  inspected. A section-order issue was corrected before final package verification.
+- Clean PyInstaller desktop/helper builds and Inno Setup preview installer compilation
+  pass. Desktop archive/analysis inspection passes with no forbidden dependencies or missing
+  required prefixes. Embedded-code checks verify the weekly projection, page, final section
+  order, local refresh and inactive-history guard; packaged CLI startup succeeds. The helper
+  excludes Qt and Assistant modules.
+
+Ignored evidence, per-case logs, previews and unsigned candidates are under
+`.benchmark-data/weekly-review/`. No installed-app replacement, installer lifecycle,
+release signing, clean-VM, real-hour soak or manual screen-reader acceptance is claimed.
+
+## Orientation and recovery follow-up — November 13, 2026
+
+Reviewed the current desktop and UI tests across the main Tracking/Logging journeys.
+Restored visible page guidance, added a visible mode explanation, separated message health
+from category results with direct Sources recovery, made Inbox panes/actions responsive,
+counted actionable source problems, and added a top Settings save action and clearer
+preference/backup headings. Compact/large-text task forms now give fields full width;
+shorter timer labels remove minimum-window overflow. Existing workflows, preferences,
+privacy/lock, local data, permissions and external actions retain their boundaries.
+
+Validation: **365 core tests and 76 distinct relevant UI cases passed**, including corrected
+reruns and five new orientation cases. Ruff formatting/lint, documentation consistency,
+startup import isolation and diff whitespace passed. See
+`PERSONAL_HUB_ORIENTATION_REVIEW.md` for findings, exact coverage and initial failures/fixes.
+Synthetic offscreen previews include 720×460 at 175% text/high contrast and visible focus.
+Native Windows DPI/visual checks, Narrator/another screen reader, first-time-user sessions
+and live-provider review remain pending. No build or release acceptance is claimed.
+
+## Brave native connection repair — November 12, 2026
+
+Corrected Brave-only registration: Windows Chromium's native-host launcher looks under the
+Google/Chrome registry key, so setup now writes that compatibility key alongside the Brave
+key without expanding extension/browser grants. Repaired an existing registration and
+observed a running native host and fresh eligible Brave samples (without logging hostnames).
+Extension 0.1.2 classifies native connection failures with fixed safe messages. Hub recording
+status explains missing extension, inactive browser, idle and ineligible-site conditions.
+Focused browser/app core tests: **24 passed**. Node extension suite: **9 passed**.
+A packaged-terminal diagnostic initially read an old Windows-virtualized LocalCache
+copy mixed with journals from the actual app-data directory, producing a false corruption
+report. A normal-desktop diagnostic then verified the actual database: integrity OK,
+schema 19, and saved Brave intervals. Its SQLite backup also passed Hub validation.
+No recovery was applied and the live database was not replaced. Future local diagnostics
+must compare the resolved database location with the actual running app's file handles
+before performing recovery. Browser/screen-time UI regressions: **5 passed**.
+The desktop executable and unsigned installer were rebuilt; package dependency checks and
+embedded compatibility-registration/extension-0.1.2 asset checks passed. The existing working
+Brave native helper was retained because the live extension held its executable open; its
+protocol did not change. Hub was reopened normally, with browser recording left paused for
+the user to start explicitly.
+
+
+## Brave browser screen time — November 12, 2026
+
+Added Brave to browser usage contracts, foreground process matching (brave.exe), latest-sample
+cleanup, per-user native host registration and installer uninstall cleanup. Extension 0.1.1
+uses Brave's worker detection API with a device-local explicit Browser choice as a fallback.
+Changing that choice reconnects safely, including when a prior connection disconnects late.
+Hub setup and the user/privacy/release guides now include Brave. Existing schema 19 stores
+Brave records without migration; consent, exclusions, masking, retention and local-only data
+boundaries continue to apply.
+
+Validation: browser/app core and UI batch **26 passed**; final browser UI **2 passed**;
+Node extension suite **8 passed**; final browser core rerun **14 passed**. Clean PyInstaller
+helper and desktop builds and the unsigned Inno installer compilation passed. Package
+boundary checks passed; Brave contract/registration code and all four extension assets
+were checked inside the executable. The helper rejects an invalid caller without output
+and excludes Qt/Assistant modules. Changed Python files pass Ruff, repository format check,
+documentation consistency, import isolation and whitespace checks pass. Repository-wide
+Ruff currently reports an unrelated unused QDoubleSpinBox import in places_page.py from
+other pending work. Live Brave extension/native-host installation and signed release
+acceptance remain manual; no recording or user browser registration was enabled here.
+
+
 ## Browser site screen time — November 10, 2026
 
 Implemented optional Windows Chrome/Edge hostname tracking in

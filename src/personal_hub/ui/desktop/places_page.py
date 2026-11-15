@@ -11,10 +11,8 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDateEdit,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QLabel,
@@ -32,6 +30,11 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.places.contracts import MapPosition, Place, Visit
+from personal_hub.ui.desktop.controls import (
+    WheelSafeComboBox,
+    WheelSafeDateEdit,
+    WheelSafeDoubleSpinBox,
+)
 from personal_hub.ui.desktop.readable import ReadableDetails, ReadableList, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 
@@ -44,7 +47,7 @@ def label(text=""):
 
 
 def coordinate(name, minimum, maximum, value=0):
-    widget = QDoubleSpinBox()
+    widget = WheelSafeDoubleSpinBox()
     widget.setRange(minimum, maximum)
     widget.setDecimals(6)
     widget.setValue(value)
@@ -72,7 +75,7 @@ class PlaceDialog(QDialog):
         self.longitude = coordinate("Place longitude", -180, 180, longitude)
         form.addRow("Latitude", self.latitude)
         form.addRow("Longitude", self.longitude)
-        self.category = QComboBox()
+        self.category = WheelSafeComboBox()
         self.category.setEditable(True)
         self.category.addItems(["Other", "Study", "Library", "Food", "Building", "Outdoors"])
         self.category.lineEdit().setMaxLength(64)
@@ -129,7 +132,7 @@ class VisitDialog(QDialog):
         self.resize(400, 330)
         layout = QVBoxLayout(self)
         layout.addWidget(label(place.name))
-        self.day = QDateEdit()
+        self.day = WheelSafeDateEdit()
         self.day.setCalendarPopup(True)
         self.day.setDate(QDate(datetime.now(ZoneInfo(page.timezone)).date()))
         self.day.setAccessibleName("Visit date")
@@ -261,7 +264,7 @@ class PlacesPage(QScrollArea):
         self.search.setPlaceholderText("Search saved places")
         self.search.setAccessibleName("Search saved places by name, category, or notes")
         self.search.textChanged.connect(self.render)
-        self.category = QComboBox()
+        self.category = WheelSafeComboBox()
         self.category.setAccessibleName("Filter places by category")
         self.category.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -269,7 +272,7 @@ class PlacesPage(QScrollArea):
         self.category.setMinimumContentsLength(10)
         self.category.addItem("All categories", "")
         self.category.currentIndexChanged.connect(self.render)
-        self.state = QComboBox()
+        self.state = WheelSafeComboBox()
         self.state.setAccessibleName("Filter visited places, wanted places, or favorites")
         self.state.addItems(["All places", "Visited", "Want to visit", "Favorites"])
         self.state.currentIndexChanged.connect(self.render)

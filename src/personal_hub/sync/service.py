@@ -31,6 +31,7 @@ from personal_hub.sync.crypto import (
     decrypt_snapshot,
     encrypt_provider_relay,
     encrypt_snapshot,
+    validate_sync_passphrase,
 )
 from personal_hub.sync.relay_contracts import (
     RELAY_CATEGORIES,
@@ -291,7 +292,9 @@ class FileSyncEngine:
                 raise SyncConfigurationError("Sync folder could not be opened.") from error
         return directory
 
-    def _read_shards(self, passphrase: str) -> tuple[SyncSnapshot | None, tuple[SyncSnapshot, ...]]:
+    def _read_shards(
+        self, passphrase: str | None
+    ) -> tuple[SyncSnapshot | None, tuple[SyncSnapshot, ...]]:
         directory = self._directory(create=False)
         if not directory.exists():
             return None, ()
@@ -322,7 +325,7 @@ class FileSyncEngine:
                 other.append(snapshot)
         return own, tuple(other)
 
-    def _publish(self, snapshot: SyncSnapshot, passphrase: str) -> None:
+    def _publish(self, snapshot: SyncSnapshot, passphrase: str | None) -> None:
         directory = self._directory(create=True)
         bundle = encrypt_snapshot(snapshot, passphrase)
         if len(bundle) > SYNC_BUNDLE_MAX_BYTES:
@@ -346,7 +349,7 @@ class FileSyncEngine:
     def synchronize(
         self,
         local_snapshot: SyncSnapshot,
-        passphrase: str,
+        passphrase: str | None,
         *,
         apply: Callable[[SyncSnapshot], None] | None = None,
         now: datetime | None = None,
@@ -356,6 +359,7 @@ class FileSyncEngine:
 
         if local_snapshot.device_id != self.device_id:
             raise SyncConfigurationError("Local sync snapshot has the wrong device identity.")
+        validate_sync_passphrase(passphrase)
         timestamp = _utc(now or datetime.now(UTC))
         previous, other = self._read_shards(passphrase)
 
@@ -480,6 +484,16 @@ class SyncService:
         self.settings_repository.set(_SYNC_ENABLED_KEY, False)
         return self.status()
 
+    def passphrase_required(self) -> bool:
+        return self.settings_repository.get("sync.passphrase_required", True) is not False
+
+    def set_passphrase_required(self, required: bool) -> SyncStatus:
+        if type(required) is not bool:
+            raise SyncConfigurationError("Sync passphrase setting is invalid.")
+        self.settings_repository.set("sync.passphrase_required", required)
+        self.settings_repository.delete(_SYNC_LAST_ERROR_KEY)
+        return self.status()
+
     def provider_relay_role(self) -> SyncRole:
         value = self.settings_repository.get(_RELAY_ROLE_KEY, "local")
         if isinstance(value, str) and value in {"local", "collector", "consumer"}:
@@ -511,7 +525,7 @@ class SyncService:
     def publish_provider_relay(
         self,
         snapshot: ProviderRelaySnapshot,
-        passphrase: str,
+        passphrase: str | None,
     ) -> ProviderRelaySnapshot:
         endpoint = self.endpoint()
         enabled = self.settings_repository.get(_SYNC_ENABLED_KEY, False) is True
@@ -549,7 +563,7 @@ class SyncService:
             raise
         return snapshot
 
-    def read_provider_relay(self, passphrase: str) -> ProviderRelaySnapshot | None:
+    def read_provider_relay(self, passphrase: str | None) -> ProviderRelaySnapshot | None:
         endpoint = self.endpoint()
         enabled = self.settings_repository.get(_SYNC_ENABLED_KEY, False) is True
         if not enabled or endpoint is None:
@@ -661,6 +675,7 @@ class SyncService:
         return SyncStatus(
             state=state,
             enabled=enabled,
+            passphrase_required=self.passphrase_required(),
             endpoint=None if endpoint is None else os.fspath(endpoint),
             device_id=self._device_id(),
             profile_paired=profile_paired,
@@ -677,7 +692,7 @@ class SyncService:
     def synchronize(
         self,
         local_snapshot: SyncSnapshot,
-        passphrase: str,
+        passphrase: str | None,
         *,
         apply: Callable[[SyncSnapshot], None] | None = None,
         now: datetime | None = None,
@@ -696,8 +711,8 @@ class SyncService:
             result = engine.synchronize(
                 local_snapshot, passphrase, apply=apply, now=now, excluded_collections=excluded
             )
-        except (SyncError, SyncBundleError, SyncPassphraseError):
-            self.record_error()
+        except (SyncError, SyncBundleError, SyncPassphraseError) as error:
+            self.record_error(str(error))
             raise
         self.settings_repository.set(_SYNC_PROFILE_ID_KEY, result.profile_id)
         self.settings_repository.set(_SYNC_LAST_SYNC_KEY, result.completed_at.isoformat())

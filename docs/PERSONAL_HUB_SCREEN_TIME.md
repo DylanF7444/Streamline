@@ -3,7 +3,7 @@
 Implemented November 9, 2026 as a Windows-only local Logging extension. Screen time is
 observed foreground application use, independent from task Activity, manual durations,
 Reflections and Metrics. Android and iOS remain deferred. November 10 adds optional
-Chrome/Edge hostname collection described in `PERSONAL_HUB_BROWSER_TIME.md`; the Windows
+Chrome/Edge/Brave hostname collection described in `PERSONAL_HUB_BROWSER_TIME.md`; the Windows
 app observer below still collects no browser URLs.
 
 ## Recording
@@ -83,3 +83,29 @@ Screen-time-specific validation passed eight core and three UI tests. Repository
 lint/format, documentation, whitespace and pre-desktop import isolation checks pass.
 The native Windows observer also completed a basename-only smoke sample without persisting
 or printing the observed application identity. No installer rebuild is claimed for this change.
+
+
+## Background recording indicators — November 15, 2026
+
+While Hub is in the tray, its icon shows two status marks: apps on the left and
+browser sites on the right. **R** in green means an interval was saved; **W** in amber
+means enabled and waiting (idle, excluded/unavailable app, browser focus or extension
+connection); **P** in gray means paused; **!** in red means a storage error.
+Hover for separate app/site details. The tray menu provides independent app/site
+start and pause controls, last-save times and **Review screen time**. Last-save times
+are hidden under privacy masking or lock. No app names or hostnames appear in the tray.
+Windows may place the tray icon in its overflow area; pin it using Windows tray settings.
+
+Pin the browser extension to its toolbar to see **REC**, **WAIT**, **OFF**, or **!**.
+Hover for the reason or click for the status popup. REC requires a recent successful
+Hub checkpoint for the current eligible site. Connection and consent alone show WAIT.
+Changing tabs, losing browser focus, idle, exclusions, pause, lock and disconnect clear
+REC on the next observation/response. Hub samples every five seconds, the extension
+checks every two seconds, and a silent helper clears REC after twelve seconds without
+a response (on the next timer tick). Status contains no hostname or page content and
+never opens a popup automatically. Older helpers show WAIT until updated.
+
+Update/rebuild Hub and PersonalHubBrowserHost.exe together, export the updated extension
+files to the existing extension folder, then reload it on the browser extensions page.
+Extension version 0.1.3 includes these indicators. Repeat setup if the extension ID or
+helper location changes. No new permission or collection opt-in is required.

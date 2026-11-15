@@ -1,4 +1,4 @@
-"""Explicit per-user Chrome/Edge native-host registration."""
+"""Explicit per-user Chrome/Edge/Brave native-host registration."""
 
 import re
 import sys
@@ -12,6 +12,7 @@ HOST_NAME = "com.personalhub.browser_time"
 REGISTRY = {
     "chrome": r"Software\Google\Chrome\NativeMessagingHosts",
     "edge": r"Software\Microsoft\Edge\NativeMessagingHosts",
+    "brave": r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
 }
 
 
@@ -50,8 +51,14 @@ def register(browser, extension_id, host_path, data_dir):
     )
     import winreg
 
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REGISTRY[browser] + "\\" + HOST_NAME) as key:
-        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(manifest_path))
+    bases = [REGISTRY[browser]]
+    if browser == "brave":
+        # Brave inherits Chromium's Windows Chrome-key lookup. Keep its branded
+        # key too for compatibility; this does not add origins or permissions.
+        bases.append(REGISTRY["chrome"])
+    for base in bases:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\" + HOST_NAME) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(manifest_path))
 
 
 def unregister():

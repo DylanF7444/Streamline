@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
-    QDateTimeEdit,
     QDialog,
     QFormLayout,
     QFrame,
@@ -45,7 +44,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
@@ -67,6 +65,11 @@ from personal_hub.ui.desktop.appearance import (
     contrast_text,
     resolved_theme_colors,
     theme_stylesheet,
+)
+from personal_hub.ui.desktop.controls import (
+    WheelSafeComboBox,
+    WheelSafeDateTimeEdit,
+    WheelSafeSpinBox,
 )
 from personal_hub.ui.desktop.dashboard import DashboardBoard
 from personal_hub.ui.desktop.focus_panel import FocusPanel
@@ -106,6 +109,7 @@ NAVIGATION_DESTINATIONS: Final[tuple[str, ...]] = (
     "Places",
     "Metrics",
     "Screen time",
+    "Weekly review",
 )
 NAVIGATION_LABELS: Final[tuple[str, ...]] = tuple(
     "Daily overview" if name == "Summary" else name for name in NAVIGATION_DESTINATIONS
@@ -126,11 +130,13 @@ _NAVIGATION_OBJECT_NAMES: Final[dict[str, str]] = {
     "Places": "placesButton",
     "Metrics": "metricsButton",
     "Screen time": "screenTimeButton",
+    "Weekly review": "weeklyReviewButton",
 }
 _WORKSPACE_DESTINATIONS: Final[tuple[str, ...]] = NAVIGATION_DESTINATIONS[:5]
 _MANAGEMENT_DESTINATIONS: Final[tuple[str, ...]] = ("Sources", "Settings")
 _LOGGING_DESTINATIONS: Final[tuple[str, ...]] = (
     "Summary",
+    "Weekly review",
     "Activity",
     "Reflection",
     "Places",
@@ -234,10 +240,11 @@ class SettingsView:
 
 @dataclass(frozen=True, slots=True)
 class SyncView:
-    """Safe presentation data for the encrypted shared-folder sync card."""
+    """Safe presentation data for the shared-folder sync card."""
 
     state: str = "not_configured"
     enabled: bool = False
+    passphrase_required: bool = True
     endpoint: str = ""
     profile_paired: bool = False
     last_sync_at: str = ""
@@ -876,7 +883,7 @@ _TIMEZONE_ITEMS: Final[tuple[tuple[str, str], ...]] = tuple(
 )
 
 
-class TimezoneComboBox(QComboBox):
+class TimezoneComboBox(WheelSafeComboBox):
     """Searchable timezone selector backed by IANA timezone identifiers."""
 
     def __init__(
@@ -1137,6 +1144,7 @@ def _coerce_sync(value: SyncView | Mapping[str, object] | None) -> SyncView:
         ),
         enabled=_bool_value(_field(data, "enabled", False)),
         endpoint=_safe_text(_field(data, "endpoint", ""), limit=1_024),
+        passphrase_required=_bool_value(_field(data, "passphrase_required", True), default=True),
         profile_paired=_bool_value(_field(data, "profile_paired", False)),
         last_sync_at=_safe_text(_field(data, "last_sync_at", ""), limit=120),
         last_error=_safe_text(_field(data, "last_error", ""), limit=240),
@@ -3625,6 +3633,7 @@ class PersonalHubMainWindow(QMainWindow):
     sync_configure_requested = Signal(str)
     sync_folder_browse_requested = Signal()
     sync_requested = Signal(str)
+    sync_passphrase_required_changed = Signal(bool)
     sync_disable_requested = Signal()
     sync_relay_role_changed = Signal(str)
     sync_relay_categories_changed = Signal(object)
@@ -3999,7 +4008,7 @@ class PersonalHubMainWindow(QMainWindow):
         navigation_label.setTextFormat(Qt.TextFormat.PlainText)
         self.navigation_caption = navigation_label
         layout.addWidget(navigation_label)
-        self.mode_selector = QComboBox()
+        self.mode_selector = WheelSafeComboBox()
         self.mode_selector.setObjectName("workspaceModeSelector")
         self.mode_selector.setAccessibleName("Tracking or Logging mode")
         mode_help = "Tracking: plan and review what needs attention. Logging: record progress and reflections."
@@ -4008,6 +4017,12 @@ class PersonalHubMainWindow(QMainWindow):
         self.mode_selector.addItems(["Tracking", "Logging"])
         self.mode_selector.currentTextChanged.connect(self.set_workspace_mode)
         layout.addWidget(self.mode_selector)
+        self.mode_description_label = QLabel("Plan and review what needs attention.")
+        self.mode_description_label.setObjectName("pageSubtitle")
+        self.mode_description_label.setAccessibleName("Current workspace mode purpose")
+        self.mode_description_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.mode_description_label.setWordWrap(True)
+        layout.addWidget(self.mode_description_label)
 
         workspace_header = QWidget(navigation)
         workspace_header.setObjectName("workspaceNavigationHeader")
@@ -4572,13 +4587,12 @@ class PersonalHubMainWindow(QMainWindow):
         header_layout.addWidget(title)
 
         header.setAccessibleDescription(description)
-        subtitle = QLabel("")
+        subtitle = QLabel(description)
         subtitle.setObjectName("pageSubtitle")
         subtitle.setAccessibleName(f"{destination} page description")
         subtitle.setTextFormat(Qt.TextFormat.PlainText)
         subtitle.setWordWrap(True)
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        subtitle.hide()
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
         return eyebrow, title, subtitle
@@ -4590,7 +4604,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.today_eyebrow, self.today_title, self.today_subtitle = self._add_page_header(
             layout,
             TODAY_DESTINATION,
-            "Tasks, calendar, alerts, and activity.",
+            "Start with due tasks and today's agenda. Add a task or log progress below.",
         )
         self._workspace_page_title_labels[HOME_DESTINATION] = self.today_title
 
@@ -4938,7 +4952,7 @@ class PersonalHubMainWindow(QMainWindow):
         _eyebrow, self.calendar_title, _subtitle = self._add_page_header(
             layout,
             "Calendar",
-            "View selected calendars and event details.",
+            "Add a local item, or choose Calendars to select connected calendars and imports.",
         )
         self._workspace_page_title_labels["Calendar"] = self.calendar_title
 
@@ -4988,7 +5002,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.calendar_period_label.setTextFormat(Qt.TextFormat.PlainText)
         self.calendar_period_label.setWordWrap(True)
         toolbar_layout.addWidget(self.calendar_period_label, 0, 3)
-        self.calendar_mode_combo = QComboBox()
+        self.calendar_mode_combo = WheelSafeComboBox()
         self.calendar_mode_combo.setObjectName("calendarModeCombo")
         self.calendar_mode_combo.setAccessibleName("Calendar view mode")
         for label, value in (
@@ -6412,7 +6426,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_quick_view_button.setMenu(self.task_quick_view_menu)
         task_view_layout.addWidget(self.task_quick_view_button, 1, 0)
 
-        self.task_state_filter = QComboBox()
+        self.task_state_filter = WheelSafeComboBox()
         self.task_state_filter.setObjectName("taskStateFilter")
         self.task_state_filter.setAccessibleName("Task state filter")
         for label, value in (
@@ -6425,7 +6439,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_state_filter.currentIndexChanged.connect(self._task_filters_changed)
         self.task_status_filter = self.task_state_filter
 
-        self.task_due_filter = QComboBox()
+        self.task_due_filter = WheelSafeComboBox()
         self.task_due_filter.setObjectName("taskDueFilter")
         self.task_due_filter.setAccessibleName("Task due-date filter")
         for label, value in (
@@ -6439,7 +6453,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_due_filter.currentIndexChanged.connect(self._task_filters_changed)
         self.task_date_filter = self.task_due_filter
 
-        self.task_sort_combo = QComboBox()
+        self.task_sort_combo = WheelSafeComboBox()
         self.task_sort_combo.setObjectName("taskSortFilter")
         self.task_sort_combo.setAccessibleName("Task sort order")
         for label, value in (
@@ -6575,6 +6589,7 @@ class PersonalHubMainWindow(QMainWindow):
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.task_editor_form = form
         instructions = QLabel("Title is required. All other details are optional.")
         instructions.setWordWrap(True)
         outer.addWidget(instructions)
@@ -6595,7 +6610,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_notes_edit = self.task_notes_input
         self.task_notes = self.task_notes_input
 
-        self.task_due_input = QDateTimeEdit(QDateTime.currentDateTime())
+        self.task_due_input = WheelSafeDateTimeEdit(QDateTime.currentDateTime())
         self.task_due_input.setObjectName("taskDueInput")
         self.task_due_input.setAccessibleName("Task due date and time")
         self.task_due_input.setCalendarPopup(True)
@@ -6621,7 +6636,7 @@ class PersonalHubMainWindow(QMainWindow):
         form.addRow("Timezone", self.task_timezone_input)
         self.task_timezone_edit = self.task_timezone_input
         self.task_timezone = self.task_timezone_input
-        self.task_priority_input = QComboBox()
+        self.task_priority_input = WheelSafeComboBox()
         self.task_priority_input.setObjectName("taskPriorityInput")
         self.task_priority_input.setAccessibleName("Task priority")
         for label, value in (
@@ -6649,7 +6664,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_tags_edit = self.task_tags_input
         self.task_tags = self.task_tags_input
 
-        self.task_recurrence_input = QComboBox()
+        self.task_recurrence_input = WheelSafeComboBox()
         self.task_recurrence_input.setObjectName("taskRecurrenceInput")
         self.task_recurrence_input.setAccessibleName("Task recurrence")
         self.task_recurrence_input.setEditable(True)
@@ -6657,23 +6672,23 @@ class PersonalHubMainWindow(QMainWindow):
         form.addRow("Repeat (optional)", self.task_recurrence_input)
         self.task_recurrence_combo = self.task_recurrence_input
         self.task_recurrence = self.task_recurrence_input
-        self.task_time_mode_input = QComboBox()
+        self.task_time_mode_input = WheelSafeComboBox()
         for label, value in (
             ("No timer", "none"),
-            ("Time goal (completes automatically)", "goal"),
-            ("Effort estimate (confirm completion)", "estimate"),
+            ("Time goal (auto-complete)", "goal"),
+            ("Effort estimate (confirm)", "estimate"),
         ):
             self.task_time_mode_input.addItem(label, value)
         self.task_time_mode_input.setAccessibleName("Task timer type")
         form.addRow("Timer", self.task_time_mode_input)
-        self.task_target_minutes_input = QSpinBox()
+        self.task_target_minutes_input = WheelSafeSpinBox()
         self.task_target_minutes_input.setRange(1, 1440)
         self.task_target_minutes_input.setValue(60)
         self.task_target_minutes_input.setEnabled(False)
         self.task_target_minutes_input.setSuffix(" minutes")
         self.task_target_minutes_input.setAccessibleName("Task target minutes")
         form.addRow("Time target", self.task_target_minutes_input)
-        self.task_log_focus_input = QCheckBox("Save measured minutes to Activity")
+        self.task_log_focus_input = QCheckBox("Log timer minutes to Activity")
         form.addRow("Time logging", self.task_log_focus_input)
         timer_hint = QLabel(
             "Changing the timer type or target resets saved timer progress. Duration logging is optional; partial minutes are omitted."
@@ -7512,7 +7527,7 @@ class PersonalHubMainWindow(QMainWindow):
         _eyebrow, self.watchlists_title, _subtitle = self._add_page_header(
             layout,
             "Watchlists",
-            "Manage webpage watches and RSS or Atom feeds.",
+            "Add a watch for page, price, or restock changes. Manage news feeds below; alerts appear in Inbox.",
         )
         self._workspace_page_title_labels["Watchlists"] = self.watchlists_title
         self._build_web_watch_panel(layout)
@@ -7819,7 +7834,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_url_input.setPlaceholderText("https://shop.example/product")
         self.watch_url_input.setMaxLength(2_048)
 
-        self.watch_kind_combo = QComboBox()
+        self.watch_kind_combo = WheelSafeComboBox()
         self.watch_kind_combo.setObjectName("watchKindCombo")
         self.watch_kind_combo.setAccessibleName("Watch type")
         for label, value in (
@@ -7830,7 +7845,7 @@ class PersonalHubMainWindow(QMainWindow):
             ("changedetection.io", "changedetection"),
         ):
             self.watch_kind_combo.addItem(label, value)
-        self.watch_condition_combo = QComboBox()
+        self.watch_condition_combo = WheelSafeComboBox()
         self.watch_condition_combo.setObjectName("watchConditionCombo")
         self.watch_condition_combo.setAccessibleName("Typed watch condition")
         for label, value in (
@@ -7865,7 +7880,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.watch_cooldown_input.setObjectName("watchCooldownInput")
         self.watch_cooldown_input.setAccessibleName("Watch alert cooldown in minutes")
         self.watch_cooldown_input.setMaxLength(5)
-        self.watch_notification_combo = QComboBox()
+        self.watch_notification_combo = WheelSafeComboBox()
         self.watch_notification_combo.setObjectName("watchNotificationCombo")
         self.watch_notification_combo.setAccessibleName("Watch notification policy")
         for label, value in (
@@ -9067,11 +9082,11 @@ class PersonalHubMainWindow(QMainWindow):
         return panel, title, summary, open_button, dismiss_button
 
     def _build_inbox_page(self) -> QWidget:
-        page, layout = self._new_page("inboxPage", "Inbox page")
+        page, layout = self._new_page("inboxPage", "Inbox page", scrollable=True)
         _eyebrow, self.inbox_title, _subtitle = self._add_page_header(
             layout,
             "Inbox",
-            "Review alerts, reminders, and selected message summaries.",
+            "Alerts are Hub reminders and changes. Messages are selected email and chat summaries.",
         )
         self._workspace_page_title_labels["Inbox"] = self.inbox_title
 
@@ -9101,14 +9116,16 @@ class PersonalHubMainWindow(QMainWindow):
         self.inbox_list.setAccessibleName("Inbox items")
         self.inbox_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.inbox_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.inbox_list.setMinimumHeight(180)
         self.inbox_list.currentItemChanged.connect(self._inbox_selection_changed)
         alerts_layout.addWidget(self.inbox_list, 1)
-        inbox_actions = QHBoxLayout()
+        inbox_actions = QGridLayout()
+        self.inbox_actions_layout = inbox_actions
         self.inbox_read_button = QPushButton("Mark read")
         self.inbox_read_button.setAccessibleName("Mark selected Inbox item read or unread")
         self.inbox_read_button.setEnabled(False)
         self.inbox_read_button.clicked.connect(self._toggle_selected_inbox_read)
-        inbox_actions.addWidget(self.inbox_read_button)
+        inbox_actions.addWidget(self.inbox_read_button, 0, 0)
         self.inbox_dismiss_button = QPushButton("Dismiss")
         self.inbox_dismiss_button.setAccessibleName("Dismiss selected Inbox item")
         self.inbox_dismiss_button.setToolTip(
@@ -9118,15 +9135,14 @@ class PersonalHubMainWindow(QMainWindow):
         self.inbox_dismiss_button.clicked.connect(
             lambda: self._request_selected_inbox_state("dismissed")
         )
-        inbox_actions.addWidget(self.inbox_dismiss_button)
+        inbox_actions.addWidget(self.inbox_dismiss_button, 0, 1)
         self.inbox_archive_button = QPushButton("Archive")
         self.inbox_archive_button.setAccessibleName("Archive selected Inbox item")
         self.inbox_archive_button.setEnabled(False)
         self.inbox_archive_button.clicked.connect(
             lambda: self._request_selected_inbox_state("archived")
         )
-        inbox_actions.addWidget(self.inbox_archive_button)
-        inbox_actions.addStretch(1)
+        inbox_actions.addWidget(self.inbox_archive_button, 0, 2)
         alerts_layout.addLayout(inbox_actions)
 
         messages_page = QWidget()
@@ -9136,16 +9152,23 @@ class PersonalHubMainWindow(QMainWindow):
         messages_layout.setContentsMargins(4, 8, 4, 4)
         messages_layout.setSpacing(8)
 
-        self.message_status_label = QLabel("No message sources configured.")
+        self.message_status_label = StatusLabel(
+            "No message sources configured. Open Sources to connect email or chat."
+        )
         self.message_status_label.setObjectName("pageSubtitle")
         self.message_status_label.setAccessibleName("Attention message status")
         self.message_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.message_status_label.setWordWrap(True)
         messages_layout.addWidget(self.message_status_label)
+        self.message_sources_button = QPushButton("Open Sources")
+        self.message_sources_button.setAccessibleName("Open Sources to manage message connections")
+        self.message_sources_button.clicked.connect(lambda: self.show_destination("Sources"))
+        messages_layout.addWidget(self.message_sources_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
         category_bar = QFrame()
         category_bar.setObjectName("messageCategoryBar")
-        category_bar_layout = QHBoxLayout(category_bar)
+        category_bar_layout = QGridLayout(category_bar)
+        self.message_category_layout = category_bar_layout
         category_bar_layout.setContentsMargins(0, 0, 0, 0)
         category_bar_layout.setSpacing(5)
         self.message_category_group = QButtonGroup(self)
@@ -9158,7 +9181,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_category_selector.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.message_category_menu = QMenu(self.message_category_selector)
         self.message_category_actions: dict[str, QAction] = {}
-        category_bar_layout.addWidget(self.message_category_selector)
+        category_bar_layout.addWidget(self.message_category_selector, 0, 0)
         for category in MESSAGE_CATEGORY_VALUES:
             # Keep the button-level contract for callers and tests while the
             # normal UI uses one compact category menu at narrow widths.
@@ -9180,7 +9203,6 @@ class PersonalHubMainWindow(QMainWindow):
                 lambda _checked=False, selected=category: self.set_message_category(selected)
             )
             self.message_category_actions[category] = action
-        category_bar_layout.addStretch(1)
         self.message_category_buttons["primary"].setChecked(True)
         self.message_category_actions["primary"].setChecked(True)
         self.message_category_selector.setMenu(self.message_category_menu)
@@ -9188,7 +9210,8 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_category_status_label.setObjectName("messageCategoryStatus")
         self.message_category_status_label.setAccessibleName("Selected message category status")
         self.message_category_status_label.setTextFormat(Qt.TextFormat.PlainText)
-        category_bar_layout.addWidget(self.message_category_status_label)
+        self.message_category_status_label.setWordWrap(True)
+        category_bar_layout.addWidget(self.message_category_status_label, 0, 1)
         messages_layout.addWidget(category_bar)
 
         self.message_list = QListWidget()
@@ -9196,30 +9219,35 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_list.setAccessibleName("Selected message summaries")
         self.message_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.message_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.message_list.setMinimumHeight(180)
         self.message_list.currentItemChanged.connect(self._message_selection_changed)
         self.message_list.itemDoubleClicked.connect(
             lambda _item: self._request_selected_message_body()
         )
 
-        message_actions = QHBoxLayout()
+        message_actions = QGridLayout()
+        self.message_actions_layout = message_actions
         self.message_open_button = QPushButton("View body")
         self.message_open_button.setObjectName("messageOpenButton")
         self.message_open_button.setAccessibleName("View selected message body")
         self.message_open_button.setEnabled(False)
         self.message_open_button.clicked.connect(self._request_selected_message_body)
-        message_actions.addWidget(self.message_open_button)
-        self.message_provider_button = QPushButton("Open provider")
+        message_actions.addWidget(self.message_open_button, 0, 0)
+        self.message_provider_button = QPushButton("Open in provider")
         self.message_provider_button.setObjectName("messageProviderButton")
         self.message_provider_button.setAccessibleName("Open selected message in provider")
         self.message_provider_button.setEnabled(False)
         self.message_provider_button.clicked.connect(self._request_selected_message_link)
-        message_actions.addWidget(self.message_provider_button)
+        message_actions.addWidget(self.message_provider_button, 0, 1)
         self.message_clear_button = QPushButton("Clear summaries")
         self.message_clear_button.setObjectName("messageClearButton")
         self.message_clear_button.setAccessibleName("Clear retained message summaries")
+        self.message_clear_button.setEnabled(False)
+        self.message_clear_button.setToolTip(
+            "Clear saved summaries in Personal Hub. Messages at the provider are kept."
+        )
         self.message_clear_button.clicked.connect(self.message_clear_requested.emit)
-        message_actions.addWidget(self.message_clear_button)
-        message_actions.addStretch(1)
+        message_actions.addWidget(self.message_clear_button, 0, 2)
         left_messages = QWidget()
         left_messages.setObjectName("messageListPane")
         left_messages.setAccessibleName("Message summary list and actions")
@@ -9233,10 +9261,12 @@ class PersonalHubMainWindow(QMainWindow):
         body_heading.setObjectName("sectionTitle")
         body_heading.setAccessibleName("Memory-only message body heading")
         body_heading.setTextFormat(Qt.TextFormat.PlainText)
+        body_heading.setWordWrap(True)
         self.message_body_view = ReadableText()
         self.message_body_view.setObjectName("messageBodyView")
         self.message_body_view.setAccessibleName("Sanitized memory-only message body")
         self.message_body_view.setReadOnly(True)
+        self.message_body_view.setMinimumHeight(160)
         self.message_body_view.setPlaceholderText(
             "Select a summary and choose View body. Remote content is never loaded."
         )
@@ -9244,6 +9274,7 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_link_list = ReadableList()
         self.message_link_list.setObjectName("messageBodyLinks")
         self.message_link_list.setAccessibleName("Safe links in the selected message")
+        self.message_link_list.setMinimumHeight(90)
         self.message_link_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.message_link_list.itemDoubleClicked.connect(
             lambda item: self.message_deep_link_requested.emit(item.text())
@@ -9356,6 +9387,10 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.settings_status_label.setWordWrap(True)
         layout.addWidget(self.settings_status_label)
+        self.settings_top_save_button = QPushButton("Save settings")
+        self.settings_top_save_button.setAccessibleName("Save Personal Hub settings")
+        self.settings_top_save_button.clicked.connect(self._request_settings_save)
+        layout.addWidget(self.settings_top_save_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.appearance_panel = AppearancePanel()
         self.appearance_panel.changed.connect(self._request_appearance_save)
         layout.addWidget(self.appearance_panel)
@@ -9412,6 +9447,10 @@ class PersonalHubMainWindow(QMainWindow):
         editor_layout.setContentsMargins(20, 16, 20, 16)
         editor_layout.setHorizontalSpacing(14)
         editor_layout.setVerticalSpacing(8)
+        preferences_heading = QLabel("Preferences")
+        preferences_heading.setObjectName("sectionTitle")
+        preferences_heading.setTextFormat(Qt.TextFormat.PlainText)
+        editor_layout.addRow(preferences_heading)
         self.settings_checkboxes: dict[str, QCheckBox] = {}
         checkbox_fields = (
             ("privacy_masking", "Privacy masking"),
@@ -9476,7 +9515,7 @@ class PersonalHubMainWindow(QMainWindow):
 
         scale_label = QLabel("Text scale")
         scale_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.settings_text_scale_combo = QComboBox()
+        self.settings_text_scale_combo = WheelSafeComboBox()
         self.settings_text_scale_combo.setAccessibleName("Text scale setting")
         for scale in (1.0, 1.25, 1.5, 1.75):
             self.settings_text_scale_combo.addItem(f"{scale:g}×", scale)
@@ -9495,6 +9534,10 @@ class PersonalHubMainWindow(QMainWindow):
         self.settings_save_status_label.setWordWrap(True)
         self.settings_save_status_label.hide()
         settings_actions.addWidget(self.settings_save_status_label)
+        backup_heading = QLabel("Backups and export")
+        backup_heading.setObjectName("sectionTitle")
+        backup_heading.setTextFormat(Qt.TextFormat.PlainText)
+        settings_actions.addWidget(backup_heading)
         self.settings_backup_button = QPushButton("Back up database")
         self.settings_backup_button.setAccessibleName("Back up Personal Hub database")
         self.settings_backup_button.clicked.connect(self.backup_requested.emit)
@@ -9524,10 +9567,10 @@ class PersonalHubMainWindow(QMainWindow):
         sync_title = QLabel("Sync across devices")
         sync_title.setObjectName("diagnosticsTitle")
         sync_title.setTextFormat(Qt.TextFormat.PlainText)
-        sync_title.setAccessibleName("Encrypted sync heading")
+        sync_title.setAccessibleName("Shared-folder sync heading")
         sync_layout.addRow(sync_title)
         sync_description = QLabel(
-            "Choose one provider collector to refresh connected sources and publish encrypted "
+            "Choose one provider collector to refresh connected sources and publish "
             "snapshots. Consumer devices read the latest snapshot without provider access. "
             "Credentials, message bodies, and private calendar feed URLs stay local."
         )
@@ -9535,7 +9578,7 @@ class PersonalHubMainWindow(QMainWindow):
         sync_description.setTextFormat(Qt.TextFormat.PlainText)
         sync_description.setWordWrap(True)
         sync_layout.addRow(sync_description)
-        self.sync_role_combo = QComboBox()
+        self.sync_role_combo = WheelSafeComboBox()
         self.sync_role_combo.setObjectName("providerRelayRole")
         self.sync_role_combo.setAccessibleName("Provider relay device role")
         for label, value in (
@@ -9563,7 +9606,7 @@ class PersonalHubMainWindow(QMainWindow):
         sync_layout.addRow(QLabel("Provider snapshot content"), relay_categories)
         self.sync_status_label = QLabel("Not configured")
         self.sync_status_label.setObjectName("diagnosticsBody")
-        self.sync_status_label.setAccessibleName("Encrypted sync status")
+        self.sync_status_label.setAccessibleName("Shared-folder sync status")
         self.sync_status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.sync_status_label.setWordWrap(True)
         sync_layout.addRow(QLabel("Status"), self.sync_status_label)
@@ -9574,19 +9617,32 @@ class PersonalHubMainWindow(QMainWindow):
         sync_folder_row.addWidget(self.sync_endpoint_input, 1)
         self.sync_folder_browse_button = QPushButton("Browse…")
         self.sync_folder_browse_button.setAccessibleName("Browse for shared sync folder")
-        self.sync_folder_browse_button.clicked.connect(
-            self.sync_folder_browse_requested.emit
-        )
+        self.sync_folder_browse_button.clicked.connect(self.sync_folder_browse_requested.emit)
         sync_folder_row.addWidget(self.sync_folder_browse_button)
         sync_layout.addRow(QLabel("Shared folder"), sync_folder_row)
+        self.sync_protection_combo = WheelSafeComboBox()
+        self.sync_protection_combo.setAccessibleName("Shared sync file protection")
+        self.sync_protection_combo.addItem("Passphrase encryption (recommended)", True)
+        self.sync_protection_combo.addItem("No passphrase (unencrypted)", False)
+        self.sync_protection_combo.currentIndexChanged.connect(self._request_sync_protection)
+        sync_layout.addRow(QLabel("Protection"), self.sync_protection_combo)
+        self.sync_protection_notice = QLabel(
+            "Without a passphrase, anyone with shared-folder access can read or change sync "
+            "files. Use the same protection on every device; choose a new folder to change it."
+        )
+        self.sync_protection_notice.setWordWrap(True)
+        self.sync_protection_notice.setVisible(False)
+        sync_layout.addRow(self.sync_protection_notice)
         self.sync_passphrase_input = QLineEdit()
         self.sync_passphrase_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sync_passphrase_input.setPlaceholderText("Passphrase, never stored by Personal Hub")
+        self.sync_passphrase_input.setPlaceholderText(
+            "At least 12 characters; never stored by Personal Hub"
+        )
         self.sync_passphrase_input.setAccessibleName("Personal Hub sync passphrase")
         sync_layout.addRow(QLabel("Passphrase"), self.sync_passphrase_input)
         sync_actions = QHBoxLayout()
         self.sync_configure_button = QPushButton("Save folder")
-        self.sync_configure_button.setAccessibleName("Save encrypted sync folder")
+        self.sync_configure_button.setAccessibleName("Save shared sync folder")
         self.sync_configure_button.clicked.connect(self._request_sync_configure)
         sync_actions.addWidget(self.sync_configure_button)
         self.sync_button = QPushButton("Sync now")
@@ -9674,6 +9730,34 @@ class PersonalHubMainWindow(QMainWindow):
         self.task_content_splitter.setOrientation(
             Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
         )
+        inbox_compact = compact or self._text_scale > 1.25
+        self.task_editor_form.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapAllRows
+            if inbox_compact
+            else QFormLayout.RowWrapPolicy.WrapLongRows
+        )
+        self.message_content_splitter.setOrientation(
+            Qt.Orientation.Vertical if inbox_compact else Qt.Orientation.Horizontal
+        )
+        for action_layout, buttons in (
+            (
+                self.inbox_actions_layout,
+                (self.inbox_read_button, self.inbox_dismiss_button, self.inbox_archive_button),
+            ),
+            (
+                self.message_actions_layout,
+                (self.message_open_button, self.message_provider_button, self.message_clear_button),
+            ),
+            (
+                self.message_category_layout,
+                (self.message_category_selector, self.message_category_status_label),
+            ),
+        ):
+            for index, button in enumerate(buttons):
+                action_layout.removeWidget(button)
+                action_layout.addWidget(
+                    button, index if inbox_compact else 0, 0 if inbox_compact else index
+                )
         self.watch_form.setRowWrapPolicy(
             QFormLayout.RowWrapPolicy.WrapAllRows
             if compact
@@ -9771,6 +9855,11 @@ class PersonalHubMainWindow(QMainWindow):
             return False
         changed = destination != previous_destination
         self._active_destination = destination
+        self.mode_description_label.setText(
+            "Record progress and reflect on your day."
+            if self._workspace_mode == "Logging"
+            else "Plan and review what needs attention."
+        )
         if target_destination not in _MANAGEMENT_DESTINATIONS:
             self._mode_pages[self._workspace_mode] = destination
         self._workspace_calendar_filter = (
@@ -9927,6 +10016,7 @@ class PersonalHubMainWindow(QMainWindow):
             self.tray_controller.set_network_refresh_paused(paused, emit=False)
         self._source_selection_changed()
         self._render_mini_calendar()
+        self._update_message_status()
         self._update_status()
         if changed:
             self.network_pause_changed.emit(paused)
@@ -10305,6 +10395,43 @@ class PersonalHubMainWindow(QMainWindow):
         self.message_category_selector.setText(f"Category: {selected_label} · {selected_total}")
         self.message_category_selector.setAccessibleName(f"Message category: {selected_label}")
         self._update_inbox_tab_labels()
+        self._update_message_status()
+
+    def _update_message_status(self) -> None:
+        """Explain connection health separately from the selected category's results."""
+
+        state = self._messages_view.freshness
+        has_sources = bool(self._message_sources)
+        enabled = any(source.enabled for source in self._message_sources)
+        health = {
+            "ready": "Up to date.",
+            "empty": "No messages returned by the selected sources.",
+            "refreshing": "Refreshing messages. Saved summaries remain available.",
+            "stale": "Saved summaries may be out of date. Open Sources to refresh.",
+            "offline": "Offline. Saved summaries remain available; check your connection before refreshing in Sources.",
+            "paused": "Network refresh is paused. Saved summaries remain available; resume refresh from the tray menu.",
+            "permission_required": "Permission required. Open Sources and choose Reconnect to review access.",
+            "disconnected": "Disconnected. Open Sources to reconnect your message account.",
+            "error": "Message refresh failed. Open Sources to retry or review the connection.",
+        }.get(state, "Review message connection status in Sources.")
+        if not has_sources:
+            health = "No message sources configured. Open Sources to connect email or chat."
+        elif not enabled:
+            health = (
+                "Message sources are disabled. Open Sources and choose Enable to allow updates."
+            )
+        elif self._network_refresh_paused:
+            health = "Network refresh is paused. Saved summaries remain available; resume refresh from the tray menu."
+        count = len(self._message_summaries)
+        category = message_category_label(self._message_category_value)
+        results = f"{count} {'summary' if count == 1 else 'summaries'} in {category}."
+        if not count and self._message_all_summaries:
+            results = f"No messages in {category}. Choose another category above."
+        detail = self._display_text(self._messages_view.detail, sensitive=True)
+        self.message_status_label.setText(f"{health} {results}" + (f" {detail}" if detail else ""))
+        self.message_sources_button.setVisible(
+            not has_sources or not enabled or state not in {"ready", "empty", "refreshing"}
+        )
 
     def render_messages(self, view: MessagesView) -> None:
         """Render retained summaries without triggering provider or body access."""
@@ -10321,16 +10448,6 @@ class PersonalHubMainWindow(QMainWindow):
         counts = self._message_category_counts()
         self._messages_view = replace(self._messages_view, category_counts=counts)
         self._render_message_rows()
-        count = len(self._message_summaries)
-        source_count = len(self._message_sources)
-        status = _safe_text(view.freshness, fallback="ready", limit=48)
-        detail = _safe_text(view.detail)
-        summary_label = "summary" if count == 1 else "summaries"
-        self.message_status_label.setText(
-            f"{count} {summary_label} in {message_category_label(category)} from "
-            f"{source_count} configured source{'s' if source_count != 1 else ''} · {status}"
-            + (f" — {detail}" if detail else "")
-        )
         self.message_clear_button.setEnabled(bool(self._message_all_summaries) and not self._locked)
 
     def render_message_body(self, body: MessageBodyView | None) -> None:
@@ -10380,8 +10497,20 @@ class PersonalHubMainWindow(QMainWindow):
             )
             self._source_selection_changed()
             return
+        attention = sum(
+            source.enabled
+            and source.status
+            in {"permission_required", "disconnected", "error", "offline", "stale"}
+            for source in self._sources
+        )
+        summary = (
+            f"{attention} source{'s' if attention != 1 else ''} need{'s' if attention == 1 else ''} attention. "
+            if attention
+            else "No source problems reported. "
+        )
         self.sources_status_label.setText(
-            f"{len(self._sources)} source{'s' if len(self._sources) != 1 else ''} available. Select one to connect or review its status."
+            summary
+            + "Select a source below to connect or review its status. Unconnected platforms are optional."
         )
         for source in self._sources:
             name = self._display_text(
@@ -10448,6 +10577,8 @@ class PersonalHubMainWindow(QMainWindow):
                 guidance = "Disconnected. Select Reconnect to restore this source's connection."
             if not source.enabled:
                 guidance = "Disabled. Select Enable to allow this source to refresh again."
+                if source.source_id.startswith("platform-") and source.status == "disconnected":
+                    guidance = "Select Connect / Configure to review this platform's setup before enabling refresh."
             if self._network_refresh_paused:
                 guidance = (
                     "Network refresh is paused. Resume it from the tray menu when you want updates."
@@ -10503,9 +10634,18 @@ class PersonalHubMainWindow(QMainWindow):
             self.sync_configure_requested.emit(endpoint)
 
     def _request_sync(self) -> None:
-        passphrase = self.sync_passphrase_input.text()
-        if passphrase:
-            self.sync_requested.emit(passphrase)
+        self.sync_requested.emit(
+            self.sync_passphrase_input.text()
+            if self.sync_protection_combo.currentData() is not False
+            else ""
+        )
+
+    def _request_sync_protection(self) -> None:
+        required = self.sync_protection_combo.currentData() is not False
+        self.sync_passphrase_input.clear()
+        self.sync_passphrase_input.setEnabled(required)
+        self.sync_protection_notice.setVisible(not required)
+        self.sync_passphrase_required_changed.emit(required)
 
     def clear_sync_passphrase(self) -> None:
         if hasattr(self, "sync_passphrase_input"):
@@ -10514,6 +10654,14 @@ class PersonalHubMainWindow(QMainWindow):
     def render_sync_status(self, status: SyncView | Mapping[str, object] | None) -> None:
         view = _coerce_sync(status)
         self._sync_view = view
+        protection_index = self.sync_protection_combo.findData(view.passphrase_required)
+        if protection_index != self.sync_protection_combo.currentIndex():
+            blocker = QSignalBlocker(self.sync_protection_combo)
+            self.sync_protection_combo.setCurrentIndex(protection_index)
+            self.sync_passphrase_input.clear()
+            del blocker
+        self.sync_passphrase_input.setEnabled(view.passphrase_required)
+        self.sync_protection_notice.setVisible(not view.passphrase_required)
         state_labels = {
             "not_configured": "Not configured",
             "disabled": "Disabled",
@@ -10524,7 +10672,7 @@ class PersonalHubMainWindow(QMainWindow):
         detail = view.last_error or (
             f"{view.record_count} record(s) · {view.remote_device_count} other device(s)"
             if view.last_sync_at
-            else "Choose a shared folder and sync passphrase."
+            else "Choose a shared folder and sync protection."
         )
         if view.last_sync_at:
             detail = f"{detail} · Last sync {view.last_sync_at}"
@@ -11055,6 +11203,7 @@ class PersonalHubMainWindow(QMainWindow):
             transition.set_reduced_motion(self._reduced_motion)
         for transition in getattr(self, "_motion_disclosures", ()):
             transition.set_reduced_motion(self._reduced_motion)
+        self._set_responsive_mode(self.width() < self.RESPONSIVE_BREAKPOINT)
 
     set_accessibility_preferences = apply_accessibility_preferences
 

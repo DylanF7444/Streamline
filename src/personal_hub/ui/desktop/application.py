@@ -720,6 +720,7 @@ class HubDesktopCoordinator(QObject):
         window.sync_configure_requested.connect(self._sync_configure_requested)
         window.sync_folder_browse_requested.connect(self._sync_folder_browse_requested)
         window.sync_requested.connect(self._sync_requested)
+        window.sync_passphrase_required_changed.connect(self._sync_passphrase_required_changed)
         window.sync_disable_requested.connect(self._sync_disable_requested)
         window.sync_relay_role_changed.connect(self._sync_relay_role_changed)
         window.sync_relay_categories_changed.connect(self._sync_relay_categories_changed)
@@ -2379,7 +2380,7 @@ class HubDesktopCoordinator(QObject):
             return
         self.window.render_sync_status(self.container.controller.sync_status())
         self.window.set_settings_status(
-            "Encrypted sync folder saved. Enter the same passphrase on each device."
+            "Sync folder saved. Use the same protection setting on each device."
         )
 
     @Slot()
@@ -2403,9 +2404,11 @@ class HubDesktopCoordinator(QObject):
             result = self.container.controller.sync_now(passphrase)
         except (OSError, RuntimeError, TypeError, ValueError, SyncError):
             self.window.clear_sync_passphrase()
-            self.window.render_sync_status(self.container.controller.sync_status())
+            status = self.container.controller.sync_status()
+            self.window.render_sync_status(status)
             self.window.set_settings_status(
-                "Sync failed safely. Check the shared folder and passphrase."
+                status.last_error
+                or "Sync failed safely. Check the shared folder and protection setting."
             )
             return
         self.window.clear_sync_passphrase()
@@ -2469,6 +2472,11 @@ class HubDesktopCoordinator(QObject):
             self.window.set_settings_status("Provider relay content selection could not be saved.")
         self.window.render_sync_status(self.container.controller.sync_status())
         self.render_all()
+
+    @Slot(bool)
+    def _sync_passphrase_required_changed(self, required: bool) -> None:
+        self.container.controller.set_sync_passphrase_required(required)
+        self.window.render_sync_status(self.container.controller.sync_status())
 
     @Slot()
     def _sync_disable_requested(self) -> None:

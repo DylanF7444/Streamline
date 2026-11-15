@@ -1,5 +1,10 @@
 # Personal Hub Tracking and Logging Proposal
 
+November 13, 2026: Weekly review is implemented as a local Monday–Sunday projection of
+existing Activity, Reflection, screen/browser usage and selected metrics. Its new writing
+uses existing dated Reflection records. See `PERSONAL_HUB_WEEKLY_REVIEW.md`. This implements
+weekly factual review; configurable templates, AI and productivity scoring are not added.
+
 November 9, 2026: screen-time deferral is superseded by the implemented Windows-only
 extension documented in `PERSONAL_HUB_SCREEN_TIME.md`. Screen time has its own records;
 Activity and Reflection retain the meanings described here.

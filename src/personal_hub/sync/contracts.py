@@ -173,6 +173,7 @@ class SyncStatus(HubContract):
 
     state: SyncState = "not_configured"
     enabled: bool = False
+    passphrase_required: bool = True
     endpoint: str | None = Field(default=None, max_length=1_024)
     device_id: str = Field(min_length=1, max_length=128)
     profile_paired: bool = False

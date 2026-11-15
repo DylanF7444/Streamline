@@ -91,9 +91,13 @@ class ScreenTimeRecorder:
         self.settings = settings or ScreenTimeSettings()
         self.running = False
         self.status = "Paused"
+        self.state = "paused"
+        self.last_saved_at = None
         self.reset()
 
     def reset(self):
+        self.state = "waiting" if self.running else "paused"
+        self.status = "Waiting for next sample" if self.running else "Paused"
         self.previous = None
         self.tick = None
         self.session_id = uuid4()
@@ -117,8 +121,8 @@ class ScreenTimeRecorder:
             or app in self.settings.excluded_apps
             or observation.idle_seconds >= self.settings.idle_seconds
         ):
-            self.status = "Idle, locked, excluded, or unavailable"
             self.reset()
+            self.status = "Idle, locked, excluded, or unavailable"
             return
         elapsed = monotonic - self.tick if self.tick is not None else 0
         wall = (now - self.previous).total_seconds() if self.previous is not None else 0
@@ -132,8 +136,12 @@ class ScreenTimeRecorder:
             self.app, self.start = app, now
         else:
             self.save_checkpoint(now)
+            self.last_saved_at = now
+            self.state = "recording"
         self.previous, self.tick = now, monotonic
-        self.status = "Recording · This PC"
+        self.status = (
+            "Recording · This PC" if self.state == "recording" else "Waiting for next sample"
+        )
 
     def save_checkpoint(self, now):
         self.repository.save(

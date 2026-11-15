@@ -29,18 +29,18 @@ still creates its usual independent completion fact. Duration entries are labele
 changing their duration changes the label to entered. Undo corrects the completion fact and retains
 the measured focus record. Daily overview totals include both entered and timed durations.
 
-Task timer settings follow existing task backup/export and enabled encrypted task sync. Running
+Task timer settings follow existing task backup/export and enabled shared-folder task sync. Running
 sessions and unfinished seconds remain device-local in `hub_focus_sessions` (schema 17), are
 included in database backup and explicit JSON export, and never sync or enter provider APIs.
 Restoring progress pauses it. Saved duration Activity entries follow existing Activity retention,
-backup/export and explicitly enabled encrypted sync; task cleanup preserves them. Use updated
+backup/export and explicitly enabled shared-folder sync; task cleanup preserves them. Use updated
 builds on all sync devices because older strict contracts may reject timer settings or duration
 source metadata. Privacy masking hides timer content immediately; lock also pauses counting.
 
 
 ## Screen time
 
-For website breakdowns in Chrome or Edge, use **Browser sites > Set up browser extension**,
+For website breakdowns in Chrome, Edge or Brave, use **Browser sites > Set up browser extension**,
 enable tracking in the extension popup, then choose **Start browser recording** in Hub.
 The site section shares the date range and offers exclusions, categories, review and separate
 history deletion. Site time overlaps browser app time. See `PERSONAL_HUB_BROWSER_TIME.md`
@@ -218,7 +218,34 @@ active recurring series is kept as its schedule anchor. For Canvas items, Person
 local deletion marker so later feed refreshes do not recreate removed tasks. Canvas itself is
 never modified.
 
-### Logging: Daily overview, Activity, and Reflection
+### Logging: Daily overview, Weekly review, Activity, and Reflection
+
+**Weekly review** brings a Monday–Sunday week together in the timezone from Settings.
+Choose any date in the week, **Previous week**, **Next week**, or **This week**. This week
+follows the current local week on refresh; historical browsing stays selected. **Refresh
+review** reads local records only. While the page is visible it also updates once a minute.
+
+Review task completions, manual progress, activity by list, and seven daily summaries.
+Select a day and choose **Open selected day's overview**, or activate the day with Enter.
+Counts cover all matching history; **Load more** expands the bounded accomplishment lists.
+Undone completions are excluded. App time, website time, entered work duration and timer
+duration saved to Activity are separate overlapping measurements; do not add them together.
+Unrecorded usage and missing durations are labeled rather than inferred. Usage is from this PC.
+The breakdown lists up to ten task lists, apps and websites per group.
+
+Choose a metric and enable **Include this metric in Weekly review** to save your local
+selection. Values use the metric's primary source and configured aggregation, such as sum,
+latest or mean, over its recorded reporting dates. Missing readings are unavailable; actual
+zero readings stay zero. Current and partially recorded weeks can be incomplete. Manage
+definitions and primary sources in Metrics.
+
+Writing is optional and autosaves. A new weekly reflection is an ordinary Reflection dated
+Monday, initially titled with that week, and is also available in Reflection and Monday's
+Daily overview. Choose a saved reflection from the week to edit it, or **New reflection**
+to create a separate entry. Existing daily writing is never selected for editing automatically.
+Use Reflection to search or delete a saved entry. The same backup, export, explicit history
+deletion, masking, lock and separate reflection-sync opt-in apply. No new recording or
+provider access is enabled by opening Weekly review.
 
 Daily totals appear as separate cards. Activity uses date headings and spacious entries:
 the work title comes first, followed by time, entry type, list, tags, and any entered duration.
@@ -275,10 +302,10 @@ Activity entries and reflections affected, then apply the deletion. This control
 enable automatic expiration. Backup, restore, and explicit JSON export include both record
 types, including private writing.
 
-Activity follows explicitly enabled encrypted shared-folder sync. Reflections stay local
-unless **Include private reflections in encrypted shared-folder sync** is checked separately
+Activity follows explicitly enabled shared-folder sync. Reflections stay local
+unless **Include private reflections in shared-folder sync** is checked separately
 on each participating device in Settings. Turning it off stops future receiving/publishing
-on this device; already shared copies remain on other devices and in their encrypted shards.
+on this device; already shared copies remain on other devices and in their sync shards.
 Logging never enters provider refreshes or the provider collector relay. Masking and session
 lock hide Logging content. All Logging features work offline and without AI.
 
@@ -463,10 +490,16 @@ export as sensitive because it intentionally contains your visible local content
 
 Personal Hub can share local Hub data through a folder that you control. In **Settings**, open
 **Sync across devices**, select **Browse…** to choose the shared folder on each device, then
-select **Save folder**, enter a passphrase, and choose **Sync now**. Use the same passphrase on
-every device. Sync is manual; the folder may be local, removable, an SMB share, or a user-managed
-cloud folder such as OneDrive or Dropbox. Personal Hub does not create a hosted account or run an
-inbound service.
+select **Save folder**, select **Protection**, and choose **Sync now**. The default
+**Passphrase encryption (recommended)** requires at least 12 characters and the same passphrase
+on every device. **No passphrase (unencrypted)** disables the passphrase field and writes readable
+files; anyone with shared-folder access can read or change them. This applies to both local
+records and provider snapshots, including private reflections if separately enabled. The choice
+is remembered only on this device. Use the same protection on every device. To change protection
+for an existing profile, choose a new shared folder on all devices; existing files are not
+automatically converted or removed. Sync is manual; the folder may be local, removable, an SMB
+share, or a user-managed cloud folder such as OneDrive or Dropbox. Personal Hub does not create
+a hosted account or run an inbound service.
 
 By default, **This device only** keeps provider data on the device. The `.sync` shard includes
 local task lists and tasks, explicitly imported calendar items, feed subscriptions, watch
@@ -476,8 +509,8 @@ watch history, Inbox history, or private iCalendar feed URLs.
 
 To share provider snapshots, set one device to **Provider collector** and select the categories
 to publish: Calendars, Message summaries, News entries, and Watch results. Use **Sync now** on
-that device to replace its encrypted collector shard with the latest bounded snapshots already
-loaded in Personal Hub. Set other devices to **Snapshot consumer**. Consumer mode turns provider
+that device to replace its collector shard using the selected protection with the latest bounded
+snapshots already loaded in Personal Hub. Set other devices to **Snapshot consumer**. Consumer mode turns provider
 access off on those devices; **Sync now** reads the collector shard and adds its snapshots to the
 usual Calendar, Messages, News, Watchlists, Home, and Inbox views. Unchecking a category stops
 future imports for that category. Previously received content follows its normal local retention.
@@ -490,7 +523,8 @@ The collector includes its most recently loaded calendar query window, selected 
 retained feed entries, and bounded watch observations/alerts. It never shares credentials, provider
 connection metadata, full message bodies, private iCalendar feed URLs, or Google event-write
 bindings. The passphrase is used only for the current sync and is not saved by Hub. Anyone with
-access to the folder and passphrase can read the encrypted relay contents.
+access to the folder and passphrase can read encrypted relay contents; no-passphrase contents
+are readable with folder access alone.
 
 The collector must be online and able to reach both providers and the shared folder when it needs
 to refresh and publish new information. It does not need to stay online afterward. Consumer
@@ -499,11 +533,12 @@ snapshots become stale and expire after at most 30 days. With a cloud folder, th
 client must upload the collector file, and consumer devices need their folder clients to download
 it.
 
-Changes merge by their UTC update time. A deletion is carried by an encrypted tombstone, so it
-continues to propagate after another device has been offline. Equal-time conflicting edits use a
+Changes merge by their UTC update time. A deletion is carried by a tombstone in the selected
+protection mode, so it continues to propagate after another device has been offline. Equal-time conflicting edits use a
 stable deterministic tie-breaker and are reported in the sync result. If the passphrase is wrong,
-the folder is damaged, or it belongs to another Hub profile, the sync stops without replacing
-your local data. Keep a separate backup before changing or removing a shared folder.
+the protection setting differs, the folder is damaged, or it belongs to another Hub profile,
+the sync stops without replacing your local data. Passphrase length and authentication errors are shown directly instead of
+a generic Hub validation error. Keep a separate backup before changing or removing a shared folder.
 
 ## Troubleshooting
 
@@ -517,7 +552,7 @@ your local data. Keep a separate backup before changing or removing a shared fol
   state, last success, and safe error category.
 - **A body disappeared:** message bodies intentionally clear on lock, source clear, shutdown,
   and process exit; open the summary again while online.
-- **Sync failed:** confirm that the folder is reachable, every device uses the same passphrase,
+- **Sync failed:** confirm that the folder is reachable, every device uses the same protection setting and, when encrypted, the same passphrase,
   and the folder was not paired with a different Personal Hub profile. Sync again after restoring
   access; a failed sync does not replace the local database.
 
@@ -536,3 +571,29 @@ sources, and manage devices. Both manual encrypted files and paired local-networ
 are available. The Android companion collects permitted Health Connect steps; sleep/ring
 connections are deferred. Sources and Settings include a link to device and privacy controls.
 See PERSONAL_HUB_METRICS.md for complete setup, custom CSV/JSON imports and sender examples.
+
+
+## Background recording indicators — November 15, 2026
+
+While Hub is in the tray, its icon shows two status marks: apps on the left and
+browser sites on the right. **R** in green means an interval was saved; **W** in amber
+means enabled and waiting (idle, excluded/unavailable app, browser focus or extension
+connection); **P** in gray means paused; **!** in red means a storage error.
+Hover for separate app/site details. The tray menu provides independent app/site
+start and pause controls, last-save times and **Review screen time**. Last-save times
+are hidden under privacy masking or lock. No app names or hostnames appear in the tray.
+Windows may place the tray icon in its overflow area; pin it using Windows tray settings.
+
+Pin the browser extension to its toolbar to see **REC**, **WAIT**, **OFF**, or **!**.
+Hover for the reason or click for the status popup. REC requires a recent successful
+Hub checkpoint for the current eligible site. Connection and consent alone show WAIT.
+Changing tabs, losing browser focus, idle, exclusions, pause, lock and disconnect clear
+REC on the next observation/response. Hub samples every five seconds, the extension
+checks every two seconds, and a silent helper clears REC after twelve seconds without
+a response (on the next timer tick). Status contains no hostname or page content and
+never opens a popup automatically. Older helpers show WAIT until updated.
+
+Update/rebuild Hub and PersonalHubBrowserHost.exe together, export the updated extension
+files to the existing extension folder, then reload it on the browser extensions page.
+Extension version 0.1.3 includes these indicators. Repeat setup if the extension ID or
+helper location changes. No new permission or collection opt-in is required.

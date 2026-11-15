@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from PySide6.QtCore import QDate, QEvent, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QDateEdit,
     QGridLayout,
     QGroupBox,
     QLabel,
@@ -21,12 +20,16 @@ from PySide6.QtWidgets import (
 )
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.ui.desktop.controls import WheelSafeComboBox, WheelSafeDateEdit
 from personal_hub.ui.desktop.readable import ReadableList, SummaryCards, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
 class DailyOverview(QWidget):
     requested = Signal(str, object)
+    route = "Summary"
+    save_action = "save_daily_reflection"
+    step_days = 1
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,7 +48,7 @@ class DailyOverview(QWidget):
         layout.setSpacing(12)
         self.date_actions = QGridLayout()
         self.previous = QPushButton("Previous day")
-        self.date = QDateEdit(QDate(self.day))
+        self.date = WheelSafeDateEdit(QDate(self.day))
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("ddd, MMM d, yyyy")
         self.date.setAccessibleName("Daily overview date")
@@ -56,8 +59,10 @@ class DailyOverview(QWidget):
         for index, control in enumerate((self.previous, self.date, self.next, self.today)):
             self.date_actions.addWidget(control, 0, index)
         layout.addLayout(self.date_actions)
-        self.previous.clicked.connect(lambda: self.select_day(self.date.date().addDays(-1)))
-        self.next.clicked.connect(lambda: self.select_day(self.date.date().addDays(1)))
+        self.previous.clicked.connect(
+            lambda: self.select_day(self.date.date().addDays(-self.step_days))
+        )
+        self.next.clicked.connect(lambda: self.select_day(self.date.date().addDays(self.step_days)))
         self.today.clicked.connect(self.show_today)
         self.date.dateChanged.connect(self.select_day)
         self.caption = QLabel()
@@ -81,7 +86,7 @@ class DailyOverview(QWidget):
         help_text = QLabel("Optional · Autosaves on this device")
         help_text.setWordWrap(True)
         reflection_layout.addWidget(help_text)
-        self.chooser = QComboBox()
+        self.chooser = WheelSafeComboBox()
         self.chooser.setAccessibleName("Reflection for the selected day")
         self.chooser.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -166,12 +171,12 @@ class DailyOverview(QWidget):
             self.reflection = None
             self.loaded_day = None
             self._load_editor()
-        self.requested.emit("query", "Summary")
+        self.requested.emit("query", self.route)
 
     def load_more(self):
         if not self.masked:
             self.limit = min(10_000, self.limit + 200)
-            self.requested.emit("query", "Summary")
+            self.requested.emit("query", self.route)
 
     def render(self, facts, entries: list[ActivityEntry], reflections: list[ReflectionEntry]):
         if self.masked:
@@ -273,7 +278,7 @@ class DailyOverview(QWidget):
         if self.masked:
             return
         if self.reflection is None:
-            self.reflection = ReflectionEntry(display_date=self.day)
+            self.reflection = self.new_reflection()
         self.dirty = True
         self.saved.setText("Saving on this device…")
         self.timer.start()
@@ -295,8 +300,11 @@ class DailyOverview(QWidget):
                 "Not saved: writing must be at most 20,000 characters. Shorten it and try again."
             )
             return False
-        self.requested.emit("save_daily_reflection", entry)
+        self.requested.emit(self.save_action, entry)
         return not self.dirty
+
+    def new_reflection(self):
+        return ReflectionEntry(display_date=self.day)
 
     def reflection_saved(self, entry):
         self.reflection = entry

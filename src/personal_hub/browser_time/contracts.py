@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from personal_hub.screen_time.contracts import AppRule
 
+BrowserName = Literal["chrome", "edge", "brave"]
+BROWSER_EXECUTABLES = {"chrome.exe": "chrome", "msedge.exe": "edge", "brave.exe": "brave"}
+
 
 def hostname(value: str) -> str:
     value = value.lower().rstrip(".")
@@ -48,7 +51,7 @@ class BrowserTimeSettings(BaseModel):
 class BrowserSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal[1] = 1
-    browser: Literal["chrome", "edge"]
+    browser: BrowserName
     domain: str | None = Field(default=None, max_length=253)
 
     @field_validator("domain")
@@ -62,7 +65,7 @@ class BrowserTimeSession(BaseModel):
     session_id: UUID = Field(default_factory=uuid4)
     source: Literal["browser-extension"] = "browser-extension"
     device: Literal["This PC"] = "This PC"
-    browser: Literal["chrome", "edge"]
+    browser: BrowserName
     domain: str = Field(max_length=253)
     start: datetime
     end: datetime

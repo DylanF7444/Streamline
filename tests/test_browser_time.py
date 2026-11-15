@@ -52,26 +52,29 @@ def test_hostname_boundary():
         BrowserTimeSettings(idle_seconds=0)
 
 
-def test_recording_requires_live_lease_and_new_samples(hub):
+@pytest.mark.parametrize(
+    "browser,executable", [("chrome", "chrome.exe"), ("edge", "msedge.exe"), ("brave", "brave.exe")]
+)
+def test_recording_requires_live_lease_and_new_samples(hub, browser, executable):
     runtime = BrowserTimeRuntime(
         hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
     )
     root = runtime.root
     base = datetime(2026, 11, 10, tzinfo=UTC).timestamp()
-    sample = {"browser": "chrome", "domain": "example.com"}
+    sample = {"browser": browser, "domain": "example.com"}
     with pytest.raises(FileNotFoundError):
         receive(root, sample, now=base)
     runtime.start()
-    runtime.tick(Observation("chrome.exe"), now=base, monotonic=0)
+    runtime.tick(Observation(executable), now=base, monotonic=0)
     for second in (5, 10, 15):
         assert receive(root, sample, now=base + second)["recording"]
-        runtime.tick(Observation("chrome.exe"), now=base + second, monotonic=second)
+        runtime.tick(Observation(executable), now=base + second, monotonic=second)
     assert hub.browser_time_repository.summary(date(2026, 11, 10), date(2026, 11, 10), "UTC") == {
         "example.com": 10
     }
     # The same mailbox observation cannot extend history a second time.
-    runtime.tick(Observation("chrome.exe"), now=base + 20, monotonic=20)
-    runtime.tick(Observation("chrome.exe"), now=base + 25, monotonic=25)
+    runtime.tick(Observation(executable), now=base + 20, monotonic=20)
+    runtime.tick(Observation(executable), now=base + 25, monotonic=25)
     assert (
         sum(
             hub.browser_time_repository.summary(
@@ -83,7 +86,7 @@ def test_recording_requires_live_lease_and_new_samples(hub):
     assert not receive(root, sample, now=base + 100)["recording"]
     runtime.pause()
     assert not (root / "lease.json").exists()
-    assert not (root / "chrome.json").exists()
+    assert not (root / f"{browser}.json").exists()
 
 
 def test_foreground_idle_exclusion_lock_and_sleep_gaps(hub):
@@ -200,7 +203,7 @@ def test_native_framing_and_rejection(hub):
     output.seek(0)
     assert read_message(output) == {"recording": False}
     assert read_message(output) == {"recording": False}
-    assert read_message(output) == {"recording": True}
+    assert read_message(output) == {"recording": True, "state": "waiting"}
     assert "private" not in (runtime.root / "chrome.json").read_text()
 
 
@@ -236,11 +239,12 @@ def test_registration_allowlist_shared_ids_and_disconnect(tmp_path, monkeypatch)
     monkeypatch.setattr(setup.sys, "platform", "win32")
     helper = tmp_path / "PersonalHubBrowserHost.exe"
     helper.touch()
-    for browser in ("chrome", "edge"):
+    for browser in ("chrome", "edge", "brave"):
         setup.register(browser, "a" * 32, helper, tmp_path / "hub")
     config = read_json(tmp_path / "config" / "browser-native-host.json")
-    assert config["origins"]["chrome-extension://" + "a" * 32 + "/"] == ["chrome", "edge"]
-    assert len(registry) == 2
+    assert config["origins"]["chrome-extension://" + "a" * 32 + "/"] == ["brave", "chrome", "edge"]
+    assert len(registry) == 3
+    assert setup.REGISTRY["brave"] + "\\" + setup.HOST_NAME in registry
     with pytest.raises(ValueError):
         setup.register("chrome", "https://untrusted", helper, tmp_path / "hub")
     setup.unregister()
@@ -305,3 +309,101 @@ def test_disconnect_revokes_existing_native_connection(hub):
     )
     assert not output.getvalue()
     assert not (hub.settings.data_dir / "browser-time-live" / "chrome.json").exists()
+
+
+def test_brave_identity_requires_matching_foreground_and_survives_export_restore(hub, tmp_path):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
+    )
+    runtime.start()
+    now = datetime(2026, 11, 12, tzinfo=UTC).timestamp()
+    runtime.tick(Observation("brave.exe"), now=now, monotonic=0)
+    for second in (5, 10):
+        receive(runtime.root, {"browser": "brave", "domain": "example.com"}, now=now + second)
+        runtime.tick(Observation("chrome.exe"), now=now + second, monotonic=second)
+    assert not hub.browser_time_repository.records()
+    for second in (15, 20):
+        receive(runtime.root, {"browser": "brave", "domain": "example.com"}, now=now + second)
+        runtime.tick(Observation("brave.exe"), now=now + second, monotonic=second)
+    record = hub.browser_time_repository.records()[0]
+    assert record.browser == "brave"
+    backup = hub.backup_database(tmp_path / "brave.db")
+    hub.export_local_data(tmp_path / "brave.json")
+    assert (
+        json.loads((tmp_path / "brave.json").read_text())["browser_time"][0]["browser"] == "brave"
+    )
+    hub.browser_time_repository.delete_range(record.start.date(), record.end.date(), "UTC")
+    hub.restore_database(backup)
+    assert hub.browser_time_repository.records()[0] == record
+    runtime.pause()
+    assert not (runtime.root / "brave.json").exists()
+
+
+def test_brave_only_setup_registers_chromium_compatibility_key(tmp_path, monkeypatch):
+    import sys
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from personal_hub.browser_time import setup
+
+    registry = {}
+    fake = SimpleNamespace(
+        HKEY_CURRENT_USER=1,
+        REG_SZ=1,
+        CreateKey=lambda root, key: nullcontext(key),
+        SetValueEx=lambda key, name, zero, kind, value: registry.update({key: value}),
+        DeleteKey=lambda root, key: registry.pop(key, None),
+    )
+    monkeypatch.setitem(sys.modules, "winreg", fake)
+    monkeypatch.setattr(setup, "default_personal_hub_data_dir", lambda: tmp_path / "config")
+    monkeypatch.setattr(setup.sys, "platform", "win32")
+    helper = tmp_path / "PersonalHubBrowserHost.exe"
+    helper.touch()
+    setup.register("brave", "a" * 32, helper, tmp_path / "hub")
+    chrome = setup.REGISTRY["chrome"] + "\\" + setup.HOST_NAME
+    brave = setup.REGISTRY["brave"] + "\\" + setup.HOST_NAME
+    assert registry[chrome] == registry[brave]
+    config = read_json(tmp_path / "config" / "browser-native-host.json")
+    assert list(config["origins"].values()) == [["brave"]]
+    setup.unregister()
+    assert not registry
+
+
+def test_runtime_explains_missing_extension_without_exposing_sites(hub):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
+    )
+    runtime.start()
+    runtime.tick(Observation("brave.exe"))
+    assert "Waiting for browser extension" in runtime.recorder.status
+    runtime.tick(Observation("brave.exe", 181))
+    assert runtime.recorder.status == "Paused — no recent input"
+    runtime.tick(Observation("editor.exe"))
+    assert "focus Chrome, Edge or Brave" in runtime.recorder.status
+
+
+def test_indicator_confirms_only_saved_matching_fresh_site(hub):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
+    )
+    runtime.start()
+    base = datetime(2026, 11, 10, tzinfo=UTC).timestamp()
+    sample = {"browser": "chrome", "domain": "example.com"}
+    runtime.tick(Observation("chrome.exe"), now=base, monotonic=0)
+    assert receive(runtime.root, sample, now=base)["state"] == "waiting"
+    runtime.tick(Observation("chrome.exe"), now=base + 5, monotonic=5)
+    assert receive(runtime.root, sample, now=base + 5)["state"] == "waiting"
+    runtime.tick(Observation("chrome.exe"), now=base + 10, monotonic=10)
+    assert receive(runtime.root, sample, now=base + 10)["state"] == "recording"
+    assert (
+        receive(runtime.root, {**sample, "domain": "other.org"}, now=base + 10)["state"]
+        == "waiting"
+    )
+    assert receive(runtime.root, {**sample, "domain": None}, now=base + 10)["state"] == "ineligible"
+    assert receive(runtime.root, sample, now=base + 21)["state"] != "recording"
+    runtime.tick(Observation("editor.exe"), now=base + 22, monotonic=22)
+    assert receive(runtime.root, sample, now=base + 22)["state"] == "focus"
+    runtime.tick(Observation("chrome.exe", 181), now=base + 23, monotonic=23)
+    assert receive(runtime.root, sample, now=base + 23)["state"] == "idle"
+    runtime.pause()
+    assert not (runtime.root / "lease.json").exists()

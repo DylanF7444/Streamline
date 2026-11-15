@@ -9,9 +9,6 @@ from zoneinfo import ZoneInfo
 from PySide6.QtCore import QDate, QDateTime, QObject, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
-    QDateEdit,
-    QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -23,16 +20,22 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from personal_hub.logging.contracts import ActivityEntry, LogFilter, ReflectionEntry
+from personal_hub.ui.desktop.controls import (
+    WheelSafeComboBox,
+    WheelSafeDateEdit,
+    WheelSafeDateTimeEdit,
+    WheelSafeSpinBox,
+)
 from personal_hub.ui.desktop.daily_overview import DailyOverview
 from personal_hub.ui.desktop.readable import ReadableDetails, ReadableList, present_item
 from personal_hub.ui.desktop.status_label import StatusLabel
+from personal_hub.ui.desktop.weekly_review import WeeklyReviewPage
 
 
 def _label(text: str) -> QLabel:
@@ -57,12 +60,12 @@ class LogFilters(QWidget):
         super().__init__(parent)
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
-        self.period = QComboBox()
+        self.period = WheelSafeComboBox()
         self.period.addItems(["Today", "Last 7 days", "Custom range", "All dates"])
         self.period.setCurrentIndex(1)
         self.period.setAccessibleName("Logging date range")
-        self.start = QDateEdit(QDate.currentDate().addDays(-6))
-        self.end = QDateEdit(QDate.currentDate())
+        self.start = WheelSafeDateEdit(QDate.currentDate().addDays(-6))
+        self.end = WheelSafeDateEdit(QDate.currentDate())
         for control, name in ((self.start, "From date"), (self.end, "Through date")):
             control.setCalendarPopup(True)
             control.setAccessibleName(name)
@@ -82,12 +85,12 @@ class LogFilters(QWidget):
         grid.addWidget(self.through_label, 2, 0)
         grid.addWidget(self.end, 2, 1, 1, 2)
         grid.addWidget(self.search, 3, 0, 1, 3)
-        self.kind = QComboBox()
+        self.kind = WheelSafeComboBox()
         self.kind.addItem("All activity", None)
         self.kind.addItem("Completed tasks", "task_completion")
         self.kind.addItem("Manual progress", "manual")
         self.kind.setAccessibleName("Activity type")
-        self.task_list = QComboBox()
+        self.task_list = WheelSafeComboBox()
         self.task_list.addItem("All lists", None)
         self.task_list.setAccessibleName("Activity task list")
         self.tag = QLineEdit()
@@ -177,14 +180,14 @@ class ProgressDialog(QDialog):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.description = QLineEdit(entry.description if entry else "")
         self.description.setMaxLength(240)
-        self.when = QDateTimeEdit()
+        self.when = WheelSafeDateTimeEdit()
         self.when.setCalendarPopup(True)
         self.when.setDisplayFormat("yyyy-MM-dd HH:mm")
         stamp = (entry.occurred_at if entry else datetime.now(UTC)).astimezone(
             ZoneInfo(workspace.timezone)
         )
         self.when.setDateTime(QDateTime(stamp.replace(tzinfo=None)))
-        self.task = QComboBox()
+        self.task = WheelSafeComboBox()
         self.task.addItem("No linked task", None)
         for identifier, label in workspace.tasks:
             self.task.addItem(label, identifier)
@@ -195,7 +198,7 @@ class ProgressDialog(QDialog):
                 self.task.addItem("Original task unavailable", linked)
                 index = self.task.count() - 1
             self.task.setCurrentIndex(index)
-        self.task_list = QComboBox()
+        self.task_list = WheelSafeComboBox()
         self.task_list.addItem("No list", None)
         for identifier, label in workspace.lists:
             self.task_list.addItem(label, identifier)
@@ -211,7 +214,7 @@ class ProgressDialog(QDialog):
         self.notes = QPlainTextEdit(entry.notes if entry else "")
         self.notes.setTabChangesFocus(True)
         self.notes.setMaximumHeight(180)
-        self.duration = QSpinBox()
+        self.duration = WheelSafeSpinBox()
         self.duration.setRange(0, 525_600)
         self.duration.setSpecialValueText("Not tracked")
         self.duration.setSuffix(" minutes")
@@ -310,9 +313,11 @@ class LoggingWorkspace(QObject):
         self.dialog: ProgressDialog | None = None
         self.private_draft = None
         self.action_layouts: list[QGridLayout] = []
-        for name in ("Activity", "Reflection", "Summary"):
+        for name in ("Activity", "Reflection", "Summary", "Weekly review"):
             page = QWidget()
             page.setObjectName(f"logging{name}Page")
+            if name == "Weekly review":
+                page.setProperty("weeklyReviewPage", True)
             label = "Daily overview" if name == "Summary" else name
             page.setAccessibleName(f"Logging · {label}")
             layout = QVBoxLayout(page)
@@ -321,7 +326,18 @@ class LoggingWorkspace(QObject):
             heading = _label(label)
             heading.setObjectName("pageTitle")
             layout.addWidget(heading)
-            if name != "Summary":
+            description = _label(
+                {
+                    "Activity": "Task completions appear automatically. Use Log progress for other work or progress on an open task.",
+                    "Reflection": "Write about a day in your own words. Drafts save on this device as you type.",
+                    "Summary": "Review a day's activity and reflections. Use the date controls to visit another day.",
+                    "Weekly review": "Review activity across a week and choose what to carry forward.",
+                }[name]
+            )
+            description.setObjectName("pageSubtitle")
+            description.setAccessibleName(f"{label} page description")
+            layout.addWidget(description)
+            if name not in ("Summary", "Weekly review"):
                 filters = LogFilters(activity=name != "Reflection")
                 filters.changed.connect(lambda n=name: self.reload(n))
                 self.filters[name] = filters
@@ -336,6 +352,9 @@ class LoggingWorkspace(QObject):
         self._build_activity()
         self._build_reflection()
         self._build_summary()
+        self.weekly = WeeklyReviewPage()
+        self.weekly.requested.connect(self.requested)
+        self.pages["Weekly review"].layout().addWidget(self.weekly, 1)
         for name, content in tuple(self.pages.items()):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -395,7 +414,7 @@ class LoggingWorkspace(QObject):
         split.addWidget(self.reflection_list)
         self.editor = QWidget()
         edit_layout = QVBoxLayout(self.editor)
-        self.reflection_date = QDateEdit(QDate.currentDate())
+        self.reflection_date = WheelSafeDateEdit(QDate.currentDate())
         self.reflection_date.setCalendarPopup(True)
         self.reflection_date.setAccessibleName("Date this reflection is about")
         self.reflection_title = QLineEdit()
@@ -406,7 +425,7 @@ class LoggingWorkspace(QObject):
         line.addWidget(self.reflection_date)
         line.addWidget(self.reflection_title, 1)
         edit_layout.addLayout(line)
-        self.prompt = QComboBox()
+        self.prompt = WheelSafeComboBox()
         self.prompt.addItems(
             ["Optional prompt · skip", "What moved forward?", "What should I carry into tomorrow?"]
         )
@@ -422,7 +441,7 @@ class LoggingWorkspace(QObject):
         self.body.setAccessibleName("Reflection writing")
         self.body.setStyleSheet("QPlainTextEdit { padding: 16px; }")
         edit_layout.addWidget(self.body, 1)
-        self.reflection_task = QComboBox()
+        self.reflection_task = WheelSafeComboBox()
         self.reflection_task.addItem("No linked task", None)
         self.reflection_task.setAccessibleName("Optional reflection task link")
         edit_layout.addWidget(self.reflection_task)
@@ -456,6 +475,7 @@ class LoggingWorkspace(QObject):
 
     def set_compact(self, compact: bool) -> None:
         self.daily.set_compact(compact)
+        self.weekly.set_compact(compact)
         for filters in self.filters.values():
             filters.set_compact(compact)
         for layout in self.action_layouts:
@@ -631,7 +651,7 @@ class LoggingWorkspace(QObject):
         self.timer.start()
 
     def flush(self) -> bool:
-        if not self.daily.flush():
+        if not self.daily.flush() or not self.weekly.flush():
             return False
         if self.masked:
             return True
@@ -718,6 +738,7 @@ class LoggingWorkspace(QObject):
         if private == self.masked:
             return
         self.daily.set_private(private)
+        self.weekly.set_private(private)
         if private and not self.masked:
             self.flush()
             if self.dirty:

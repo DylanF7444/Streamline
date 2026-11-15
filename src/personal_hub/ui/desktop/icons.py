@@ -98,7 +98,7 @@ class _LineIcon(QIconEngine):
                 painter.drawEllipse(QRectF(x - 2, y - 2, 4, 4))
         elif self.name == "Activity":
             line((3, 13), (7, 13), (10, 5), (14, 20), (17, 10), (21, 10))
-        elif self.name in {"Reflection", "Summary"}:
+        elif self.name in {"Reflection", "Summary", "Weekly review"}:
             painter.drawRoundedRect(QRectF(5, 3, 15, 18), 2, 2)
             line((3, 7), (7, 7))
             line((3, 12), (7, 12))

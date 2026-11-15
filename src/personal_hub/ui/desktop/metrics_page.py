@@ -12,8 +12,6 @@ from PySide6.QtGui import QAction, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
-    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,7 +25,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -44,6 +41,11 @@ from personal_hub.metrics.files import (
     export_snapshots,
     import_snapshot,
     parse_file,
+)
+from personal_hub.ui.desktop.controls import (
+    WheelSafeComboBox,
+    WheelSafeDateEdit,
+    WheelSafeSpinBox,
 )
 from personal_hub.ui.desktop.readable import SummaryCards
 
@@ -168,10 +170,10 @@ class MetricsPage(QScrollArea):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         overview = self.tab("Overview")
-        self.metric_choice = QComboBox()
-        self.source = QComboBox()
-        self.start = QDateEdit(QDate.currentDate().addDays(-6))
-        self.end = QDateEdit(QDate.currentDate())
+        self.metric_choice = WheelSafeComboBox()
+        self.source = WheelSafeComboBox()
+        self.start = WheelSafeDateEdit(QDate.currentDate().addDays(-6))
+        self.end = WheelSafeDateEdit(QDate.currentDate())
         filters = QGroupBox("Choose measurements")
         filter_form = QFormLayout(filters)
         filter_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -204,7 +206,7 @@ class MetricsPage(QScrollArea):
 
         transfer = self.tab("Devices and transfer")
         devices = self.group(transfer, "Source and permissions")
-        self.devices = QComboBox()
+        self.devices = WheelSafeComboBox()
         self.devices.setAccessibleName("Paired or imported metric source")
         devices.addWidget(self.devices)
         self.device_status = QLabel()
@@ -221,7 +223,7 @@ class MetricsPage(QScrollArea):
         network = self.group(transfer, "Local network pairing")
         self.host = QLineEdit("127.0.0.1")
         self.host.setAccessibleName("Local receiving interface IP address")
-        self.port = QSpinBox()
+        self.port = WheelSafeSpinBox()
         self.port.setRange(1024, 65535)
         self.port.setValue(8765)
         self.port.setAccessibleName("Metrics receiver port")
@@ -530,7 +532,7 @@ class MetricsPage(QScrollArea):
         dialog.setWindowTitle("Define a personal metric")
         form = QFormLayout(dialog)
         identifier, name, unit = QLineEdit(), QLineEdit(), QLineEdit()
-        kind, aggregation = QComboBox(), QComboBox()
+        kind, aggregation = WheelSafeComboBox(), WheelSafeComboBox()
         kind.addItem("Numeric reading at a time", "point")
         kind.addItem("Total over an interval", "interval")
         kind.addItem("Timed session", "session")

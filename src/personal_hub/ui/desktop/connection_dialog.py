@@ -25,6 +25,7 @@ from personal_hub.integrations.platforms import (
     ExternalPlatformConfig,
     ExternalPlatformDefinition,
 )
+from personal_hub.ui.desktop.controls import WheelSafeComboBox
 
 
 class ExternalPlatformDialog(QDialog):
@@ -151,7 +152,7 @@ class ExternalPlatformDialog(QDialog):
             self.token_input.setMaxLength(32_768)
             form.addRow("Read-only token", self.token_input)
 
-            self.slack_kind_combo = QComboBox()
+            self.slack_kind_combo = WheelSafeComboBox()
             self.slack_kind_combo.setAccessibleName("Slack selected view type")
             self.slack_kind_combo.addItem("Channel ID", "channel")
             self.slack_kind_combo.addItem("Saved search", "query")

@@ -94,7 +94,7 @@ def test_source_guidance_distinguishes_recovery_and_offline_without_requests(win
     window.set_network_refresh_paused(True)
     assert "paused" in window.source_guidance_label.text().casefold()
     window.set_network_refresh_paused(False)
-    window.render_sources([SourceView("platform-google", "Google", enabled=False)])
+    window.render_sources([SourceView("platform-google", "Google", status="ready", enabled=False)])
     assert "Select Enable" in window.source_guidance_label.text()
     assert requests == []
     window.show_destination("Home")
@@ -143,6 +143,7 @@ def test_minimum_window_large_text_editor_and_logging_controls_are_reachable(win
     assert window.task_save_button.visibleRegion().contains(window.task_save_button.rect())
     assert window.task_save_button.height() >= window.task_save_button.sizeHint().height()
     assert window.task_editor_scroll.horizontalScrollBar().maximum() == 0
+    assert window.task_reminders_input.width() > 250
     qtbot.keyClick(window.task_save_button, Qt.Key.Key_Space)
     assert window.tasks[0].title == "Keyboard edit saved"
     for name in ("Calendar", "Activity", "Reflection", "Summary", "Sources"):

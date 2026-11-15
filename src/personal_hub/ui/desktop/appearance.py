@@ -21,7 +21,6 @@ from PySide6.QtGui import QColor, QValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
-    QComboBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -32,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from personal_hub.ui.desktop.controls import WheelSafeComboBox
 
 _HEX_COLOR_RE: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}\Z")
 _THEME_NAMES: Final[tuple[str, ...]] = ("navy", "light", "sage")
@@ -798,7 +799,8 @@ QHeaderView::section {{ background: {surface}; color: {surface_text}; border: 0;
 #dashboardOpenButton:focus {{ border: 2px solid {focus}; }}
 #dashboardEditControls, #todaySection, #dashboardCardHeader {{ background: transparent; }}
 #todaySectionItems::item {{ padding: 10px 2px; border-bottom: 1px solid {border}; }}
-#loggingActivityPage, #loggingReflectionPage, #loggingSummaryPage {{ background: {background}; }}
+#loggingActivityPage, #loggingReflectionPage, #loggingSummaryPage,
+QWidget[weeklyReviewPage="true"] {{ background: {background}; }}
 #dailyOverviewFacts {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
 #dailyOverviewCompleted, #dailyOverviewProgress {{ background: transparent; border: 0; }}
 #dailyOverviewCompleted::item, #dailyOverviewProgress::item {{
@@ -1036,7 +1038,7 @@ class AppearancePanel(QWidget):
         preset_layout.setVerticalSpacing(8)
         preset_label = QLabel("Theme preset", preset_card)
         preset_label.setObjectName("appearanceFieldLabel")
-        self.theme_combo = QComboBox(preset_card)
+        self.theme_combo = WheelSafeComboBox(preset_card)
         self.theme_combo.setObjectName("appearanceThemeCombo")
         self.theme_combo.setAccessibleName("Theme preset")
         self.theme_combo.setAccessibleDescription(

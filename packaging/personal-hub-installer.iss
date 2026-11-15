@@ -37,6 +37,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.personalhub.browser_time"; Flags: uninsdeletekey dontcreatekey
 Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.personalhub.browser_time"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.personalhub.browser_time"; Flags: uninsdeletekey dontcreatekey
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Personal Hub"; Flags: nowait postinstall skipifsilent

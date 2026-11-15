@@ -1,4 +1,4 @@
-"""Passphrase encryption for Personal Hub sync shards."""
+"""Passphrase encryption and explicit unencrypted Personal Hub sync bundles."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ SYNC_BUNDLE_FORMAT: Final[str] = "personal-hub-sync-bundle-v1"
 PROVIDER_RELAY_BUNDLE_FORMAT: Final[str] = "personal-hub-provider-relay-bundle-v1"
 SYNC_BUNDLE_MAX_BYTES: Final[int] = 20 * 1024 * 1024
 MIN_PASSPHRASE_LENGTH: Final[int] = 12
+_PLAIN_SYNC_FORMAT: Final[str] = "personal-hub-sync-unencrypted-v1"
+_PLAIN_RELAY_FORMAT: Final[str] = "personal-hub-provider-relay-unencrypted-v1"
 _AAD: Final[bytes] = SYNC_BUNDLE_FORMAT.encode("ascii")
 _SALT_BYTES: Final[int] = 16
 _NONCE_BYTES: Final[int] = 12
@@ -64,6 +66,35 @@ def _derive_key(passphrase: str, salt: bytes) -> bytes:
     ).derive(_require_passphrase(passphrase))
 
 
+def validate_sync_passphrase(passphrase: str | None) -> None:
+    """Validate before applying data; None explicitly selects unencrypted sync."""
+    if passphrase is not None:
+        _require_passphrase(passphrase)
+
+
+def _unencrypted_bundle(payload: bytes, format_tag: str) -> bytes:
+    encoded = json.dumps(
+        {"format": format_tag, "payload": json.loads(payload)},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    if len(encoded) > SYNC_BUNDLE_MAX_BYTES:
+        raise SyncBundleError("Unencrypted sync bundle is too large.")
+    return encoded
+
+
+def _unencrypted_payload(envelope: object, format_tag: str) -> bytes:
+    if not isinstance(envelope, dict) or envelope.get("format") != format_tag:
+        raise SyncBundleError(
+            "Sync protection does not match this folder. Use the same passphrase setting "
+            "on every device, or choose a new shared folder to change protection."
+        )
+    if set(envelope) != {"format", "payload"} or not isinstance(envelope["payload"], dict):
+        raise SyncBundleError("Unencrypted sync bundle envelope is invalid.")
+    return json.dumps(envelope["payload"], ensure_ascii=True).encode("ascii")
+
+
 def _encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii")
 
@@ -92,11 +123,13 @@ def _plaintext(snapshot: SyncSnapshot) -> bytes:
     return payload
 
 
-def encrypt_snapshot(snapshot: SyncSnapshot, passphrase: str) -> bytes:
-    """Return an authenticated encrypted bundle with no plaintext user data."""
+def encrypt_snapshot(snapshot: SyncSnapshot, passphrase: str | None) -> bytes:
+    """Encrypt a snapshot, or explicitly encode without encryption for None."""
 
     if not isinstance(snapshot, SyncSnapshot):
         raise TypeError("encrypt_snapshot expects a SyncSnapshot")
+    if passphrase is None:
+        return _unencrypted_bundle(_plaintext(snapshot), _PLAIN_SYNC_FORMAT)
     salt = os.urandom(_SALT_BYTES)
     nonce = os.urandom(_NONCE_BYTES)
     key = _derive_key(passphrase, salt)
@@ -115,8 +148,8 @@ def encrypt_snapshot(snapshot: SyncSnapshot, passphrase: str) -> bytes:
     return encoded
 
 
-def decrypt_snapshot(bundle: bytes, passphrase: str) -> SyncSnapshot:
-    """Authenticate and decode one encrypted sync bundle."""
+def decrypt_snapshot(bundle: bytes, passphrase: str | None) -> SyncSnapshot:
+    """Decode the selected protection mode; never silently downgrade encryption."""
 
     if not isinstance(bundle, bytes) or not 1 <= len(bundle) <= SYNC_BUNDLE_MAX_BYTES:
         raise SyncBundleError("Sync bundle size is invalid.")
@@ -124,6 +157,17 @@ def decrypt_snapshot(bundle: bytes, passphrase: str) -> SyncSnapshot:
         envelope = json.loads(bundle.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SyncBundleError("Sync bundle is not valid.") from error
+    if passphrase is None:
+        payload = _unencrypted_payload(envelope, _PLAIN_SYNC_FORMAT)
+        try:
+            return SyncSnapshot.model_validate_json(payload)
+        except (TypeError, ValueError) as error:
+            raise SyncBundleError("Unencrypted sync snapshot is invalid.") from error
+    if isinstance(envelope, dict) and envelope.get("format") == _PLAIN_SYNC_FORMAT:
+        raise SyncBundleError(
+            "This folder uses no passphrase. Select No passphrase on every device, "
+            "or choose a new shared folder to enable encryption."
+        )
     if not isinstance(envelope, dict) or set(envelope) != {
         "format",
         "kdf",
@@ -157,8 +201,8 @@ def decrypt_snapshot(bundle: bytes, passphrase: str) -> SyncSnapshot:
         raise SyncBundleError("Decrypted sync snapshot is invalid.") from error
 
 
-def encrypt_provider_relay(snapshot: ProviderRelaySnapshot, passphrase: str) -> bytes:
-    """Encrypt a validated provider relay snapshot with separate format binding."""
+def encrypt_provider_relay(snapshot: ProviderRelaySnapshot, passphrase: str | None) -> bytes:
+    """Encode a validated provider relay with a distinct format for each mode."""
     if not isinstance(snapshot, ProviderRelaySnapshot):
         raise TypeError("encrypt_provider_relay expects a ProviderRelaySnapshot")
     payload = json.dumps(
@@ -169,6 +213,8 @@ def encrypt_provider_relay(snapshot: ProviderRelaySnapshot, passphrase: str) -> 
     ).encode("utf-8")
     if len(payload) > min(PROVIDER_RELAY_MAX_BYTES, SYNC_BUNDLE_MAX_BYTES):
         raise SyncBundleError("Provider relay snapshot is too large to publish.")
+    if passphrase is None:
+        return _unencrypted_bundle(payload, _PLAIN_RELAY_FORMAT)
     salt = os.urandom(_SALT_BYTES)
     nonce = os.urandom(_NONCE_BYTES)
     aad = PROVIDER_RELAY_BUNDLE_FORMAT.encode("ascii")
@@ -188,14 +234,26 @@ def encrypt_provider_relay(snapshot: ProviderRelaySnapshot, passphrase: str) -> 
     return encoded
 
 
-def decrypt_provider_relay(bundle: bytes, passphrase: str) -> ProviderRelaySnapshot:
-    """Authenticate and decode one provider relay envelope."""
+def decrypt_provider_relay(bundle: bytes, passphrase: str | None) -> ProviderRelaySnapshot:
+    """Decode one provider relay envelope in the explicitly selected mode."""
     if not isinstance(bundle, bytes) or not 1 <= len(bundle) <= SYNC_BUNDLE_MAX_BYTES:
         raise SyncBundleError("Provider relay bundle size is invalid.")
     try:
         envelope = json.loads(bundle.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SyncBundleError("Provider relay bundle is not valid.") from error
+    if passphrase is None:
+        payload = _unencrypted_payload(envelope, _PLAIN_RELAY_FORMAT)
+        if len(payload) > min(PROVIDER_RELAY_MAX_BYTES, SYNC_BUNDLE_MAX_BYTES):
+            raise SyncBundleError("Unencrypted provider relay snapshot is too large.")
+        try:
+            return ProviderRelaySnapshot.model_validate_json(payload)
+        except (TypeError, ValueError) as error:
+            raise SyncBundleError("Unencrypted provider relay snapshot is invalid.") from error
+    if isinstance(envelope, dict) and envelope.get("format") == _PLAIN_RELAY_FORMAT:
+        raise SyncBundleError(
+            "This provider relay uses no passphrase. Select No passphrase on every device."
+        )
     if not isinstance(envelope, dict) or set(envelope) != {
         "format",
         "kdf",

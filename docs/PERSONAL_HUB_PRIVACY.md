@@ -6,7 +6,7 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 ## Data categories
 
-Browser site time is separately opt-in in Hub and its Chrome/Edge extension. It reads the
+Browser site time is separately opt-in in Hub and its Chrome/Edge/Brave extension. It reads the
 active tab address transiently and sends only its hostname through a local native-messaging
 helper. No full URL, title, page content or history is retained. Hostnames and intervals are
 private local data included in backup/export and excluded from sync/relay/Metrics/logs.
@@ -18,7 +18,7 @@ Task focus timers start only on explicit Start / resume. Their saved progress is
 device, included in database backups and explicit JSON exports, and excluded from sync and
 provider requests. Masking hides timer content; lock pauses counting. Duration logging is a
 separate per-task opt-in, off by default. Saved whole-minute duration entries follow normal
-Activity retention, deletion, backup/export and explicitly enabled encrypted sync. Task timer
+Activity retention, deletion, backup/export and explicitly enabled shared-folder sync. Task timer
 settings follow task sync, but do not cause a receiving device to start timing. Timers do not
 inspect apps, keystrokes, or whether the user is working. See `PERSONAL_HUB_TASK_TIMERS.md`.
 
@@ -67,7 +67,7 @@ backups/exports. Attribution links open only through the user's Map credits acti
 | Operational metadata | source state, last success, safe failure class, notification claims, audit event type | Hub database/log boundary; no titles, bodies, tokens, or raw provider errors |
 | Backups | Hub SQLite data and non-secret state | User-selected or Hub backup directory; ordinary backups exclude credentials |
 | JSON exports | bounded visible local data and retained summaries | Explicit user-selected file; excludes credentials, data paths, message bodies, and calendar snapshots |
-| Encrypted sync shards | Hub-owned local state, plus separately selected provider snapshots when relay mode is enabled | User-selected shared folder; device sync shards and the single collector relay shard are passphrase-encrypted |
+| Shared-folder sync shards | Hub-owned local state, plus separately selected provider snapshots when relay mode is enabled | User-selected shared folder; device sync shards and the single collector relay shard are encrypted by default, or plaintext with explicit No passphrase selection |
 
 Local Assistant has a different default data root, `assistant.db`, vault namespace, mutex,
 startup value, executable, installer ID, and update channel. Hub path validation rejects an
@@ -178,14 +178,22 @@ memory-only message-body and connected-calendar snapshot caches. A consumer's lo
 include its received provider relay cache and content already imported into the bounded message,
 feed, watch, and Inbox repositories.
 
-## Encrypted sync boundary
+## Shared-folder sync boundary
 
-Activity is Hub-native local data and participates only when encrypted shared-folder sync is
-explicitly enabled. Reflections require the separate **Include private reflections in encrypted
+Weekly review reads existing local Activity, Reflection, app/site usage and approved metric
+history. It adds no collector or provider request. Its metric choices are device-local.
+Review values are computed rather than stored as duplicate histories; existing source
+deletions are reflected on refresh. A weekly draft is an ordinary dated Reflection with the
+same backup/export, explicit deletion and separate reflection-sync opt-in. App/site and metric
+history remain excluded from shared-state sync and provider relay. Masking/lock clear review
+details and visible writing, preserving a failed-save draft only in memory for recovery.
+
+Activity is Hub-native local data and participates only when shared-folder sync is
+explicitly enabled. Reflections require the separate **Include private reflections in
 shared-folder sync** choice on each device and are excluded by default. That permission is
 device-local and never copied as a shared preference. Opted-out devices neither receive nor
 republish reflection content nor treat its absence as a deletion. Disabling reflection sync
-does not remove copies already shared with other devices or their encrypted shards. Both
+does not remove copies already shared with other devices or their sync shards. Both
 Logging record types remain excluded from provider APIs, provider refreshes, and the provider
 collector relay, regardless of selected relay categories. Titles, notes, and reflection text
 never enter operational logs, audit metadata, diagnostics, or notifications. Masking/lock hide
@@ -194,20 +202,28 @@ the Logging pages and clear visible writing controls after flushing local drafts
 The optional **Sync across devices** feature uses a user-selected folder as a file transport.
 Each device writes its own bounded local-state shard beneath `.personal-hub-sync`; the snapshot
 is encrypted with a passphrase-derived Scrypt key and AES-256-GCM. The passphrase is held only
-for the explicit sync operation. The folder may be local, removable, SMB-backed, or managed by
+for the explicit sync operation. The default is **Passphrase encryption (recommended)**.
+An explicit **No passphrase (unencrypted)** choice writes plaintext local-state and relay
+bundles: anyone with folder access can read or modify them. Schema, identity, size, retention,
+and collection checks still apply, but plaintext has no authentication or confidentiality.
+This includes Activity and separately opted-in private reflections. The protection choice stays
+device-local; an empty passphrase never opts out of encryption. Every device must select the
+same protection; changing protection requires a new shared folder. Existing files and cloud
+version history are not converted or erased. The folder may be local, removable, SMB-backed, or managed by
 a cloud file provider, but Personal Hub does not operate a hosted sync account or inbound
 listener.
 
-The encrypted snapshot may contain local task lists and tasks, explicitly imported calendar
+The local-state snapshot may contain local task lists and tasks, explicitly imported calendar
 items, feed subscriptions, watch definitions, and an allowlisted subset of shared preferences
 and view state. It never contains vault credentials, OAuth tokens, provider connection metadata,
 provider snapshots, message summaries or bodies, feed entries/read state, watch observations or
 alerts, Inbox history, or private iCalendar feed URLs. The shard filename contains only a
-random device identity; user records are inside the encrypted payload.
+random device identity; user records use the selected protection mode.
 
 Local-state sync pairs devices to one Hub profile and merges with deterministic UTC last-write-wins
-rules. Durable tombstones carry deletions, equal-time payload conflicts are counted, and malformed,
-tampered, wrong-passphrase, or foreign-profile shards are rejected before that merge is applied.
+rules. Durable tombstones carry deletions and equal-time payload conflicts are counted. Malformed,
+wrong-mode, wrong-passphrase, or foreign-profile shards, and encrypted shards that fail
+authentication, are rejected before that merge is applied.
 
 An optional **Provider collector** role publishes one separate `collector-<device-id>.relay`
 shard. The user selects the role and the calendar, message-summary, feed-entry, and watch-result
@@ -217,16 +233,17 @@ mode forces provider networking off, including Google event writes, and the cons
 using its most recent received snapshot while the collector is offline. That information is
 marked stale and expires after at most 30 days. The collector only needs to be online when it
 must refresh providers and publish an update. For a cloud folder, its sync client must upload the
-new encrypted shard; consumers need the folder client to download it.
+new shard; consumers need the folder client to download it.
 
 The relay may contain selected calendar titles, locations and links; message sender, subject,
 preview and provider deep link; feed entry title, author, summary and link; and bounded watch
 values and alerts. It never contains OAuth tokens, vault material, provider connection metadata,
 full message bodies, private iCalendar feed URLs, or Google event-write bindings. Local `.sync`
-shards continue to exclude provider caches and message content. Data in `.relay` is encrypted,
-but anyone with shared-folder access and the passphrase can read it. The shared-folder provider's
+shards continue to exclude provider caches and message content. Data in `.relay` uses the same protection as local-state shards. Anyone with shared-folder
+access and the passphrase can read encrypted data; folder access alone can read or modify
+no-passphrase data. The shared-folder provider's
 account permissions and retention policies remain outside Personal Hub's control, so users
-should protect the folder as they would any encrypted personal-data export.
+should protect the folder as they would any personal-data export.
 
 ## Display and notifications
 
@@ -303,3 +320,13 @@ Metrics are included in database backups and explicit exports, and excluded from
 diagnostics, existing shared-state sync, and provider relay. Revocation stops future ingestion;
 deletion retains opaque suppression identities to prevent replay. Android retains its own
 Health Connect originals and queued readings. See PERSONAL_HUB_METRICS.md for details.
+
+
+November 15, 2026: recording indicators show generic app/site status in the tray and
+extension toolbar. They never show executable names, hostnames or page content. Tray
+last-save times are hidden during masking/lock. The expiring local browser lease includes
+a SHA-256 digest of the current confirmed browser/hostname identity and a save timestamp
+so a helper response can confirm a matching checkpoint without returning that identity.
+This lease is removed on pause/lock/exit and stays outside exports, sync and diagnostics.
+Extension status storage contains fixed descriptions, a state and a response timestamp;
+no hostname is stored there. Masking continues collection; lock revokes browser recording.

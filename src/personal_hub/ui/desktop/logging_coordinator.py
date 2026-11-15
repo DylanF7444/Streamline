@@ -11,11 +11,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy.exc import SQLAlchemyError
+
+from personal_hub.logging.weekly_review import week_bounds
+from personal_hub.ui.desktop.controls import WheelSafeSpinBox
 
 
 class LoggingCoordinator:
@@ -41,11 +43,9 @@ class LoggingCoordinator:
         )
         label.setWordWrap(True)
         layout.addWidget(label)
-        self.reflection_sync = QCheckBox(
-            "Include private reflections in encrypted shared-folder sync"
-        )
+        self.reflection_sync = QCheckBox("Include private reflections in shared-folder sync")
         self.reflection_sync.setAccessibleName(
-            "Explicitly include private reflections in encrypted sync"
+            "Explicitly include private reflections in shared-folder sync"
         )
         self.reflection_sync.setChecked(
             self.controller.settings_repository.get("logging.sync_reflections", False) is True
@@ -53,12 +53,15 @@ class LoggingCoordinator:
         self.reflection_sync.toggled.connect(self.controller.set_reflection_sync)
         layout.addWidget(self.reflection_sync)
         help_label = QLabel(
-            "Off by default on each device. Activity follows enabled shared-folder sync. Turning this off stops receiving and publishing reflections here; copies already shared remain on other devices and in their encrypted shards."
+            "Off by default on each device. Activity follows enabled shared-folder sync. "
+            "Reflections use your selected sync protection, including plaintext in No passphrase "
+            "mode. Turning this off stops receiving and publishing reflections here; copies "
+            "already shared remain on other devices and in their sync files."
         )
         help_label.setWordWrap(True)
         layout.addWidget(help_label)
         line = QHBoxLayout()
-        self.days = QSpinBox()
+        self.days = WheelSafeSpinBox()
         self.days.setRange(0, 36500)
         self.days.setSpecialValueText("Keep until deleted")
         self.days.setSuffix(" days")
@@ -138,6 +141,7 @@ class LoggingCoordinator:
             return
         view.timezone = self.controller.settings.default_timezone
         view.daily.timezone = view.timezone
+        view.weekly.timezone = view.timezone
         if not self._reflection_day_initialized:
             with QSignalBlocker(view.reflection_date):
                 view.reflection_date.setDate(QDate(datetime.now(ZoneInfo(view.timezone)).date()))
@@ -148,6 +152,10 @@ class LoggingCoordinator:
             today = datetime.now(ZoneInfo(view.timezone)).date()
             if view.daily.day != today:
                 view.daily.show_today()
+        if view.weekly.follow_today:
+            today = datetime.now(ZoneInfo(view.timezone)).date()
+            if view.weekly.day != week_bounds(today)[0]:
+                view.weekly.show_today()
         if view.reflection and not view.dirty:
             current = self.controller.reflection_repository.get(view.reflection.reflection_id)
             if current != view.reflection:
@@ -187,9 +195,20 @@ class LoggingCoordinator:
             self.query(name)
 
     def query(self, name):
-        if self.view.masked:
+        if self.view.masked or (
+            name == "Weekly review" and self.window.active_destination != "Weekly review"
+        ):
             return
         try:
+            if name == "Weekly review":
+                self.view.weekly.render_review(
+                    self.controller.weekly_review(
+                        self.view.weekly.day,
+                        limit=self.view.weekly.limit,
+                    )
+                )
+                self.view.statuses[name].setText("")
+                return
             if name == "Summary":
                 options = self.view.daily.options()
                 self.view.daily.render(
@@ -208,6 +227,8 @@ class LoggingCoordinator:
                 self.view.render_reflections(self.controller.list_reflections(options))
         except (ValueError, OverflowError):
             self.view.statuses[name].setText("Choose a valid date range and filters.")
+        except (SQLAlchemyError, OSError, RuntimeError):
+            self.view.statuses[name].setText("Logging could not be loaded. Try again.")
 
     def handle(self, action, payload):
         if self.view.masked:
@@ -215,6 +236,8 @@ class LoggingCoordinator:
         try:
             if action == "query":
                 self.query(payload)
+            elif action == "refresh_weekly_review":
+                self.refresh()
             elif action == "save_activity":
                 entry, values = payload["entry"], payload["values"]
                 if entry:
@@ -234,10 +257,31 @@ class LoggingCoordinator:
                 self.view.reflection_saved(self.controller.save_reflection(payload))
                 self.query("Reflection")
                 self.query("Summary")
+                self.query("Weekly review")
             elif action == "save_daily_reflection":
                 self.view.daily.reflection_saved(self.controller.save_reflection(payload))
                 self.query("Summary")
                 self.query("Reflection")
+                self.query("Weekly review")
+            elif action == "save_weekly_reflection":
+                self.view.weekly.reflection_saved(self.controller.save_reflection(payload))
+                self.query("Weekly review")
+                self.query("Reflection")
+                self.query("Summary")
+            elif action == "weekly_metric":
+                identifier, enabled = payload
+                selected = set(self.view.weekly.selected_metrics)
+                selected.add(identifier) if enabled else selected.discard(identifier)
+                if len(selected) > 64:
+                    self.view.statuses["Weekly review"].setText("Choose up to 64 review metrics.")
+                    self.view.weekly.metric_changed()
+                    return
+                self.controller.settings_repository.set("logging.weekly_metrics", sorted(selected))
+                self.query("Weekly review")
+            elif action == "open_review_day":
+                if self.view.flush():
+                    self.view.daily.select_day(QDate(payload))
+                    self.window.show_destination("Summary")
             elif action == "delete_reflection":
                 self.controller.delete_reflection(payload)
                 self.view.reflection = None
@@ -245,6 +289,7 @@ class LoggingCoordinator:
                 self.view._load_editor()
                 self.query("Reflection")
                 self.query("Summary")
+                self.query("Weekly review")
             elif action == "open_task":
                 if self.controller.get_task(payload):
                     self.window.show_destination("Tasks")
@@ -265,6 +310,15 @@ class LoggingCoordinator:
             elif action == "save_daily_reflection":
                 self.view.daily.saved.setText(
                     "Not saved. Your writing remains in the editor; try again."
+                )
+            elif action == "save_weekly_reflection":
+                self.view.weekly.saved.setText(
+                    "Not saved. Your writing remains in the editor; try again."
+                )
+            elif action == "weekly_metric":
+                self.view.weekly.metric_changed()
+                self.view.statuses["Weekly review"].setText(
+                    "Metric selection could not be saved. Try again."
                 )
             else:
                 self.view.statuses["Activity"].setText("Logging could not be updated. Try again.")

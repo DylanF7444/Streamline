@@ -7,8 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import QDate, Qt, QTime
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
-    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -19,8 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
-    QSpinBox,
-    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +28,12 @@ from personal_hub.imports import (
     read_import_file,
     task_template_csv,
     text_list_instructions,
+)
+from personal_hub.ui.desktop.controls import (
+    WheelSafeComboBox,
+    WheelSafeDateEdit,
+    WheelSafeSpinBox,
+    WheelSafeTimeEdit,
 )
 
 
@@ -66,7 +68,7 @@ class ImportDialog(QDialog):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        self.target_combo = QComboBox()
+        self.target_combo = WheelSafeComboBox()
         self.target_combo.setObjectName("importTargetCombo")
         self.target_combo.setAccessibleName("Import destination")
         self.target_combo.addItem("Tasks", "tasks")
@@ -76,7 +78,7 @@ class ImportDialog(QDialog):
         self.target_combo.currentIndexChanged.connect(self._refresh_instructions)
         form.addRow("Import into", self.target_combo)
 
-        self.format_combo = QComboBox()
+        self.format_combo = WheelSafeComboBox()
         self.format_combo.setObjectName("importFormatCombo")
         self.format_combo.setAccessibleName("Import format")
         self.format_combo.addItem("CSV file or pasted CSV", "csv")
@@ -127,17 +129,17 @@ class ImportDialog(QDialog):
         self.calendar_defaults_frame.setObjectName("calendarImportDefaults")
         defaults_layout = QFormLayout(self.calendar_defaults_frame)
         defaults_layout.setContentsMargins(0, 0, 0, 0)
-        self.default_date_input = QDateEdit(QDate.currentDate())
+        self.default_date_input = WheelSafeDateEdit(QDate.currentDate())
         self.default_date_input.setObjectName("calendarImportDefaultDate")
         self.default_date_input.setAccessibleName("Default calendar date")
         self.default_date_input.setCalendarPopup(True)
         self.default_date_input.calendarWidget().setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
         defaults_layout.addRow("Default date", self.default_date_input)
-        self.default_time_input = QTimeEdit(QTime(9, 0))
+        self.default_time_input = WheelSafeTimeEdit(QTime(9, 0))
         self.default_time_input.setObjectName("calendarImportDefaultTime")
         self.default_time_input.setAccessibleName("Default calendar start time")
         defaults_layout.addRow("Default start time", self.default_time_input)
-        self.default_duration_input = QSpinBox()
+        self.default_duration_input = WheelSafeSpinBox()
         self.default_duration_input.setObjectName("calendarImportDefaultDuration")
         self.default_duration_input.setAccessibleName("Default calendar duration in minutes")
         self.default_duration_input.setRange(5, 1_440)

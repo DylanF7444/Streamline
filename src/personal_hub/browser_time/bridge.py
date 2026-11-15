@@ -1,5 +1,6 @@
 """Bounded latest-sample mailbox; a live Hub lease is required for writes."""
 
+import hashlib
 import json
 import os
 import time
@@ -8,7 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from personal_hub.browser_time.contracts import BrowserSample, BrowserTimeSession
+from personal_hub.browser_time.contracts import (
+    BROWSER_EXECUTABLES,
+    BrowserSample,
+    BrowserTimeSession,
+)
 from personal_hub.screen_time.collector import Observation, ScreenTimeRecorder
 from personal_hub.screen_time.contracts import ScreenTimeSettings
 
@@ -39,7 +44,7 @@ def receive(root: Path, payload, *, now=None):
     if not 0 <= lease["expires"] - now <= 20:
         return {"recording": False}
     if not lease.get("collect", False):
-        return {"recording": False}
+        return {"recording": False, "state": lease.get("state", "waiting")}
     if sample.domain and any(
         sample.domain == d or sample.domain.endswith("." + d)
         for d in lease.get("excluded_domains", [])
@@ -54,7 +59,19 @@ def receive(root: Path, payload, *, now=None):
             "sample": sample.model_dump(),
         },
     )
-    return {"recording": True}
+    response = {"recording": True}
+    if "state" in lease:
+        confirmed = (
+            sample.domain
+            and lease.get("state") == "recording"
+            and lease.get("confirmed")
+            == hashlib.sha256(f"{sample.browser}|{sample.domain}".encode()).hexdigest()
+            and 0 <= now - lease.get("saved_at", 0) <= 10
+        )
+        response["state"] = (
+            "recording" if confirmed else ("waiting" if sample.domain else "ineligible")
+        )
+    return response
 
 
 class _BrowserRecorder(ScreenTimeRecorder):
@@ -87,12 +104,17 @@ class BrowserTimeRuntime:
     def start(self):
         self.pause()
         self.recorder.running = True
+        self.recorder.state = "waiting"
+        self.recorder.status = "Waiting for browser extension"
 
     def pause(self):
         self.recorder.pause()
         self.generation = uuid4().hex
         self.seen.clear()
-        for name in ("lease.json", "chrome.json", "edge.json"):
+        for name in (
+            "lease.json",
+            *(f"{browser}.json" for browser in BROWSER_EXECUTABLES.values()),
+        ):
             with suppress(OSError):
                 (self.root / name).unlink(missing_ok=True)
 
@@ -104,26 +126,28 @@ class BrowserTimeRuntime:
             return
         now = time.time() if now is None else now
         collect = (
-            observation.app in {"chrome.exe", "msedge.exe"}
+            observation.app in BROWSER_EXECUTABLES
             and observation.idle_seconds < self.settings.idle_seconds
         )
-        write_json(
-            self.root / "lease.json",
-            {
-                "id": self.generation,
-                "expires": now + 12,
-                "collect": collect,
-                "excluded_domains": self.settings.excluded_domains,
-            },
-        )
         self.recorder.settings = ScreenTimeSettings(idle_seconds=self.settings.idle_seconds)
-        browser = {"chrome.exe": "chrome", "msedge.exe": "edge"}.get(observation.app)
+        browser = BROWSER_EXECUTABLES.get(observation.app)
         identity = None
+        reason = "Recording enabled — focus Chrome, Edge or Brave"
+        if observation.idle_seconds >= self.settings.idle_seconds:
+            reason = "Paused — no recent input"
+        elif browser:
+            reason = "Waiting for browser extension — check its connection status"
         if browser:
             try:
                 value = read_json(self.root / f"{browser}.json")
                 sample = BrowserSample.model_validate(value["sample"])
                 domain = sample.domain
+                if value["lease"] == self.generation and 0 <= now - value["received"] <= 10:
+                    reason = (
+                        "Waiting for a fresh browser sample"
+                        if domain
+                        else "No eligible site — private, excluded or internal page"
+                    )
                 if (
                     sample.browser == browser
                     and value["lease"] == self.generation
@@ -143,4 +167,30 @@ class BrowserTimeRuntime:
             Observation(identity, observation.idle_seconds),
             now=datetime.fromtimestamp(now, UTC),
             monotonic=monotonic,
+        )
+        if observation.idle_seconds >= self.settings.idle_seconds:
+            self.recorder.status = "Paused — no recent input"
+        elif identity is None:
+            self.recorder.status = reason
+        # Publish only after a successful checkpoint. A helper acknowledgement of
+        # mailbox delivery alone must never turn the toolbar badge green.
+        saved = self.recorder.last_saved_at
+        state = self.recorder.state
+        if not collect:
+            state = "idle" if observation.idle_seconds >= self.settings.idle_seconds else "focus"
+        elif identity is None:
+            state = "waiting"
+        write_json(
+            self.root / "lease.json",
+            {
+                "id": self.generation,
+                "expires": now + 12,
+                "collect": collect,
+                "excluded_domains": self.settings.excluded_domains,
+                "state": state,
+                "confirmed": hashlib.sha256(identity.encode()).hexdigest()
+                if identity and state == "recording"
+                else None,
+                "saved_at": saved.timestamp() if saved else 0,
+            },
         )

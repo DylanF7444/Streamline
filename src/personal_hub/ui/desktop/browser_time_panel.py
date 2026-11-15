@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -17,7 +19,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,6 +30,7 @@ from personal_hub.browser_time.contracts import BrowserTimeSettings
 from personal_hub.browser_time.setup import register, unregister
 from personal_hub.screen_time.contracts import AppRule
 from personal_hub.screen_time.repository import bounds
+from personal_hub.ui.desktop.controls import WheelSafeComboBox, WheelSafeSpinBox
 
 
 def duration(seconds):
@@ -47,7 +49,7 @@ class BrowserTimePanel(QGroupBox):
         self.status.setWordWrap(True)
         self.box.addWidget(self.status)
         help_text = QLabel(
-            "Optional Chrome / Edge extension records the focused site's hostname while Hub "
+            "Optional Chrome / Edge / Brave extension records the focused site's hostname while Hub "
             "runs. Private tabs, local addresses, page titles, full addresses and content are "
             "excluded. Site time is part of browser app time; do not add them together. "
             "The date range above applies to sites too."
@@ -65,7 +67,7 @@ class BrowserTimePanel(QGroupBox):
         self.box.addWidget(self.toggle)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        self.idle = QSpinBox()
+        self.idle = WheelSafeSpinBox()
         self.idle.setRange(30, 1800)
         self.idle.setSuffix(" seconds")
         self.exclusions = QLineEdit()
@@ -150,6 +152,8 @@ class BrowserTimePanel(QGroupBox):
         else:
             self.runtime.start()
         self.refresh()
+        if hasattr(self.page, "indicator"):
+            self.page.indicator.update()
 
     def tick(self, observation):
         self.runtime.tick(observation, locked=self.locked)
@@ -210,7 +214,9 @@ class BrowserTimePanel(QGroupBox):
             "Browser details hidden"
             if self.private
             else (
-                self.runtime.recorder.status if self.runtime.running else "Browser recording paused"
+                self.runtime.recorder.status
+                if self.runtime.running or self.runtime.recorder.state == "error"
+                else "Browser recording paused"
             )
         )
         if self.private:
@@ -296,6 +302,8 @@ class BrowserTimePanel(QGroupBox):
             )
         except (OSError, ValueError, SQLAlchemyError):
             self.runtime.pause()
+            self.runtime.recorder.state = "error"
+            self.runtime.recorder.status = "Browser history unavailable; check local storage"
             self.clear()
             self.status.setText("Browser history unavailable. Check local storage and retry.")
 
@@ -400,11 +408,27 @@ class BrowserTimePanel(QGroupBox):
             QMessageBox.information(
                 self,
                 "Load browser extension",
-                f"Open chrome://extensions or edge://extensions, turn on Developer mode, choose Load unpacked and select:\n{target}\n\nCopy the extension ID, then continue setup here.",
+                f"Open chrome://extensions, edge://extensions or brave://extensions, turn on Developer mode, choose Load unpacked and select:\n{target}\n\nCopy the extension ID, then continue setup here.",
             )
-            browser, ok = QInputDialog.getItem(
-                self, "Browser", "Browser to connect", ["chrome", "edge"], editable=False
+            browser_dialog = QDialog(self)
+            browser_dialog.setWindowTitle("Browser")
+            browser_layout = QVBoxLayout(browser_dialog)
+            browser_label = QLabel("Browser to connect", browser_dialog)
+            browser_label.setTextFormat(Qt.TextFormat.PlainText)
+            browser_layout.addWidget(browser_label)
+            browser_combo = WheelSafeComboBox(browser_dialog)
+            browser_combo.setAccessibleName("Browser to connect")
+            browser_combo.addItems(["chrome", "edge", "brave"])
+            browser_layout.addWidget(browser_combo)
+            browser_buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+                parent=browser_dialog,
             )
+            browser_buttons.accepted.connect(browser_dialog.accept)
+            browser_buttons.rejected.connect(browser_dialog.reject)
+            browser_layout.addWidget(browser_buttons)
+            ok = browser_dialog.exec() == QDialog.DialogCode.Accepted
+            browser = browser_combo.currentText()
             if not ok or self.private:
                 return
             extension_id, ok = QInputDialog.getText(
@@ -425,7 +449,7 @@ class BrowserTimePanel(QGroupBox):
                 executable = Path(chosen)
             register(browser, extension_id.strip(), executable, self.controller.settings.data_dir)
             self.status.setText(
-                "Connected. Enable tracking in the extension, then choose Start browser recording here."
+                "Connected. Enable tracking in the extension (select Brave there if automatic detection fails), then choose Start browser recording here."
             )
         except (OSError, ValueError):
             self.status.setText(

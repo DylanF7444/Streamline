@@ -122,6 +122,7 @@ from personal_hub.storage.repositories import (
     SourceRepository,
 )
 from personal_hub.sync import (
+    SyncBundleError,
     SyncError,
     SyncRecord,
     SyncResult,
@@ -793,6 +794,25 @@ class HubController:
     def activity_summary(self, options: LogFilter) -> dict[str, object]:
         self._ensure_open()
         return self.activity_repository.summary(options)
+
+    def weekly_review(self, day: date, *, limit: int = 200):
+        from personal_hub.logging.weekly_review import build_weekly_review
+
+        self._ensure_open()
+        selected = self.settings_repository.get("logging.weekly_metrics", [])
+        if not isinstance(selected, list):
+            selected = []
+        return build_weekly_review(
+            self.activity_repository,
+            self.reflection_repository,
+            self.screen_time_repository,
+            self.browser_time_repository,
+            self.metrics_repository,
+            day=day,
+            timezone=self.settings.default_timezone,
+            metric_ids=tuple(item for item in selected[:64] if isinstance(item, str)),
+            limit=limit,
+        )
 
     def list_reflections(self, options: LogFilter | None = None) -> list[ReflectionEntry]:
         self._ensure_open()
@@ -2551,6 +2571,11 @@ class HubController:
         )
         return status
 
+    def set_sync_passphrase_required(self, required: bool) -> SyncStatus:
+        """Save the device-local, explicit choice of shared-file protection."""
+        self._ensure_open()
+        return self.sync_service.set_passphrase_required(required)
+
     def disable_sync(self) -> SyncStatus:
         """Disable future sync runs while leaving the shared shard untouched."""
 
@@ -2570,29 +2595,35 @@ class HubController:
 
     def sync_now(
         self,
-        passphrase: str,
+        passphrase: str = "",
         *,
         now: datetime | None = None,
     ) -> SyncResult:
         """Sync Hub-owned state and the selected provider snapshots.
 
-        The callback applies only after the encrypted shards have been read and
+        The callback applies only after the selected-mode shards have been read and
         validated. Provider relay data is read or written only for the selected
-        collector/consumer role, through a separate authenticated shard.
+        collector/consumer role, through a separate shard with the same protection.
         """
 
         self._ensure_open()
         timestamp = _utc_sync_time(now)
-        local = self._build_sync_snapshot(now=timestamp)
+        sync_passphrase = passphrase if self.sync_service.passphrase_required() else None
         try:
+            if self.sync_service.passphrase_required() and not isinstance(passphrase, str):
+                raise SyncBundleError("Sync passphrase is required.")
+            local = self._build_sync_snapshot(now=timestamp)
             result = self.sync_service.synchronize(
                 local,
-                passphrase,
+                sync_passphrase,
                 apply=lambda merged: self._apply_sync_snapshot(merged, current=local),
                 now=timestamp,
             )
         except SyncError:
             raise
+        except SyncBundleError as error:
+            self.sync_service.record_error(str(error))
+            raise SyncError(str(error)) from error
         except (TypeError, ValueError, KeyError, RuntimeError) as error:
             self.sync_service.record_error("Synchronized data failed Hub validation safely.")
             raise SyncError("Synchronized data failed Hub validation safely.") from error
@@ -2605,7 +2636,7 @@ class HubController:
                         profile_id=result.profile_id,
                         now=result.completed_at,
                     )
-                    self.sync_service.publish_provider_relay(relay, passphrase)
+                    self.sync_service.publish_provider_relay(relay, sync_passphrase)
                     relay_item_count = self._provider_relay_item_count(relay)
                     self._cache_provider_relay_calendar_data(relay)
                     self.sync_service.record_provider_relay_sync(
@@ -2613,7 +2644,7 @@ class HubController:
                         item_count=relay_item_count,
                     )
                 else:
-                    relay = self.sync_service.read_provider_relay(passphrase)
+                    relay = self.sync_service.read_provider_relay(sync_passphrase)
                     if relay is not None:
                         if relay.profile_id != result.profile_id:
                             raise SyncError(
@@ -2636,10 +2667,8 @@ class HubController:
                                 at=timestamp,
                                 item_count=relay_item_count,
                             )
-            except SyncError:
-                self.sync_service.record_provider_relay_error(
-                    "The provider relay could not be applied safely."
-                )
+            except (SyncError, SyncBundleError) as error:
+                self.sync_service.record_provider_relay_error(str(error))
             except (OSError, TypeError, ValueError, KeyError, RuntimeError) as error:
                 self.sync_service.record_provider_relay_error(
                     "The provider relay could not be applied safely."

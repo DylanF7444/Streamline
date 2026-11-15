@@ -102,3 +102,60 @@ def test_lock_blocks_native_sampling_and_failure_pauses(ui, monkeypatch):
     window.set_locked(True)
     view.toggle_recording()
     assert not view.recorder.running
+
+
+def test_background_indicator_and_independent_controls(ui):
+    hub, window, page = ui
+    page.timer.stop()
+    page.toggle_recording()
+    assert "Waiting" in page.indicator.app_status.text()
+    page.recorder.observe(
+        Observation("editor.exe"), now=datetime(2026, 11, 10, tzinfo=UTC), monotonic=0
+    )
+    page.recorder.observe(
+        Observation("editor.exe"),
+        now=datetime(2026, 11, 10, tzinfo=UTC) + timedelta(seconds=5),
+        monotonic=5,
+    )
+    page.indicator.update()
+    assert "Recording" in page.indicator.app_status.text()
+    assert "Last saved" in page.indicator.app_status.text()
+    assert "editor.exe" not in page.indicator.app_status.text()
+    page.indicator.browser_action.trigger()
+    assert page.browser.runtime.running
+    page.tray_action.trigger()
+    assert not page.recorder.running
+    assert page.browser.runtime.running
+    window.set_privacy_masked(True)
+    assert "Last saved" not in page.indicator.app_status.text()
+    window.set_locked(True)
+    assert "Locked" in page.indicator.app_status.text()
+    assert not page.indicator.browser_action.isEnabled()
+    assert not page.browser.runtime.running
+    window.set_locked(False)
+    window.set_privacy_masked(False)
+    page.indicator.open_action.trigger()
+    assert window.active_destination == "Screen time"
+
+
+def test_storage_error_revokes_browser_lease_and_shows_tray_error(ui, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    hub, window, page = ui
+    page.timer.stop()
+    page.toggle_recording()
+    page.browser.toggle_recording()
+    page.browser.runtime.tick(Observation("chrome.exe"))
+    assert (page.browser.runtime.root / "lease.json").exists()
+
+    def fail(*args, **kwargs):
+        raise SQLAlchemyError("private database detail")
+
+    monkeypatch.setattr(hub.screen_time_repository, "summary", fail)
+    page.refresh()
+    assert not page.recorder.running
+    assert not page.browser.runtime.running
+    assert not (page.browser.runtime.root / "lease.json").exists()
+    assert page.recorder.state == "error"
+    assert "History unavailable" in page.indicator.app_status.text()
+    assert "private" not in page.indicator.app_status.text()

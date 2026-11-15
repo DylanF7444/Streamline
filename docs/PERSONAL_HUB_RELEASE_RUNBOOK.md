@@ -248,6 +248,16 @@ verify Activity sync, separate reflection opt-in on both devices, opt-out withou
 deletions, correction/tombstone merging, and no Logging data in the collector relay. No real
 provider account is required for these checks.
 
+For Weekly review, use synthetic local records to verify Monday–Sunday navigation across
+month/year and DST boundaries, This week rollover, retained historical selection, full totals
+with paginated details, undone completion exclusion and day links into Daily overview.
+Check that entered/timed work, app usage and site usage stay separate; missing observations
+must not imply zero time worked. Choose primary-source metrics with sum/latest/mean and
+missing/zero values. Write multiple weekly reflections, select existing dated writing,
+exercise failed-save navigation guards and mask/lock recovery, and verify backup/export/
+restore/deletion and the existing separate reflection-sync opt-in. Review keyboard focus,
+minimum-size/175% layouts and minute refresh without enabling recording or provider access.
+
 Run automated UI tests, then manually review at 720×460, 100–175% Hub text scale, Windows
 high contrast, keyboard-only operation, reduced motion, Narrator, and at least one additional
 screen reader. Confirm navigation order, visible focus, names/roles/states, list/action
@@ -276,7 +286,7 @@ Phase 8 AI work is optional, disabled, and not a condition of non-AI 1.0.
 
 Browser site tracking additionally requires the packaged PersonalHubBrowserHost.exe and
 the bundled extension assets. Run the browser Python/UI and Node tests and perform the
-Chrome/Edge setup, permission, focus, idle, lock, restore, disconnect and uninstall checks
+Chrome/Edge/Brave setup, permission, focus, idle, lock, restore, disconnect and uninstall checks
 in `PERSONAL_HUB_BROWSER_TIME.md`. Sign the helper with the desktop executable.
 
 
@@ -287,3 +297,21 @@ battery restrictions require device acceptance; record those separately from loo
 fixture evidence. Verify snapshots and LAN delivery of the same records deduplicate.
 Do not include device credentials, TLS private keys, SDK installations or signing keys in
 release/source artifacts. Inspect the desktop package after adding aiohttp.
+
+
+### Background recording indicators (November 15, 2026)
+
+In a packaged build, verify both tray marks at Windows display scales and with Narrator.
+Apps are left, sites right; letters and menu text supplement colors. Test independent
+starts/pauses from the tray, Review screen time, idle/exclusion gaps, sleep/wake, privacy
+mask and lock/unlock, storage failure and shutdown. Check the tooltip fits and contains
+no app/site identity. Ensure last-save times disappear during privacy masking and lock.
+
+With extension 0.1.3 and the rebuilt helper in Chrome, Edge and Brave, pin the extension
+and verify REC follows a saved matching foreground site interval. Check WAIT on tab switch,
+internal/private/excluded pages, browser focus loss and idle; OFF on extension pause;
+! on missing/unauthorized/crashed or unresponsive helper. Withhold native responses and
+verify REC clears after the twelve-second response deadline plus at most one two-second
+timer tick. Verify Hub pause/lock/exit clears REC, reload/reconnect starts at WAIT, old
+helpers never claim REC, and no popup opens automatically. These live checks are separate
+from the offline fake-browser and Qt regression tests.

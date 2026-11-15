@@ -27,6 +27,7 @@ EXPECTED_NAVIGATION = (
     "Places",
     "Metrics",
     "Screen time",
+    "Weekly review",
 )
 
 
@@ -150,8 +151,8 @@ def test_minimal_hub_window_has_personal_hub_title_and_primary_navigation(qtbot,
     }
     assert expected_labels.issubset(texts)
     assert window.navigation_caption.text() == "NAVIGATION"
-    assert window.today_subtitle.isHidden()
-    assert window.today_subtitle.text() == ""
+    assert window.today_subtitle.isVisible()
+    assert "Add a task or log progress" in window.today_subtitle.text()
     assert not window.findChildren(QLabel, "brandSubtitle")
     assert "A little clarity for every day." not in texts
     assert "YOUR PERSONAL SPACE" not in texts

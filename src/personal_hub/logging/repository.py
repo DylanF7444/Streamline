@@ -222,6 +222,8 @@ class ActivityRepository:
         days: dict[str, int] = {}
         lists: dict[str, int] = {}
         tags: dict[str, int] = {}
+        daily: dict[str, dict] = {}
+        durations: dict[str, int] = {}
         with self.database.session() as session:
             query = self._query(options.model_copy(update={"include_undone": False}))
             for row in session.scalars(query.execution_options(yield_per=200)):
@@ -231,11 +233,27 @@ class ActivityRepository:
                     duration = (duration or 0) + entry.duration_minutes
                 day = entry.occurred_at.astimezone(ZoneInfo(options.timezone)).date().isoformat()
                 days[day] = days.get(day, 0) + 1
+                detail = daily.setdefault(day, {"task_completion": 0, "manual": 0, "durations": {}})
+                detail[entry.kind] += 1
+                if entry.duration_minutes is not None:
+                    source = entry.duration_source
+                    durations[source] = durations.get(source, 0) + entry.duration_minutes
+                    detail["durations"][source] = (
+                        detail["durations"].get(source, 0) + entry.duration_minutes
+                    )
                 label = entry.list_name or (str(entry.list_id) if entry.list_id else "No list")
                 lists[label] = lists.get(label, 0) + 1
                 for tag in entry.tags:
                     tags[tag] = tags.get(tag, 0) + 1
-        return {**counts, "duration_minutes": duration, "days": days, "lists": lists, "tags": tags}
+        return {
+            **counts,
+            "duration_minutes": duration,
+            "days": days,
+            "lists": lists,
+            "tags": tags,
+            "daily": daily,
+            "durations": durations,
+        }
 
     def all(self) -> list[ActivityEntry]:
         with self.database.session() as session:

@@ -169,6 +169,8 @@ def test_narrow_logging_pages_are_scrollable_and_keyboard_accessible(ui, qtbot):
     qtbot.keyClick(window.mode_selector, Qt.Key.Key_Tab)
     assert window.navigation_buttons["Summary"].hasFocus(), window.focusWidget().objectName()
     qtbot.keyClick(window.navigation_buttons["Summary"], Qt.Key.Key_Tab)
+    assert window.navigation_buttons["Weekly review"].hasFocus(), window.focusWidget().objectName()
+    qtbot.keyClick(window.navigation_buttons["Weekly review"], Qt.Key.Key_Tab)
     assert window.navigation_buttons["Activity"].hasFocus(), window.focusWidget().objectName()
     qtbot.keyClick(window.navigation_buttons["Activity"], Qt.Key.Key_Tab)
     assert window.navigation_buttons["Reflection"].hasFocus(), window.focusWidget().objectName()

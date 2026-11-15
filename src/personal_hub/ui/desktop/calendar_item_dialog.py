@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime, QTimeZone
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from personal_hub.calendar.local import ImportedCalendarEvent
 from personal_hub.calendar.native import LOCAL_CALENDAR_ID, CalendarSyncBinding
+from personal_hub.ui.desktop.controls import WheelSafeComboBox, WheelSafeDateTimeEdit
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
@@ -80,7 +80,7 @@ class CalendarItemDialog(QDialog):
         self.description_input.setAccessibleName("Calendar item notes")
         self.description_input.setTabChangesFocus(True)
         form.addRow("Notes (optional)", self.description_input)
-        self.sync_combo = QComboBox()
+        self.sync_combo = WheelSafeComboBox()
         self.sync_combo.setAccessibleName("Calendar item sync destination")
         self.sync_combo.addItem("Keep on this device", None)
         if binding is not None:
@@ -102,7 +102,7 @@ class CalendarItemDialog(QDialog):
             sync_status.setWordWrap(True)
             sync_status.setAccessibleName("Calendar item sync status")
             form.addRow("Sync status", sync_status)
-        self.conflict_combo = QComboBox()
+        self.conflict_combo = WheelSafeComboBox()
         self.conflict_combo.addItem("Keep both versions for review", None)
         self.conflict_combo.addItem("Use Google changes", "google")
         self.conflict_combo.addItem("Send these local changes", "local")
@@ -132,7 +132,7 @@ class CalendarItemDialog(QDialog):
 
     @staticmethod
     def _time_input(value: datetime, name: str) -> QDateTimeEdit:
-        editor = QDateTimeEdit()
+        editor = WheelSafeDateTimeEdit()
         # Keep wall-clock fields independent of the host's daylight-saving rules.
         # Apply the selected IANA zone only when validating the saved item.
         editor.setTimeZone(QTimeZone.utc())

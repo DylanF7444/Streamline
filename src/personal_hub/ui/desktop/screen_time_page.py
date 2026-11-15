@@ -7,7 +7,6 @@ from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
-    QDateEdit,
     QFormLayout,
     QGroupBox,
     QHeaderView,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +26,8 @@ from personal_hub.screen_time.collector import Observation, ScreenTimeRecorder, 
 from personal_hub.screen_time.contracts import AppRule, ScreenTimeSettings
 from personal_hub.screen_time.repository import bounds
 from personal_hub.ui.desktop.browser_time_panel import BrowserTimePanel
+from personal_hub.ui.desktop.controls import WheelSafeDateEdit, WheelSafeSpinBox
+from personal_hub.ui.desktop.recording_indicator import RecordingIndicator
 
 
 def duration(seconds):
@@ -65,6 +65,7 @@ class ScreenTimePage(QScrollArea):
         self.setWidget(content)
         self.layout_box = QVBoxLayout(content)
         self.private = False
+        self.locked = False
         self.controller = None
         self.window = parent
         self.status = QLabel("Paused · Record foreground app usage on this PC")
@@ -91,7 +92,7 @@ class ScreenTimePage(QScrollArea):
         form = QFormLayout(settings_group)
         self.startup = QCheckBox("Start recording when Hub opens")
         self.card = QCheckBox("Show screen time in Daily overview")
-        self.idle = QSpinBox()
+        self.idle = WheelSafeSpinBox()
         self.idle.setRange(30, 1800)
         self.idle.setSuffix(" seconds")
         self.exclusions = QLineEdit()
@@ -106,8 +107,8 @@ class ScreenTimePage(QScrollArea):
         form.addRow(self.save)
         self.layout_box.addWidget(settings_group)
         dates = QFormLayout()
-        self.start_date = QDateEdit(QDate.currentDate())
-        self.end_date = QDateEdit(QDate.currentDate())
+        self.start_date = WheelSafeDateEdit(QDate.currentDate())
+        self.end_date = WheelSafeDateEdit(QDate.currentDate())
         for control in (self.start_date, self.end_date):
             control.setCalendarPopup(True)
             control.setMaximumDate(QDate(9999, 12, 30))
@@ -201,6 +202,7 @@ class ScreenTimePage(QScrollArea):
         window.tray_controller.menu.insertAction(
             window.tray_controller.quit_action, self.tray_action
         )
+        self.indicator = RecordingIndicator(self, window.tray_controller)
         window.destination_changed.connect(
             lambda destination: self.refresh() if destination == "Screen time" else None
         )
@@ -243,6 +245,11 @@ class ScreenTimePage(QScrollArea):
         except (OSError, ValueError, SQLAlchemyError):
             self.recorder.pause()
             self.browser.runtime.pause()
+            self.recorder.state = self.browser.runtime.recorder.state = "error"
+            self.recorder.status = self.browser.runtime.recorder.status = (
+                "Storage error; start to retry"
+            )
+            self.indicator.update()
             self.status.setText(
                 "Recording paused because a sample could not be saved. Start to retry."
             )
@@ -317,6 +324,9 @@ class ScreenTimePage(QScrollArea):
             if hasattr(self, "recorder"):
                 self.recorder.pause()
             self.browser.runtime.pause()
+            self.recorder.state = self.browser.runtime.recorder.state = "error"
+            self.recorder.status = self.browser.runtime.recorder.status = "History unavailable"
+            self.indicator.update()
             self.status.setText(
                 "Screen-time history is unavailable. Check local storage and retry."
             )
@@ -325,6 +335,7 @@ class ScreenTimePage(QScrollArea):
         if not self.controller or self.controller.is_closed:
             return
         self.browser.refresh()
+        self.indicator.update()
         running = self.recorder.running
         self.toggle.setText("Pause recording" if running else "Start recording screen time")
         self.tray_action.setText(
@@ -466,6 +477,7 @@ class ScreenTimePage(QScrollArea):
             )
 
     def set_state(self, *, private=False, locked=False):
+        self.locked = locked
         self.browser.set_state(private=private, locked=locked)
         changed = private != self.private or locked
         self.private = private
