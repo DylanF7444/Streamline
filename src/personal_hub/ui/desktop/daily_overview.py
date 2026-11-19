@@ -25,6 +25,12 @@ from personal_hub.ui.desktop.readable import ReadableList, SummaryCards, present
 from personal_hub.ui.desktop.status_label import StatusLabel
 
 
+def seconds_text(seconds):
+    if seconds is None:
+        return "No recorded usage"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m {seconds % 60}s"
+
+
 class DailyOverview(QWidget):
     requested = Signal(str, object)
     route = "Summary"
@@ -72,6 +78,17 @@ class DailyOverview(QWidget):
         self.facts.setObjectName("dailyOverviewFacts")
         self.facts.setAccessibleName("Daily overview totals")
         layout.addWidget(self.facts)
+        self.daily_usage_facts = SummaryCards()
+        self.daily_usage_facts.setObjectName("dailyOverviewUsageFacts")
+        self.daily_usage_facts.setAccessibleName("Daily app and website foreground time")
+        layout.addWidget(self.daily_usage_facts)
+        self.daily_usage_help = QLabel(
+            "App and website time may overlap. Usage is from this PC; gaps are unrecorded time."
+        )
+        self.daily_usage_help.setWordWrap(True)
+        self.daily_usage_help.setAccessibleName("Daily usage totals explanation")
+        layout.addWidget(self.daily_usage_help)
+        self.set_usage(None, None)
         self.completed = self._section(
             "Tasks completed", layout, "dailyOverviewCompleted", "Tasks completed"
         )
@@ -145,9 +162,32 @@ class DailyOverview(QWidget):
 
     def set_compact(self, compact):
         self.facts.set_compact(compact)
+        self.daily_usage_facts.set_compact(compact)
         for index, control in enumerate((self.previous, self.date, self.next, self.today)):
             self.date_actions.removeWidget(control)
             self.date_actions.addWidget(control, index if compact else 0, 0 if compact else index)
+
+    def set_usage(self, app_seconds, site_seconds, *, visible=True):
+        if self.masked or not visible:
+            self.clear_usage()
+            return
+        self.daily_usage_facts.set_cards(
+            (
+                ("App foreground time", seconds_text(app_seconds)),
+                ("Website foreground time", seconds_text(site_seconds)),
+            )
+        )
+        self.daily_usage_facts.show()
+        self.daily_usage_help.setText(
+            "App and website time may overlap. Usage is from this PC; gaps are unrecorded time."
+        )
+        self.daily_usage_help.show()
+
+    def clear_usage(self):
+        self.daily_usage_facts.clear()
+        self.daily_usage_facts.hide()
+        self.daily_usage_help.clear()
+        self.daily_usage_help.hide()
 
     def options(self):
         return LogFilter(start=self.day, end=self.day, timezone=self.timezone, limit=self.limit)
@@ -322,6 +362,7 @@ class DailyOverview(QWidget):
         if private:
             self.completed.clear()
             self.progress.clear()
+            self.clear_usage()
             self.caption.clear()
             self.facts.setPlainText("Logging is hidden for privacy.")
             with QSignalBlocker(self.chooser):

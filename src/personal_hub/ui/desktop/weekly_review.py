@@ -37,6 +37,8 @@ class WeeklyReviewPage(DailyOverview):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.daily_usage_facts.hide()
+        self.daily_usage_help.hide()
         self.day = week_bounds(self.day)[0]
         with QSignalBlocker(self.date):
             self.date.setDate(QDate(self.day))

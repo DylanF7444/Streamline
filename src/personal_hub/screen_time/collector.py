@@ -5,7 +5,7 @@ import ntpath
 import sys
 import time
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from personal_hub.screen_time.contracts import ScreenTimeSession, ScreenTimeSett
 class Observation:
     app: str | None
     idle_seconds: float = 0
+    executable_path: str | None = field(default=None, repr=False, compare=False)
 
 
 class WindowsObserver:
@@ -78,7 +79,10 @@ class WindowsObserver:
             size = wintypes.DWORD(len(buffer))
             if not self.kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
                 return Observation(None, idle)
-            return Observation(ntpath.basename(buffer.value).casefold()[:160], idle)
+            executable_path = buffer.value
+            return Observation(
+                ntpath.basename(executable_path).casefold()[:160], idle, executable_path
+            )
         finally:
             self.kernel.CloseHandle(handle)
 

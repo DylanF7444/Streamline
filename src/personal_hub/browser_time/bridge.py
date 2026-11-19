@@ -8,6 +8,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from personal_hub.browser_time.contracts import (
     BROWSER_EXECUTABLES,
@@ -60,6 +61,11 @@ def receive(root: Path, payload, *, now=None):
         },
     )
     response = {"recording": True}
+    usage = lease.get("usage")
+    if usage and sample.domain:
+        response["usage"] = {**usage, "current": None}
+        if (usage.get("current") or {}).get("domain") == sample.domain:
+            response["usage"]["current"] = usage["current"]
     if "state" in lease:
         confirmed = (
             sample.domain
@@ -92,6 +98,8 @@ class BrowserTimeRuntime:
     def __init__(self, data_dir, repository, settings):
         self.root = Path(data_dir) / "browser-time-live"
         self.settings = settings
+        self.timezone = "UTC"
+        self.private = False
         self.recorder = _BrowserRecorder(repository)
         self.seen = {}
         self.generation = uuid4().hex
@@ -117,6 +125,28 @@ class BrowserTimeRuntime:
         ):
             with suppress(OSError):
                 (self.root / name).unlink(missing_ok=True)
+
+    def set_private(self, private):
+        self.private = private
+        if private:
+            with suppress(OSError, ValueError):
+                lease = read_json(self.root / "lease.json")
+                lease.pop("usage", None)
+                write_json(self.root / "lease.json", lease)
+
+    def daily_usage(self, now, identity):
+        day = datetime.fromtimestamp(now, ZoneInfo(self.timezone)).date()
+        totals = self.recorder.repository.summary(day, day, self.timezone)
+        sites = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+        domain = identity.split("|", 1)[1] if identity else None
+        return {
+            "date": day.isoformat(),
+            "timezone": self.timezone,
+            "total_seconds": sum(totals.values()),
+            "sites": [{"domain": host, "seconds": seconds} for host, seconds in sites[:8]],
+            "other_seconds": sum(seconds for _, seconds in sites[8:]),
+            "current": {"domain": domain, "seconds": totals.get(domain, 0)},
+        }
 
     def tick(self, observation, *, locked=False, now=None, monotonic=None):
         if not self.running:
@@ -192,5 +222,10 @@ class BrowserTimeRuntime:
                 if identity and state == "recording"
                 else None,
                 "saved_at": saved.timestamp() if saved else 0,
+                **(
+                    {"usage": self.daily_usage(now, identity)}
+                    if not self.private and collect
+                    else {}
+                ),
             },
         )

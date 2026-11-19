@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,6 +28,7 @@ from personal_hub.screen_time.repository import bounds
 from personal_hub.ui.desktop.browser_time_panel import BrowserTimePanel
 from personal_hub.ui.desktop.controls import WheelSafeDateEdit, WheelSafeSpinBox
 from personal_hub.ui.desktop.recording_indicator import RecordingIndicator
+from personal_hub.ui.desktop.usage_icons import UsageIconCache
 
 
 def duration(seconds):
@@ -66,6 +67,7 @@ class ScreenTimePage(QScrollArea):
         self.layout_box = QVBoxLayout(content)
         self.private = False
         self.locked = False
+        self.icon_cache = UsageIconCache()
         self.controller = None
         self.window = parent
         self.status = QLabel("Paused · Record foreground app usage on this PC")
@@ -73,7 +75,7 @@ class ScreenTimePage(QScrollArea):
         self.status.setWordWrap(True)
         self.layout_box.addWidget(self.status)
         help_text = QLabel(
-            "Opt in to record app names and durations on this PC. Windows titles, text, "
+            "Record app names and durations on this PC. Windows titles, text, "
             "screenshots and website addresses are excluded from app recording. Collection continues "
             "in the tray while Hub runs. Idle or unavailable periods leave gaps."
         )
@@ -91,14 +93,20 @@ class ScreenTimePage(QScrollArea):
         self.settings_button.toggled.connect(settings_group.setVisible)
         form = QFormLayout(settings_group)
         self.startup = QCheckBox("Start recording when Hub opens")
-        self.card = QCheckBox("Show screen time in Daily overview")
+        self.layout_box.insertWidget(3, self.startup)
+        startup_help = QLabel(
+            "Startup choices save immediately and apply next time Hub opens. "
+            "Use Pause recording to stop this session."
+        )
+        startup_help.setWordWrap(True)
+        self.layout_box.insertWidget(4, startup_help)
+        self.card = QCheckBox("Show screen and website time in Daily overview")
         self.idle = WheelSafeSpinBox()
         self.idle.setRange(30, 1800)
         self.idle.setSuffix(" seconds")
         self.exclusions = QLineEdit()
         self.exclusions.setMaxLength(160 * 256)
         self.exclusions.setPlaceholderText("passwordmanager.exe, banking.exe")
-        form.addRow(self.startup)
         form.addRow(self.card)
         form.addRow("Pause after no input", self.idle)
         form.addRow("Exclude executable names", self.exclusions)
@@ -174,6 +182,7 @@ class ScreenTimePage(QScrollArea):
         self.layout_box.addWidget(QLabel(title))
         table = QTableWidget(0, len(headers))
         table.setAccessibleName(title)
+        table.setIconSize(QSize(24, 24))
         table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -188,7 +197,17 @@ class ScreenTimePage(QScrollArea):
                 controller.settings_repository.get("screen_time.settings", {})
             )
         except ValueError:
-            self.settings = ScreenTimeSettings()
+            self.settings = ScreenTimeSettings(start_on_open=False)
+        migration_key = "screen_time.daily_overview_cards_enabled"
+        if not controller.settings_repository.get(migration_key, False):
+            self.settings = self.settings.model_copy(update={"overview_card": True})
+            try:
+                controller.settings_repository.set(
+                    "screen_time.settings", self.settings.model_dump(mode="json")
+                )
+                controller.settings_repository.set(migration_key, True)
+            except SQLAlchemyError:
+                self.status.setText("Could not enable time cards in Daily overview settings.")
         self.startup.setChecked(self.settings.start_on_open)
         self.card.setChecked(self.settings.overview_card)
         self.idle.setValue(self.settings.idle_seconds)
@@ -206,15 +225,29 @@ class ScreenTimePage(QScrollArea):
         window.destination_changed.connect(
             lambda destination: self.refresh() if destination == "Screen time" else None
         )
-        self.daily_label = QLabel()
-        self.daily_label.setWordWrap(True)
-        self.daily_label.setTextFormat(Qt.TextFormat.PlainText)
-        window.logging_workspace.daily.layout().insertWidget(4, self.daily_label)
+        self.daily_label = window.logging_workspace.daily.daily_usage_help
         window.logging_workspace.daily.date.dateChanged.connect(self.refresh)
-        if self.settings.start_on_open and self.observer.supported:
+        self.startup.toggled.connect(self.save_startup_preference)
+        if self.settings.start_on_open and self.observer.supported and not window.locked:
             self.recorder.running = True
         self.timer.start()
         self.tick()
+
+    def save_startup_preference(self, enabled):
+        if self.private or not self.controller or self.locked:
+            return
+        try:
+            stored = ScreenTimeSettings.model_validate(
+                self.controller.settings_repository.get("screen_time.settings", {})
+            ).model_copy(update={"start_on_open": enabled})
+            self.controller.settings_repository.set(
+                "screen_time.settings", stored.model_dump(mode="json")
+            )
+            self.settings = self.recorder.settings = stored
+        except (ValueError, SQLAlchemyError):
+            with QSignalBlocker(self.startup):
+                self.startup.setChecked(self.settings.start_on_open)
+            self.status.setText("Could not save startup preference. Try again.")
 
     def toggle_recording(self):
         if not self.controller or self.controller.is_closed or self.window.locked:
@@ -239,6 +272,15 @@ class ScreenTimePage(QScrollArea):
             elif self.recorder.running or self.browser.runtime.running:
                 observation = self.observer.sample()
                 if self.recorder.running:
+                    if (
+                        observation.app
+                        and observation.executable_path
+                        and not self.private
+                        and not self.locked
+                    ):
+                        self.icon_cache.application_icon(
+                            observation.app, observation.executable_path
+                        )
                     self.recorder.observe(observation)
             self.browser.tick(observation)
             self.refresh()
@@ -311,11 +353,14 @@ class ScreenTimePage(QScrollArea):
         self.refresh()
 
     @staticmethod
-    def fill(table, rows):
+    def fill(table, rows, *, icons=None, icon_column=0):
         table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             for j, value in enumerate(row):
-                table.setItem(i, j, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                if icons is not None and j == icon_column and icons[i] is not None:
+                    item.setIcon(icons[i])
+                table.setItem(i, j, item)
 
     def refresh(self, *_):
         try:
@@ -351,7 +396,8 @@ class ScreenTimePage(QScrollArea):
         )
         if stored != self.settings:
             self.settings = self.recorder.settings = stored
-            self.startup.setChecked(stored.start_on_open)
+            with QSignalBlocker(self.startup):
+                self.startup.setChecked(stored.start_on_open)
             self.card.setChecked(stored.overview_card)
             self.idle.setValue(stored.idle_seconds)
             self.exclusions.setText(", ".join(stored.excluded_apps))
@@ -385,12 +431,14 @@ class ScreenTimePage(QScrollArea):
             if summary
             else "This PC · No recorded usage in the selected range."
         )
+        top_apps = sorted(summary.items(), key=lambda item: -item[1])
         self.fill(
             self.apps,
             [
                 (*label(app), duration(seconds))
-                for app, seconds in sorted(summary.items(), key=lambda item: -item[1])
+                for app, seconds in top_apps
             ],
+            icons=[self.icon_cache.application_icon(app) for app, _ in top_apps],
         )
         lower, upper = bounds(start, end, zone_name)
         records = repo.records(start, end, zone_name, limit=self.limit)
@@ -412,6 +460,7 @@ class ScreenTimePage(QScrollArea):
             if len(records) == self.limit
             else "All matching intervals shown. Gaps are unrecorded."
         )
+        matching_sessions = selected
         self.fill(
             self.sessions,
             [
@@ -421,8 +470,10 @@ class ScreenTimePage(QScrollArea):
                     label(r.app)[0],
                     duration(round((min(r.end, upper) - max(r.start, lower)).total_seconds())),
                 )
-                for r in selected
+                for r in matching_sessions
             ],
+            icons=[self.icon_cache.application_icon(record.app) for record in matching_sessions],
+            icon_column=2,
         )
         self.more.setVisible(len(records) == self.limit and self.limit < 10000)
         self.sessions.setAccessibleDescription(
@@ -458,23 +509,15 @@ class ScreenTimePage(QScrollArea):
             ],
         )
         daily = self.window.logging_workspace.daily
-        self.daily_label.setVisible(self.settings.overview_card)
-        if self.settings.overview_card:
-            daily_usage = repo.summary(daily.day, daily.day, zone_name)
-            total = sum(daily_usage.values())
-            self.daily_label.setText(
-                f"Screen time · This PC · {duration(total)} tracked foreground time"
-                if daily_usage
-                else "Screen time · This PC · No recorded usage"
-            )
-
-            site_usage = self.controller.browser_time_repository.summary(
-                daily.day, daily.day, zone_name
-            )
-            self.daily_label.setText(
-                self.daily_label.text()
-                + f"\nBrowser sites · {duration(sum(site_usage.values()))} (included in browser app time when app recording is enabled)"
-            )
+        daily_usage = repo.summary(daily.day, daily.day, zone_name)
+        site_usage = self.controller.browser_time_repository.summary(
+            daily.day, daily.day, zone_name
+        )
+        daily.set_usage(
+            sum(daily_usage.values()) if daily_usage else None,
+            sum(site_usage.values()) if site_usage else None,
+            visible=self.settings.overview_card,
+        )
 
     def set_state(self, *, private=False, locked=False):
         self.locked = locked
@@ -483,6 +526,8 @@ class ScreenTimePage(QScrollArea):
         self.private = private
         if changed and hasattr(self, "recorder"):
             self.recorder.reset()
+        if changed:
+            self.icon_cache.clear()
         for table in (self.apps, self.categories, self.sessions, self.week):
             table.setRowCount(0)
         self.total.clear()
@@ -514,8 +559,7 @@ class ScreenTimePage(QScrollArea):
             control.setEnabled(not private)
         self.toggle.setEnabled(not locked)
         if hasattr(self, "daily_label"):
-            self.daily_label.clear()
-            self.daily_label.setVisible(False)
+            self.window.logging_workspace.daily.clear_usage()
         self.refresh()
 
     def delete_history(self):

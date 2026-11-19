@@ -5,25 +5,44 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/personal_hub/browser_time/extension/background.js'), 'utf8');
 const event = () => ({handlers: [], addListener(f) {this.handlers.push(f);}});
+function element() {
+  return {children: [], style: {}, textContent: '', addEventListener() {},
+    replaceChildren() {this.children = [];}, append(child) {this.children.push(child);},
+    setAttribute(name, value) {this[name] = value;}};
+}
+function popupDocument(elements = {}) {
+  return {getElementById: id => elements[id] ||= element(), createElement: element};
+}
 async function harness(enabled = true, options = {}) {
   const messages = [], intervals = [], state = {enabled, browser: options.browser};
   let reads = 0;
   const native = {postMessage: m => messages.push(m), onMessage: event(), onDisconnect: event(), disconnect() {}};
   const badge = {};
+  const drawings = [];
+  class OffscreenCanvas {
+    constructor(width, height) {this.width = width; this.height = height;}
+    getContext() {
+      const canvas = this;
+      return new Proxy({
+        getImageData() {return {width: canvas.width, height: canvas.height};},
+      }, {get(target, key) {return target[key] || (() => {});},
+        set(target, key, value) {drawings.push({key, value}); target[key] = value; return true;}});
+    }
+  }
   const chrome = {
-    action: {setBadgeText: v => Object.assign(badge, v), setBadgeBackgroundColor: v => Object.assign(badge, v), setTitle: v => Object.assign(badge, v)},
+    action: {setIcon: v => Object.assign(badge, v), setBadgeText: v => Object.assign(badge, v), setBadgeBackgroundColor: v => Object.assign(badge, v), setTitle: v => Object.assign(badge, v)},
     storage: {local: {get: async () => state, set: async value => Object.assign(state, value)}, onChanged: event()},
     permissions: {contains: async () => true, onRemoved: event()},
-    runtime: {connectNative: () => native, onStartup: event(), onInstalled: event()},
+    runtime: {connectNative: () => native, onStartup: event(), onInstalled: event(), onMessage: event()},
     alarms: {create() {}, onAlarm: event()},
     windows: {getLastFocused: async () => ({id: 1, focused: true, incognito: false, type: 'normal'}), onFocusChanged: event()},
     tabs: {query: async () => {reads++; return [{url: 'https://example.com/private?q=secret'}];}, onActivated: event(), onUpdated: event(), onRemoved: event()},
   };
-  const context = vm.createContext({chrome, navigator: options.navigator || {userAgent: 'Chrome'}, URL, setInterval(f) {intervals.push(f); return 1;}, clearInterval() {}});
+  const context = vm.createContext({chrome, OffscreenCanvas, navigator: options.navigator || {userAgent: 'Chrome'}, URL, setInterval(f) {intervals.push(f); return 1;}, clearInterval() {}});
   vm.runInContext(source, context);
   const flush = () => new Promise(resolve => setImmediate(resolve));
   await flush();
-  return {chrome, native, context, messages, intervals, state, badge, reads: () => reads, flush};
+  return {chrome, native, context, messages, intervals, state, badge, drawings, reads: () => reads, flush};
 }
 test('no URL access until both extension and Hub opt in', async () => {
   const disabled = await harness(false);
@@ -70,7 +89,7 @@ test('popup requests permission directly from the click gesture', async () => {
     permissions: {request: () => {requested = true; return Promise.resolve(true);}},
   };
   const popup = fs.readFileSync(path.join(__dirname, '../src/personal_hub/browser_time/extension/popup.js'), 'utf8');
-  vm.runInNewContext(popup, {chrome, document: {getElementById: id => elements[id]}});
+  vm.runInNewContext(popup, {chrome, document: popupDocument(elements), setInterval() {}});
   await new Promise(resolve => setImmediate(resolve));
   const done = click();
   assert.equal(requested, true);
@@ -107,7 +126,7 @@ test('popup saves the explicit Brave choice when automatic detection is unavaila
   const elements = {browser: {value: '', addEventListener: (_name, f) => {change = f;}}, toggle: {addEventListener() {}}, status: {}};
   const chrome = {storage: {local: {get: async () => state, set: async value => Object.assign(state, value)}, onChanged: event()}, permissions: {request: async () => true}};
   const popup = fs.readFileSync(path.join(__dirname, '../src/personal_hub/browser_time/extension/popup.js'), 'utf8');
-  vm.runInNewContext(popup, {chrome, document: {getElementById: id => elements[id]}});
+  vm.runInNewContext(popup, {chrome, document: popupDocument(elements), setInterval() {}});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.browser.value, '');
   await change({target: {value: 'brave'}});
@@ -151,6 +170,9 @@ test('badge requires a saved interval acknowledgement and clears on tab change, 
   await h.intervals[0]();
   h.native.onMessage.handlers[0]({recording: true, state: 'recording'});
   assert.equal(h.badge.text, 'REC');
+  assert.equal(h.badge.imageData[16].width, 16);
+  assert.equal(h.badge.imageData[32].width, 32);
+  assert.ok(h.drawings.some(d => d.key === 'fillStyle' && d.value === '#53bda4'));
   assert.equal(h.badge.title.includes('example.com'), false);
   h.chrome.tabs.query = async () => [{url: 'https://other.org'}];
   await h.intervals[0]();
@@ -178,4 +200,130 @@ test('a silent helper clears recording within the response deadline', async () =
   await h.intervals[0]();
   assert.equal(h.badge.text, '!');
   assert.equal(h.badge.title.includes('stopped responding'), true);
+});
+
+
+test('newly granted native permission refreshes the worker once without losing consent', async () => {
+  const h = await harness();
+  vm.runInContext('stop()', h.context);
+  let reloads = 0;
+  h.chrome.runtime.connectNative = undefined;
+  h.chrome.runtime.reload = () => {reloads++;};
+  await vm.runInContext('connect()', h.context);
+  assert.equal(reloads, 1);
+  assert.equal(h.state.enabled, true);
+  assert.equal(h.state.nativeApiReloadPending, true);
+  assert.match(h.state.status, /Refreshing extension/);
+  await vm.runInContext('connect()', h.context);
+  assert.equal(reloads, 1);
+  assert.match(h.state.status, /Browser connection API unavailable/);
+  h.chrome.runtime.connectNative = () => h.native;
+  await vm.runInContext('connect()', h.context);
+  assert.equal(h.state.nativeApiReloadPending, false);
+  assert.equal(h.messages.at(-1).domain, null);
+});
+test('missing permission does not trigger a worker reload', async () => {
+  const h = await harness();
+  vm.runInContext('stop()', h.context);
+  let reloads = 0;
+  h.chrome.runtime.connectNative = undefined;
+  h.chrome.runtime.reload = () => {reloads++;};
+  h.chrome.permissions.contains = async () => false;
+  await vm.runInContext('connect()', h.context);
+  assert.equal(reloads, 0);
+  assert.equal(h.state.enabled, false);
+  assert.equal(h.reads(), 0);
+});
+
+const dailyUsage = () => ({date: '2026-11-15', timezone: 'America/Chicago',
+  total_seconds: 600, sites: [{domain: 'example.com', seconds: 390}, {domain: 'other.org', seconds: 150}],
+  other_seconds: 60, current: {domain: 'example.com', seconds: 390}});
+function getUsage(h) {
+  let response;
+  h.chrome.runtime.onMessage.handlers[0]({type: 'getUsage'}, {}, value => {response = value;});
+  return response.usage;
+}
+test('toolbar shows saved focused-site time without persisting usage and clears on stale response', async () => {
+  const h = await harness();
+  h.native.onMessage.handlers[0]({recording: true, state: 'waiting'});
+  await h.intervals[0]();
+  h.native.onMessage.handlers[0]({recording: true, state: 'recording', usage: dailyUsage()});
+  assert.equal(h.badge.text, '6m');
+  assert.equal(getUsage(h).total_seconds, 600);
+  assert.equal(JSON.stringify(h.state).includes('example.com'), false);
+  assert.equal(h.badge.title.includes('example.com'), false);
+  // Only display saved totals: repeated popup reads do not extrapolate time.
+  assert.equal(getUsage(h).current.seconds, 390);
+  vm.runInContext('lastResponse = Date.now() - 13000', h.context);
+  assert.equal(getUsage(h), null);
+  await h.intervals[0]();
+  assert.equal(h.badge.text, '!');
+});
+
+test('tab changes and masking discard usage; delayed acknowledgements cannot restore the old site', async () => {
+  const h = await harness();
+  h.native.onMessage.handlers[0]({recording: true, state: 'waiting'});
+  await h.intervals[0]();
+  h.native.onMessage.handlers[0]({recording: true, state: 'recording', usage: dailyUsage()});
+  await h.intervals[0](); // A pending old-site response.
+  h.chrome.tabs.query = async () => [{url: 'https://other.org'}];
+  await h.chrome.tabs.onActivated.handlers[0]();
+  assert.equal(getUsage(h), null);
+  assert.equal(h.badge.text, 'WAIT');
+  h.native.onMessage.handlers[0]({recording: true, state: 'recording', usage: dailyUsage()});
+  assert.equal(getUsage(h), null);
+  h.native.onMessage.handlers[0]({recording: true, state: 'recording', usage: dailyUsage()});
+  assert.equal(getUsage(h).current, null);
+  assert.equal(h.badge.text, 'REC');
+  await h.intervals[0]();
+  h.native.onMessage.handlers[0]({recording: true, state: 'recording'}); // Masked/older helper.
+  assert.equal(getUsage(h), null);
+  h.native.onDisconnect.handlers[0]();
+  assert.equal(getUsage(h), null);
+});
+
+test('malformed, unbounded and inconsistent native summaries are rejected', async () => {
+  const h = await harness();
+  for (const change of [
+    {total_seconds: -1}, {other_seconds: Infinity}, {sites: Array(9).fill(dailyUsage().sites[0])},
+    {sites: [{domain: '<script>evil</script>', seconds: 540}]},
+    {current: {domain: 'example.com', seconds: 601}}, {total_seconds: 601},
+    {sites: [{domain: 'example.com', seconds: 390}, {domain: 'example.com', seconds: 150}]},
+  ]) {
+    const value = {...dailyUsage(), ...change};
+    h.context.testUsage = value;
+    assert.equal(vm.runInContext('validUsage(testUsage)', h.context), null);
+  }
+  for (const [seconds, expected] of [[0, '0s'], [59, '59s'], [60, '1m'], [3599, '59m'], [3600, '1.0h'], [35999, '9.9h'], [36000, '10h']]) {
+    assert.equal(vm.runInContext(`timeBadge(${seconds})`, h.context), expected);
+  }
+});
+
+test('popup renders proportional bar, accessible legend, focused time and empty/paused states', async () => {
+  const elements = {}, intervals = [], state = {enabled: true};
+  let usage = dailyUsage();
+  const chrome = {
+    storage: {local: {get: async () => state}, onChanged: event()},
+    runtime: {sendMessage: async () => ({usage})},
+  };
+  const popup = fs.readFileSync(path.join(__dirname, '../src/personal_hub/browser_time/extension/popup.js'), 'utf8');
+  vm.runInNewContext(popup, {chrome, document: popupDocument(elements), setInterval(f) {intervals.push(f);}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements['current-site'].textContent, 'example.com');
+  assert.equal(elements['current-time'].textContent, '6m 30s');
+  assert.equal(elements.total.textContent, '10m 0s');
+  assert.deepEqual(elements.distribution.children.map(s => s.style.width), ['65%', '25%', '10%']);
+  assert.equal(elements.sites.children[2].children[1].textContent, 'Other');
+  assert.match(elements.distribution['aria-label'], /example.com: 65.0%/);
+  assert.equal(elements.empty.hidden, true);
+  usage = {...dailyUsage(), sites: [], total_seconds: 0, other_seconds: 0, current: {domain: 'example.com', seconds: 0}};
+  await intervals[0]();
+  assert.equal(elements['current-time'].textContent, '0s');
+  assert.equal(elements.distribution.children.length, 0);
+  assert.equal(elements.empty.hidden, false);
+  state.enabled = false;
+  await intervals[0]();
+  assert.equal(elements['current-time'].textContent, '—');
+  assert.equal(elements.sites.children.length, 0);
+  assert.equal(elements.total.textContent, '—');
 });

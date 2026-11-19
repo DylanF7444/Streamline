@@ -1,11 +1,26 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Personal Hub Browser Time</title>
-<style>body{font:14px system-ui;width:310px;padding:16px;color:#eee;background:#22282d}button{padding:8px;margin:4px 0}p{line-height:1.45}</style></head>
-<body><h1 style="font-size:18px">Browser screen time</h1>
-<p>With your permission, this extension reads the focused tab's address to send only its hostname to Personal Hub on this PC. Browser permission also allows access to tab titles; this extension does not read them.</p>
-<p>Requires Hub's recording opt-in. Private tabs are excluded. No browsing history, page content or full addresses are saved. Hub controls idle detection, exclusions, history and deletion.</p>
-<p>Pin this extension to the browser toolbar to see its badge: REC means Hub confirmed saved time; WAIT means waiting or an ineligible page; OFF means paused; ! means a connection problem. Hover for details.</p>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font:13px system-ui;width:366px;max-width:100%;margin:0;padding:20px;color:#edf1f0;background:#1e2429}h1{font-size:18px;margin:0 0 18px;font-weight:650}h2{font-size:13px;margin:0;font-weight:600}p{line-height:1.5}.muted{color:#b3bfbd}.eyebrow{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#b3bfbd}.current{border:1px solid #405c55;background:#263731;border-radius:12px;padding:15px;margin-bottom:20px}#current-site{display:block;font-size:14px;margin-top:8px;overflow-wrap:anywhere}#current-time{font-size:30px;font-weight:650;letter-spacing:-.04em;display:block;margin-top:3px;color:#8be0c6}.section-heading{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}#total{font-variant-numeric:tabular-nums}.distribution{height:16px;display:flex;overflow:hidden;border-radius:5px;background:#354047;margin:10px 0 14px}.segment{height:100%;flex-shrink:0;border-right:1px solid #1e2429}.legend{list-style:none;margin:0;padding:0}.legend li{display:grid;grid-template-columns:9px minmax(0,1fr) 46px 78px;gap:8px;align-items:center;padding:7px 0;font-size:12px}.dot{width:8px;height:8px;border-radius:50%}.site{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.number{text-align:right;font-variant-numeric:tabular-nums;color:#c9d4d1}#empty{padding:12px 0;color:#b3bfbd}#status{font-size:12px;margin:16px 0 10px}button,select{font:inherit;border:1px solid #53615f;border-radius:6px;background:#303c3f;color:#edf1f0;padding:8px}button{width:100%;cursor:pointer}button:hover{background:#3b4d4c}button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #8be0c6;outline-offset:3px}.settings{margin-top:18px;padding-top:14px;border-top:1px solid #3a444a}select{margin-left:10px}details{margin-top:16px;color:#b3bfbd;font-size:12px}summary{cursor:pointer}details p{margin-bottom:0}
+</style></head>
+<body><h1>Browser screen time</h1>
+<div class="current"><span class="eyebrow">Focused website · today</span>
+<strong id="current-site">Waiting for a focused website</strong><span id="current-time">—</span>
+<span class="muted">Saved foreground time</span></div>
+<section aria-labelledby="distribution-heading">
+<div class="section-heading"><h2 id="distribution-heading">Today's distribution</h2><strong id="total">—</strong></div>
+<div id="day" class="muted"></div>
+<div id="distribution" class="distribution" role="img" aria-label="No saved website time available"></div>
+<ul id="sites" class="legend" aria-label="Website time and share"></ul>
+<p id="empty">Focus a website with Hub recording enabled to see today's saved time.</p>
+</section>
+<p id="status" role="status">Loading…</p><button id="toggle">Enable browser tracking</button>
+<div class="settings">
 <label for="browser">Browser</label>
 <select id="browser"><option value="">Automatic</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="brave">Brave</option></select>
-<p id="status" role="status">Loading…</p><button id="toggle">Enable browser tracking</button>
+</div>
+<details><summary>Tracking and toolbar details</summary>
+<p>Pin this extension to see time saved today on the focused website. The green dot confirms a recent Hub save. WAIT means waiting, idle or an ineligible page; OFF means paused; ! means a connection problem. Older helpers show REC until updated.</p>
+<p>Today's totals combine sites across Chrome, Edge and Brave in Hub's timezone. The bar shows the top eight sites and groups the rest as Other. Totals update after Hub saves, approximately every five seconds.</p>
+<p>With your permission, only the focused tab's hostname is sent to Personal Hub on this PC. The browser permission also allows tab titles; this extension does not read them. Private tabs are excluded. No page content or full addresses are saved. Hub controls idle detection, exclusions, history and deletion. Privacy masking hides time details.</p></details>
 <script src="popup.js"></script></body></html>

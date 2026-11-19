@@ -20,9 +20,12 @@ cloud service, AI, page scripts, browser-history access or network listener.
    Automatic browser detection supports Brave's worker API. If it is unavailable or disabled,
    select **Brave** in the extension popup's Browser menu. The choice stays on this device;
    changing it reconnects the helper without granting new permissions.
-5. Choose **Start browser recording** in Hub. Both consent controls are required. Browser
-   consent persists; Hub recording requires a fresh Start after launch, Hub session lock or restore.
-   App recording is independent. Either recorder can operate without the other.
+5. Browser recording starts automatically with Hub on Windows unless disabled using
+   **Start browser recording when Hub opens** in Browser sites. The preference saves
+   immediately. The extension must still be enabled and have its browser permissions.
+   If paused, choose **Start browser recording** in Hub. Hub session lock and database
+   restore pause browser recording until a fresh Start or a later launch with startup
+   enabled. App recording is independent. Either recorder can operate without the other.
 
 The helper is built in the normal release script. For a development checkout:
 
@@ -75,7 +78,8 @@ Site totals overlap browser app time and must not be added to it. The UI labels 
 Site review shares the main From/Through dates and timezone. It offers complete site/category
 totals, aliases, literal filtering, seven-day trend, exact browser/hostname intervals and
 Load more (200 initially, 10,000 maximum). Intervals are clipped for display at local dates,
-including DST. The optional Daily overview screen-time card includes a separate site subtotal.
+including DST. Daily overview shows separate app and website foreground-time cards for its
+selected date, with website time kept separate from browser app time.
 
 ## Data and security boundary
 
@@ -173,3 +177,55 @@ Update/rebuild Hub and PersonalHubBrowserHost.exe together, export the updated e
 files to the existing extension folder, then reload it on the browser extensions page.
 Extension version 0.1.3 includes these indicators. Repeat setup if the extension ID or
 helper location changes. No new permission or collection opt-in is required.
+
+
+Extension 0.1.4 also changes the toolbar icon itself: a browser-window outline contains
+a green recording dot, amber waiting clock, gray pause bars or red error mark. The text
+badge and hover explanation remain visible. Export the extension again and reload it in
+the browser extensions page to replace a previously loaded generic icon; pin it beside
+the address bar. This icon update needs no helper protocol or permission change.
+
+
+Extension 0.1.5 handles Chromium/Brave workers that report the optional nativeMessaging
+permission granted while `runtime.connectNative` is still unavailable. It reloads the
+extension once, retaining the user's enable choice and browser selection. A local pending
+flag prevents a reload loop; persistent API unavailability shows a fixed reload/restart
+instruction. Permission denial never triggers a reload or accesses a tab URL. This is
+distinct from missing helper registration and does not require repeating setup.
+
+## Daily distribution and focused-site time — extension 0.1.6
+
+The popup shows today's saved foreground time, a proportional distribution bar and a
+matching legend with hostname, percentage and duration. The top eight sites appear
+individually; **Other** accounts for every remaining site, so the bar covers the complete
+daily total. Totals combine Chrome, Edge and Brave and use Hub's configured timezone,
+including midnight and DST boundaries. The focused-site card shows that hostname's saved
+time today, including earlier visits. There are no estimated or extension-local timers.
+
+After a recent matching Hub checkpoint, the toolbar badge shows compact daily time for
+the focused site (for example **35s**, **6m**, **1.2h**) beside the green recording icon.
+WAIT, OFF and ! retain their existing meanings. The hover text remains hostname-free.
+Helpers predating this summary show REC when they can confirm recording, or WAIT when
+they cannot. Saved totals update with Hub's roughly five-second checkpoints and the
+extension's two-second heartbeat.
+
+Hub publishes at most eight site totals, the remainder subtotal and the current site in
+its expiring local lease. The helper returns usage only for eligible samples under a live
+collection lease. Usage is held in extension worker memory and read by the open popup;
+it is never put in extension storage, logs, sync or diagnostics. Switching sites clears
+the previous display until a matching response arrives. Idle, focus loss to another
+application, private/excluded pages, pause, disconnect and stale responses clear usage.
+Hub privacy masking removes usage from the lease immediately and hides browser details on
+the next heartbeat; collection continues. Lock still revokes browser recording entirely.
+
+Extension 0.1.8 keeps the selected tab as the sample target while its toolbar popup is
+open. A short-lived port from the popup tells the worker to sample the active tab in the
+normal browser window even when the browser reports that window as unfocused. Closing
+the popup or switching focus to another application returns to normal focus checks.
+
+For the 0.1.6 distribution feature, update/rebuild Hub and the helper, re-export the four
+extension files into the existing extension folder, reload the extension on the browser's
+extensions page, and restart Hub to load the updated runtime. No new permissions, database
+migration or setup registration are required unless the helper location or extension ID
+changes. For the 0.1.8 popup focus fix, re-export the extension files and reload the
+extension; no helper rebuild or Hub restart is needed.

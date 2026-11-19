@@ -15,8 +15,8 @@ class AppRule(BaseModel):
 
 class ScreenTimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    start_on_open: bool = False
-    overview_card: bool = False
+    start_on_open: bool = True
+    overview_card: bool = True
     idle_seconds: int = Field(default=180, ge=30, le=1800)
     excluded_apps: tuple[str, ...] = Field(default=(), max_length=256)
     rules: dict[str, AppRule] = Field(default_factory=dict, max_length=512)

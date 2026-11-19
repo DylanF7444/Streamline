@@ -33,6 +33,7 @@ def hostname(value: str) -> str:
 
 class BrowserTimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    start_on_open: bool = True
     idle_seconds: int = Field(default=180, ge=30, le=1800)
     excluded_domains: tuple[str, ...] = Field(default=(), max_length=256)
     rules: dict[str, AppRule] = Field(default_factory=dict, max_length=512)

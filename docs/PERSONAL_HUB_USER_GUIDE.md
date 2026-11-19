@@ -41,17 +41,20 @@ source metadata. Privacy masking hides timer content immediately; lock also paus
 ## Screen time
 
 For website breakdowns in Chrome, Edge or Brave, use **Browser sites > Set up browser extension**,
-enable tracking in the extension popup, then choose **Start browser recording** in Hub.
+enable tracking in the extension popup. Hub starts browser recording on launch unless
+**Start browser recording when Hub opens** is disabled. Use **Start browser recording**
+to resume a paused session.
 The site section shares the date range and offers exclusions, categories, review and separate
 history deletion. Site time overlaps browser app time. See `PERSONAL_HUB_BROWSER_TIME.md`
 for setup and the native helper development build command.
 
 
-Open **Logging > Screen time**, then **Start recording screen time** to opt in on this PC.
-Use the page or tray menu to pause. Recording continues in the tray while Hub runs.
-**Start recording when Hub opens** is a separate choice, off by default. Save recording
-settings to change the idle threshold, exclude executable names, or show a Daily overview
-card. App display/category rules apply to historical review. Choose dates and an optional
+App recording starts automatically with Hub on Windows unless previously disabled.
+Open **Logging > Screen time** and uncheck **Start recording when Hub opens** to disable
+future automatic starts. App and browser startup controls save immediately and independently.
+Use the page or tray menu to pause the current session or resume it; pausing keeps the next
+launch preference. Recording continues in the tray while Hub runs. Save recording settings
+to change the idle threshold, exclude executable names, or hide the Daily overview time cards. App display/category rules apply to historical review. Choose dates and an optional
 app/category filter to review full totals and seven-day values; Load more expands interval
 details. Gaps are unrecorded and short app visits can be missed. Windows titles, typed text,
 screenshots and website addresses are excluded from app recording. Use **Preview deletion for selected
@@ -597,3 +600,12 @@ Update/rebuild Hub and PersonalHubBrowserHost.exe together, export the updated e
 files to the existing extension folder, then reload it on the browser extensions page.
 Extension version 0.1.3 includes these indicators. Repeat setup if the extension ID or
 helper location changes. No new permission or collection opt-in is required.
+
+Extension 0.1.6 replaces REC with compact time saved today on the focused site when the
+updated Hub/helper supplies totals. Click the toolbar icon for the focused-site duration,
+today's colored distribution bar, and site percentages and times. The eight largest sites
+are shown individually; Other contains the rest. Totals combine supported browsers using
+Hub's timezone and update after saves, approximately every five seconds. Pin the extension
+to keep its badge visible. Update Hub and its helper, export the extension again, reload it
+and restart Hub to enable the new display. Privacy masking hides these details on the next
+heartbeat while recording continues; WAIT, OFF and ! still explain recording interruptions.

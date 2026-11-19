@@ -1,5 +1,84 @@
 # Personal Hub implementation status
 
+## Browser daily distribution and focused-site time — November 15, 2026
+
+Extension 0.1.6 adds a daily proportional bar with hostname/share/duration legend,
+top-eight sites plus a complete Other subtotal, total saved time and a focused-site
+daily-duration card. The toolbar replaces REC with compact saved daily time when a
+recent matching checkpoint and current-site total are available; existing WAIT/OFF/!
+states and older-helper fallback remain. Hub supplies saved totals in its configured
+timezone, including DST and midnight clipping, through the existing local lease/helper.
+No new permissions, network calls or database migration are introduced.
+
+Usage responses are bounded and validated, live only in extension memory, and clear
+on site changes, ineligible samples, idle, focus loss, disconnect and stale responses.
+Privacy masking scrubs the lease immediately, hides browser usage on the next heartbeat
+and continues collection. Session lock still revokes recording. Existing unrelated
+startup/indicator work in this checkout was preserved.
+
+Validation: `node --test tests/browser_time_extension.test.cjs` passed **18 tests**;
+`python -m pytest tests/test_browser_time.py tests/ui/test_browser_time_ui.py -q`
+passed **22 tests**. Ruff lint/format, documentation consistency and whitespace checks
+passed. Populated and empty popup layouts were rendered in Qt WebEngine with synthetic
+data and visually inspected; populated rendering and an eight-site, long-hostname layout
+at 600 pixels tall reported no horizontal overflow. An additional full `-Lane all` run
+showed no failures before it was stopped during the much slower unrelated desktop cases;
+no full-suite pass is claimed for this change.
+Actual Chrome/Edge/Brave toolbar, Narrator and updated packaged-runtime acceptance remain
+manual checks in the release runbook. Rebuild/update Hub and the helper, re-export/reload
+the extension and restart Hub to activate this feature in an existing installation.
+
+## Automatic recording at launch — November 15, 2026
+
+App and browser recording now start with Hub on Windows by default. Separate visible
+**Start recording when Hub opens** and **Start browser recording when Hub opens** controls
+save immediately and independently. Explicit saved false values remain false; invalid
+settings do not start collection. Startup controls affect future launches, while Pause
+controls the current session. Browser extension enablement/permissions are still required;
+lock and restore do not restart browser collection. Settings remain local and outside sync.
+
+Enabled and saved the app startup choice in the running Hub through its UI. A read-only
+check confirmed app startup is true and browser startup has no explicit opt-out, so the
+updated app will start both next launch. The running process still has its older UI;
+restart loads the new browser startup control and the immediate-save app control.
+
+Validation: **25 core browser/screen-time cases passed**, **4 new UI startup/save-error
+cases passed**, and **3 existing UI consent, masking, restore and browser cases passed**.
+UI tests now substitute a fake foreground observer before startup, including the general
+UI fixtures, to keep automatic collection offline and deterministic. This is not a full
+UI or installer acceptance run.
+
+## Native API permission refresh — November 15, 2026
+
+Diagnosed Brave's live worker reporting `typeof chrome.runtime.connectNative` as undefined
+while its nativeMessaging permission was granted. Per-user registration and direct framed
+helper startup were valid. Extension 0.1.5 detects this state and reloads its worker once;
+a persistent pending flag prevents loops and permits fixed recovery guidance if the API
+remains missing. Permission and both collection consent gates are preserved.
+
+All **14 offline JavaScript tests passed**, including first-grant context refresh, reload
+loop prevention, recovery with the API available, and no reload/access on denied permission.
+Updated the user's existing exported extension in place and reloaded it in Brave; Enable
+connected successfully. An older helper was separately identified by its legacy response.
+Rebuilt the helper with `python -m PyInstaller --clean --noconfirm --distpath
+.benchmark-data/browser-native-repair/dist --workpath .benchmark-data/browser-native-repair/build
+packaging/personal-hub-browser-host.spec`, retained the old binary in the ignored repair
+folder, and replaced the registered dist helper while the extension was paused. Build
+analysis contains zero Assistant and PySide6 module entries. Re-enabled in Brave and
+observed the green REC toolbar badge and “Recording — Hub confirmed saved site time”
+on the Chrome Developers native-messaging documentation page. This verifies a real Brave
+connection and checkpoint acknowledgement; Chrome/Edge acceptance remains separate.
+
+## Browser toolbar icon — November 15, 2026
+
+Extension 0.1.4 adds a native toolbar icon drawn at 16 and 32 pixels. Its browser-window
+outline contains a green recording dot, amber waiting clock, gray pause bars or red
+error mark, alongside the existing REC/WAIT/OFF/! badge and hover status. It uses the
+same confirmed-save state and no additional permissions, files or helper protocol.
+All 12 offline extension tests pass, including icon rendering dispatch at both sizes
+and the green confirmation state. Installed-browser rendering remains a manual check.
+Re-export and reload the extension to replace the generic icon.
+
 ## Background recording indicators — November 15, 2026
 
 Added independent app/site tray marks, readable status and last-save times, browser

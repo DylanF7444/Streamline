@@ -55,3 +55,11 @@ def isolated_hub_instance_lock(monkeypatch: pytest.MonkeyPatch, request: pytest.
         )
 
     monkeypatch.setattr(lifecycle_module, "acquire_single_instance", acquire_isolated)
+
+
+@pytest.fixture(autouse=True)
+def fake_foreground_usage(monkeypatch):
+    """Startup collection in UI tests must never observe the developer's desktop."""
+    from personal_hub.screen_time.collector import Observation, WindowsObserver
+
+    monkeypatch.setattr(WindowsObserver, "sample", lambda self: Observation(None))

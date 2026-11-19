@@ -48,11 +48,13 @@ def test_browser_consent_review_mask_lock_and_delete(screen_ui, monkeypatch, qtb
     panel.rule_save.click()
     assert panel.sites.item(0, 0).text() == "My site"
     window.set_privacy_masked(True)
+    assert panel.runtime.private
     assert panel.sites.rowCount() == 0
     assert not panel.total.text()
     assert not panel.exclusions.text()
     assert not panel.toggle.isEnabled()
     window.set_privacy_masked(False)
+    assert not panel.runtime.private
     assert panel.exclusions.text() == "private.example.com"
     assert panel.sites.rowCount() == 1
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)

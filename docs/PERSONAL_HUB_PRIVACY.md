@@ -6,7 +6,9 @@ untrusted. Personal Hub 1.0 has no AI model integration.
 
 ## Data categories
 
-Browser site time is separately opt-in in Hub and its Chrome/Edge/Brave extension. It reads the
+Browser site recording starts with Hub by default on Windows, with a separate visible
+startup opt-out. Its Chrome/Edge/Brave extension still requires explicit enablement and
+browser permissions. It reads the
 active tab address transiently and sends only its hostname through a local native-messaging
 helper. No full URL, title, page content or history is retained. Hostnames and intervals are
 private local data included in backup/export and excluded from sync/relay/Metrics/logs.
@@ -22,8 +24,10 @@ Activity retention, deletion, backup/export and explicitly enabled shared-folder
 settings follow task sync, but do not cause a receiving device to start timing. Timers do not
 inspect apps, keystrokes, or whether the user is working. See `PERSONAL_HUB_TASK_TIMERS.md`.
 
-Screen time is off by default and requires Start recording or the explicit start-on-open
-preference. Windows collection reads foreground executable basenames and input idle time
+Screen time starts with Hub by default on Windows. A visible **Start recording when Hub
+opens** preference saves a startup opt-out immediately; an existing saved false preference
+is preserved. Pause controls stop the current session without changing startup choices.
+Windows collection reads foreground executable basenames and input idle time
 every five seconds. It never reads window titles, typed text, screenshots or browser URLs.
 Idle/lock/unavailable samples and interrupted sampling leave gaps. Records and local app
 rules/exclusions stay in Hub's database, retained until explicit deletion, included in backup,
@@ -330,3 +334,12 @@ so a helper response can confirm a matching checkpoint without returning that id
 This lease is removed on pause/lock/exit and stays outside exports, sync and diagnostics.
 Extension status storage contains fixed descriptions, a state and a response timestamp;
 no hostname is stored there. Masking continues collection; lock revokes browser recording.
+
+Extension 0.1.6 adds bounded daily hostname totals and focused-site time to the expiring
+local lease and native response for display. The toolbar shows duration with no hostname;
+the popup displays the top eight hostnames, their time/share, an Other subtotal and the
+focused hostname's daily time. These details stay in worker memory, never extension
+storage. Privacy masking removes the usage payload from the lease immediately; the next
+heartbeat clears it from the browser. Idle, focus loss, ineligible pages, pause,
+disconnect and expiry also clear the display. No new collection scope or network request
+is introduced; the lease remains outside backups/exports, sync and diagnostics.

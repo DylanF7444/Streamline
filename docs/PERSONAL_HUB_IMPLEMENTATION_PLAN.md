@@ -147,6 +147,11 @@ new cloud service.
 
 ## Information Architecture
 
+November 15, 2026: browser extension 0.1.6 adds a daily site distribution bar and
+focused-site saved time in its popup, with compact daily time in the toolbar badge.
+It uses bounded Hub-owned daily totals and the configured timezone; privacy masking
+hides usage details while collection continues. See `PERSONAL_HUB_BROWSER_TIME.md`.
+
 November 15, 2026: Screen time exposes independent app/site recording indicators in the
 system tray and confirmed-save recording badges in browser extension 0.1.3. Generic state,
 last-save feedback, privacy behavior and update instructions are documented in
@@ -168,8 +173,8 @@ consent, exclusions, privacy, local-only storage and setup are specified in
 `PERSONAL_HUB_BROWSER_TIME.md`. Firefox/mobile collection remains deferred.
 
 
-November 9, 2026 extension: **Screen time** in Logging provides explicit opt-in Windows
-foreground-app collection, local interval history, date review, categories and an optional
+November 9, 2026 extension: **Screen time** in Logging provides Windows
+foreground-app collection (automatic startup with separate app/site opt-outs as of November 15), local interval history, date review, categories and an optional
 Daily overview card. Schema 18 adds screen-time history independently from task Activity.
 This supersedes the screen-time deferral in the October Logging extension. Collection
 stores executable basenames and UTC intervals only, with idle/lock/gap handling. Screen-time

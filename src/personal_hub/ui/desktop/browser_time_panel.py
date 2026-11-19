@@ -6,8 +6,9 @@ from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, QSize, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -65,6 +66,11 @@ class BrowserTimePanel(QGroupBox):
         self.toggle = QPushButton("Start browser recording")
         self.toggle.clicked.connect(self.toggle_recording)
         self.box.addWidget(self.toggle)
+        self.startup = QCheckBox("Start browser recording when Hub opens")
+        self.startup.setToolTip(
+            "Saves immediately for the next launch. The browser extension must also be enabled."
+        )
+        self.box.addWidget(self.startup)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.idle = WheelSafeSpinBox()
@@ -118,6 +124,7 @@ class BrowserTimePanel(QGroupBox):
     def table(self, title, headers):
         table = QTableWidget(0, len(headers))
         table.setAccessibleName(title)
+        table.setIconSize(QSize(24, 24))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -132,7 +139,15 @@ class BrowserTimePanel(QGroupBox):
         self.runtime = BrowserTimeRuntime(
             controller.settings.data_dir, controller.browser_time_repository, self.settings
         )
+        self.runtime.set_private(self.private or self.locked)
         controller.browser_time_runtime = self.runtime
+        self.startup.toggled.connect(self.save_startup_preference)
+        if (
+            self.settings.start_on_open
+            and self.page.observer.supported
+            and not self.page.window.locked
+        ):
+            self.runtime.start()
 
     def load_settings(self):
         try:
@@ -140,9 +155,27 @@ class BrowserTimePanel(QGroupBox):
                 self.controller.settings_repository.get("browser_time.settings", {})
             )
         except ValueError:
-            self.settings = BrowserTimeSettings()
+            self.settings = BrowserTimeSettings(start_on_open=False)
+        with QSignalBlocker(self.startup):
+            self.startup.setChecked(self.settings.start_on_open)
         self.idle.setValue(self.settings.idle_seconds)
         self.exclusions.setText(", ".join(self.settings.excluded_domains))
+
+    def save_startup_preference(self, enabled):
+        if self.private or self.locked:
+            return
+        try:
+            stored = BrowserTimeSettings.model_validate(
+                self.controller.settings_repository.get("browser_time.settings", {})
+            ).model_copy(update={"start_on_open": enabled})
+            self.controller.settings_repository.set(
+                "browser_time.settings", stored.model_dump(mode="json")
+            )
+            self.settings = self.runtime.settings = stored
+        except (ValueError, SQLAlchemyError):
+            with QSignalBlocker(self.startup):
+                self.startup.setChecked(self.settings.start_on_open)
+            self.status.setText("Could not save browser startup preference. Try again.")
 
     def toggle_recording(self):
         if self.private or self.locked:
@@ -156,6 +189,7 @@ class BrowserTimePanel(QGroupBox):
             self.page.indicator.update()
 
     def tick(self, observation):
+        self.runtime.timezone = self.controller.settings.default_timezone
         self.runtime.tick(observation, locked=self.locked)
         self.refresh()
 
@@ -164,6 +198,7 @@ class BrowserTimePanel(QGroupBox):
             return
         try:
             settings = BrowserTimeSettings(
+                start_on_open=self.startup.isChecked(),
                 idle_seconds=self.idle.value(),
                 rules=self.settings.rules,
                 excluded_domains=tuple(
@@ -253,9 +288,11 @@ class BrowserTimePanel(QGroupBox):
             self.total.setText(
                 f"Sites · {duration(sum(summary.values()))} · included in browser app time"
             )
+            top_sites = sorted(summary.items(), key=lambda item: -item[1])
             self.fill(
                 self.sites,
-                [(*label(d), duration(v)) for d, v in sorted(summary.items(), key=lambda p: -p[1])],
+                [(*label(domain), duration(seconds)) for domain, seconds in top_sites],
+                icons=[self.page.icon_cache.website_icon(domain) for domain, _ in top_sites],
             )
             totals = {}
             for d, v in summary.items():
@@ -264,6 +301,7 @@ class BrowserTimePanel(QGroupBox):
             self.fill(self.categories, [(c, duration(v)) for c, v in sorted(totals.items())])
             lower, upper = bounds(start, end, zone_name)
             records = repo.records(start, end, zone_name, limit=self.limit)
+            matching_records = [record for record in records if matches(record.domain)]
             self.fill(
                 self.sessions,
                 [
@@ -273,9 +311,13 @@ class BrowserTimePanel(QGroupBox):
                         r.browser,
                         r.domain,
                     )
-                    for r in records
-                    if matches(r.domain)
+                    for r in matching_records
                 ],
+                icons=[
+                    self.page.icon_cache.website_icon(record.domain)
+                    for record in matching_records
+                ],
+                icon_column=3,
             )
             self.detail.setText(
                 f"Intervals use the first {self.limit} records; totals cover all matching history. Gaps are unrecorded."
@@ -308,11 +350,14 @@ class BrowserTimePanel(QGroupBox):
             self.status.setText("Browser history unavailable. Check local storage and retry.")
 
     @staticmethod
-    def fill(table, rows):
+    def fill(table, rows, *, icons=None, icon_column=0):
         table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             for j, value in enumerate(row):
-                table.setItem(i, j, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                if icons is not None and j == icon_column and icons[i] is not None:
+                    item.setIcon(icons[i])
+                table.setItem(i, j, item)
 
     def clear(self):
         for table in (self.sites, self.categories, self.sessions, self.week):
@@ -322,12 +367,15 @@ class BrowserTimePanel(QGroupBox):
 
     def set_state(self, *, private=False, locked=False):
         self.private, self.locked = private, locked
+        if hasattr(self, "runtime"):
+            self.runtime.set_private(private or locked)
         if locked and hasattr(self, "runtime"):
             self.runtime.pause()
         self.clear()
         for editor in (self.filter, self.domain, self.alias, self.category, self.exclusions):
             editor.clear()
         for control in (
+            self.startup,
             self.toggle,
             self.setup_button,
             self.remove_button,

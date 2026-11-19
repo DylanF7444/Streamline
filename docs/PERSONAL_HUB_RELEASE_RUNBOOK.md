@@ -315,3 +315,26 @@ verify REC clears after the twelve-second response deadline plus at most one two
 timer tick. Verify Hub pause/lock/exit clears REC, reload/reconnect starts at WAIT, old
 helpers never claim REC, and no popup opens automatically. These live checks are separate
 from the offline fake-browser and Qt regression tests.
+
+With extension 0.1.6 and the updated Hub/helper, confirm the badge shows saved daily
+focused-site time with the green recording icon. Open the popup and compare its daily
+total, top-eight distribution, Other subtotal and current-site duration against Hub's
+same-day site summary in the configured timezone. Check a site outside the top eight,
+switch sites with native replies in flight, and exercise midnight/DST, zero history,
+privacy masking/unmasking, idle, pause, exclusions, disconnect and stale responses.
+Masking must clear usage on the next heartbeat while retaining collection. Confirm
+extension storage has no hostname/time summaries and old helpers degrade to REC/WAIT.
+Re-export/reload the extension and restart the updated Hub after rebuilding the helper.
+
+
+### Automatic recording on launch (November 15, 2026)
+
+On Windows, launch with no recording preferences: app and browser recording should be
+enabled, with each indicator reflecting eligible samples or a waiting reason. Browser
+permissions and extension enablement are still required. Uncheck either visible startup
+option, quit normally and relaunch; only that recorder should stay paused. Verify an
+explicit saved false survives upgrades, exclusions/rules survive changing startup options,
+and controls save immediately without changing the current recording state. Pause must
+remain paused until an explicit Start or the next launch with startup enabled. Check
+privacy masking, lock, database restore and unsupported-platform behavior. These controls
+do not change whether Hub starts with Windows; that is the separate existing preference.

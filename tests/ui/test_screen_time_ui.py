@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from personal_hub.bootstrap import build_hub_container
 from personal_hub.config import HubSettings
-from personal_hub.screen_time.collector import Observation
+from personal_hub.screen_time.collector import Observation, WindowsObserver
 from personal_hub.screen_time.contracts import ScreenTimeSession
 from personal_hub.ui.desktop.application import HubDesktopCoordinator
 from personal_hub.ui.desktop.main_window import create_main_window
@@ -17,8 +17,14 @@ pytestmark = pytest.mark.ui
 
 
 @pytest.fixture
-def ui(qtbot, qapp, tmp_path):
+def ui(qtbot, qapp, tmp_path, monkeypatch, request):
     container = build_hub_container(HubSettings(data_dir=tmp_path / "hub"))
+    choices = getattr(request, "param", {"apps": False, "sites": False})
+    for kind, key in (("apps", "screen_time.settings"), ("sites", "browser_time.settings")):
+        if choices[kind] is not None:
+            container.settings_repository.set(key, {"start_on_open": choices[kind]})
+    monkeypatch.setattr(WindowsObserver, "sample", lambda self: Observation("editor.exe"))
+    monkeypatch.setattr(WindowsObserver, "supported", True)
     window = create_main_window(close_to_tray=False)
     qtbot.addWidget(window)
     coordinator = HubDesktopCoordinator(container, window, qapp)
@@ -159,3 +165,53 @@ def test_storage_error_revokes_browser_lease_and_shows_tray_error(ui, monkeypatc
     assert page.recorder.state == "error"
     assert "History unavailable" in page.indicator.app_status.text()
     assert "private" not in page.indicator.app_status.text()
+
+
+@pytest.mark.parametrize(
+    "ui, apps, sites",
+    [
+        ({"apps": None, "sites": None}, True, True),
+        ({"apps": False, "sites": False}, False, False),
+        ({"apps": True, "sites": False}, True, False),
+    ],
+    indirect=["ui"],
+)
+def test_startup_defaults_saved_opt_out_and_independent_immediate_preferences(ui, apps, sites):
+    hub, window, page = ui
+    page.timer.stop()
+    assert page.recorder.running is apps
+    assert page.browser.runtime.running is sites
+    assert page.startup.isChecked() is apps
+    assert page.browser.startup.isChecked() is sites
+    page.startup.setChecked(not apps)
+    page.browser.startup.setChecked(not sites)
+    assert hub.settings_repository.get("screen_time.settings")["start_on_open"] is not apps
+    assert hub.settings_repository.get("browser_time.settings")["start_on_open"] is not sites
+    # A startup choice affects the next launch, not the current recording session.
+    assert page.recorder.running is apps
+    assert page.browser.runtime.running is sites
+    page.recorder.pause()
+    page.browser.runtime.pause()
+    page.tick()
+    assert not page.recorder.running and not page.browser.runtime.running
+    window.set_locked(True)
+    assert not page.startup.isEnabled()
+    assert not page.browser.startup.isEnabled()
+
+
+def test_startup_preference_save_failure_restores_checkbox(ui, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    hub, window, page = ui
+    page.timer.stop()
+
+    def fail(*args, **kwargs):
+        raise SQLAlchemyError("private details")
+
+    monkeypatch.setattr(hub.settings_repository, "set", fail)
+    page.startup.setChecked(True)
+    assert not page.startup.isChecked()
+    assert "Could not save startup" in page.status.text()
+    page.browser.startup.setChecked(True)
+    assert not page.browser.startup.isChecked()
+    assert "Could not save browser startup" in page.browser.status.text()

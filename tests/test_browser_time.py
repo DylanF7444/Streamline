@@ -203,7 +203,10 @@ def test_native_framing_and_rejection(hub):
     output.seek(0)
     assert read_message(output) == {"recording": False}
     assert read_message(output) == {"recording": False}
-    assert read_message(output) == {"recording": True, "state": "waiting"}
+    response = read_message(output)
+    assert response["recording"] is True
+    assert response["state"] == "waiting"
+    assert response["usage"]["total_seconds"] == 0
     assert "private" not in (runtime.root / "chrome.json").read_text()
 
 
@@ -407,3 +410,88 @@ def test_indicator_confirms_only_saved_matching_fresh_site(hub):
     assert receive(runtime.root, sample, now=base + 23)["state"] == "idle"
     runtime.pause()
     assert not (runtime.root / "lease.json").exists()
+
+
+def test_toolbar_daily_totals_are_bounded_complete_and_use_hub_local_day(hub):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
+    )
+    runtime.timezone = "America/Chicago"
+    # Midnight at the start of the DST fallback day is 05:00 UTC.
+    midnight = datetime(2026, 11, 1, 5, tzinfo=UTC)
+    repo = hub.browser_time_repository
+    for i in range(10):
+        repo.save(
+            BrowserTimeSession(
+                browser="chrome" if i % 2 else "brave",
+                domain=f"site{i}.com",
+                start=midnight - timedelta(seconds=30),
+                end=midnight + timedelta(seconds=60 * (i + 1)),
+            )
+        )
+    repo.save(
+        BrowserTimeSession(
+            browser="edge",
+            domain="site0.com",
+            start=midnight + timedelta(hours=24),
+            end=midnight + timedelta(hours=24, minutes=1),
+        )
+    )
+    usage = runtime.daily_usage(
+        (midnight + timedelta(hours=24, minutes=30)).timestamp(), "brave|site0.com"
+    )
+    assert usage["date"] == "2026-11-01"
+    assert usage["timezone"] == "America/Chicago"
+    assert len(usage["sites"]) == 8
+    assert usage["total_seconds"] == 3360
+    assert usage["other_seconds"] == 240
+    assert usage["current"] == {"domain": "site0.com", "seconds": 120}
+    assert sum(site["seconds"] for site in usage["sites"]) + usage["other_seconds"] == 3360
+    next_day = runtime.daily_usage((midnight + timedelta(hours=25)).timestamp(), "brave|site0.com")
+    assert next_day["date"] == "2026-11-02"
+    assert next_day["total_seconds"] == 0
+    assert next_day["current"]["seconds"] == 0
+
+
+def test_toolbar_usage_follows_saved_checkpoints_and_clears_for_privacy(hub):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir, hub.browser_time_repository, BrowserTimeSettings()
+    )
+    runtime.start()
+    base = datetime(2026, 11, 10, tzinfo=UTC).timestamp()
+    sample = {"browser": "chrome", "domain": "example.com"}
+    for second in (0, 5, 10):
+        runtime.tick(Observation("chrome.exe"), now=base + second, monotonic=second)
+        response = receive(runtime.root, sample, now=base + second)
+    assert response["usage"]["current"] == {"domain": "example.com", "seconds": 5}
+    assert response["usage"]["total_seconds"] == 5
+    other = receive(runtime.root, {**sample, "domain": "other.org"}, now=base + 10)
+    assert other["usage"]["current"] is None
+    assert "usage" not in receive(runtime.root, {**sample, "domain": None}, now=base + 10)
+    runtime.set_private(True)
+    assert "usage" not in read_json(runtime.root / "lease.json")
+    assert "usage" not in receive(runtime.root, sample, now=base + 10)
+    runtime.tick(Observation("chrome.exe"), now=base + 15, monotonic=15)
+    assert runtime.running
+    assert "usage" not in receive(runtime.root, sample, now=base + 15)
+    runtime.set_private(False)
+    runtime.tick(Observation("chrome.exe"), now=base + 20, monotonic=20)
+    assert receive(runtime.root, sample, now=base + 20)["usage"]["total_seconds"] == 15
+    runtime.tick(Observation("editor.exe"), now=base + 25, monotonic=25)
+    assert "usage" not in receive(runtime.root, sample, now=base + 25)
+    runtime.tick(Observation("chrome.exe", 181), now=base + 30, monotonic=30)
+    assert "usage" not in receive(runtime.root, sample, now=base + 30)
+    assert "usage" not in receive(runtime.root, sample, now=base + 43)
+
+
+def test_excluded_site_never_receives_toolbar_usage(hub):
+    runtime = BrowserTimeRuntime(
+        hub.settings.data_dir,
+        hub.browser_time_repository,
+        BrowserTimeSettings(excluded_domains=("example.com",)),
+    )
+    runtime.start()
+    runtime.tick(Observation("chrome.exe"))
+    response = receive(runtime.root, {"browser": "chrome", "domain": "private.example.com"})
+    assert response["state"] == "ineligible"
+    assert "usage" not in response

@@ -8,10 +8,12 @@ app observer below still collects no browser URLs.
 
 ## Recording
 
-Open Logging > Screen time and choose **Start recording screen time**. Collection is off
-on first use. The tray menu also offers start/pause. The separate **Start recording when
-Hub opens** preference explicitly opts in to future launches. Collection runs only while
-Hub runs, including its tray lifetime; it does not install a service or startup entry.
+App recording starts automatically when Hub opens on Windows, unless you have saved a
+startup opt-out. In Logging > Screen time, uncheck **Start recording when Hub opens** to
+disable it for future launches. This visible preference saves immediately. Use **Pause
+recording** or the tray control to stop the current session, and **Start recording screen
+time** to resume. Collection runs only while Hub runs, including its tray lifetime;
+it does not install a service or Windows startup entry.
 
 Every five seconds the Windows observer reads the foreground executable basename and OS
 input idle duration. It never reads window titles, screenshots, clipboard contents, typed
@@ -42,9 +44,17 @@ partial-list explanation. Gaps remain blank. App rules provide local display ali
 categories, applied to historical summaries without rewriting observations. The default is
 Uncategorized. No productivity score, focus score, streak or notification is generated.
 
+Usage rows show a Windows application icon when the executable is available during app
+recording; otherwise they use a locally generated app monogram. Website rows use a local
+monogram derived from the hostname. Website icons are not downloaded, so rendering them
+does not contact the sites or a favicon service. Executable paths are used only in memory to
+resolve app icons and are not included in screen-time history or settings. Privacy masking
+and lock clear the icon cache along with the visible usage details.
+
 UTC intervals are clipped at configured-timezone local midnights, including 23- and 25-hour
-daylight-saving dates. Daily overview has a separate optional screen-time summary for its
-selected date. Presentation masking clears the tables, filters, rule fields and summary;
+daylight-saving dates. Daily overview shows separate app and website foreground-time cards
+for its selected date by default; recording settings can hide both cards. Presentation
+masking clears the tables, filters, rule fields and cards;
 masking does not disable recording. Session lock suppresses collection as well as presentation.
 
 ## Data boundary
